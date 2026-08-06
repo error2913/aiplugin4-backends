@@ -1,26 +1,10 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-aiplugin4 后端一键配置与启动器（仅依赖 Python 标准库，纯命令行管理）。
+aiplugin4 后端管理入口（仅依赖 Python 标准库）。
 
-子命令：
-  list                        列出后端与运行状态
-  setup [name...|--all]       安装依赖（幂等；默认不自动安装，仅首次启动时按需安装）
-  port <name> [value|reset]   查看/修改后端端口（写入 .runtime.json，重启后端生效）
-  start <name...>|--all       启动后端（需显式指定；首次启动该后端时自动创建 venv /
-                              安装依赖，进程异常退出会自动拉起）
-  stop [name...|--all]        停止后端（默认停止全部）
-  status                      查看运行状态
-  package                     打包 backends/ 为 dist/aiplugin4-backends-<版本>.zip
-
-示例：
-  python launcher.py list
-  python launcher.py setup --all
-  python launcher.py start --all
-  python launcher.py start stream-output web-read
-  python launcher.py stop --all
-  python launcher.py status
-  python launcher.py package
+直接运行本脚本：自动检查/安装 WebUI 自身依赖，然后启动 Web 管理界面
+（默认 http://127.0.0.1:8910），后端安装、启停、端口管理都在页面里完成。
 """
 
 import argparse
@@ -153,11 +137,32 @@ def ensure_venv(backend: Backend) -> str:
 
 
 def ensure_node(backend: Backend) -> str:
-    """为 node 后端确保 node_modules 存在（缺失时 npm install）"""
-    if not os.path.isdir(os.path.join(backend.dir, "node_modules")):
-        print(f"[launcher] {backend.name} 首次运行，npm install...")
-        subprocess.check_call(["npm", "install"], cwd=backend.dir)
+    """为 node 后端确保依赖就绪（node_modules 存在且安装标记齐全，否则 npm install）"""
+    node_modules = os.path.join(backend.dir, "node_modules")
+    marker = os.path.join(node_modules, ".install_ok")
+    if os.path.isfile(marker):
+        return "node"
+    print(f"[launcher] {backend.name} 首次运行或依赖不完整，npm install...")
+    npm = "npm.cmd" if os.name == "nt" else "npm"  # Windows 下 npm 是 .cmd 垫片
+    subprocess.check_call([npm, "install"], cwd=backend.dir)
+    with open(marker, "w", encoding="utf-8") as f:
+        f.write("ok")
     return "node"
+
+
+def deps_ready(backend: Backend) -> bool:
+    """后端依赖是否已就绪：python 后端看 venv 解释器与 .deps_ready 标记，node 后端看 node_modules/.install_ok"""
+    if backend.type == "python":
+        py = venv_python_path(backend.dir)
+        marker = os.path.join(backend.dir, VENV_DIR_NAME, DEPS_MARKER)
+        if not os.path.isfile(py):
+            return False
+        try:
+            with open(marker, encoding="utf-8") as f:
+                return f.read().strip() == deps_hash(backend)
+        except OSError:
+            return False
+    return os.path.isfile(os.path.join(backend.dir, "node_modules", ".install_ok"))
 
 
 def ensure_environment(backend: Backend) -> list:
@@ -248,6 +253,9 @@ class Supervisor:
         env["PYTHONIOENCODING"] = "utf-8"
         env["PYTHONUTF8"] = "1"
         env["AIPLUGIN4_BACKEND_PORT"] = str(effective_port(backend))
+        kwargs = {}
+        if os.name == "nt":
+            kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW  # 无控制台父进程（webui/后台模式）下不弹黑框
         proc = subprocess.Popen(
             ensure_environment(backend) + [backend.entry],
             cwd=backend.dir,
@@ -255,6 +263,7 @@ class Supervisor:
             stderr=subprocess.STDOUT,
             stdin=subprocess.DEVNULL,
             env=env,
+            **kwargs,
         )
         self.procs[backend.name] = proc
         self.state[backend.name] = {"pid": proc.pid, "started_at": time.strftime("%Y-%m-%d %H:%M:%S")}
@@ -363,6 +372,27 @@ def read_version() -> str:
     return "0.0.0"
 
 
+def ensure_webui_deps() -> None:
+    """安装 WebUI 自身依赖（当前为纯标准库实现；若存在 webui-requirements.txt 则自动安装）"""
+    req = os.path.join(ROOT_DIR, "webui-requirements.txt")
+    if not os.path.isfile(req):
+        return
+    print("[launcher] 安装 WebUI 依赖...")
+    subprocess.check_call([sys.executable, "-m", "pip", "install", "-r", req])
+
+
+def launch_webui(backends, config, supervisor, host: str = "127.0.0.1", port: int = 8910, open_browser: bool = True) -> None:
+    """安装 WebUI 依赖并启动管理界面（阻塞，Ctrl+C 退出）"""
+    ensure_webui_deps()
+    try:
+        from webui import run_webui
+    except ImportError:
+        print("[launcher] webui 模块缺失（webui.py）")
+        sys.exit(1)
+    print(f"[launcher] 启动后端管理界面: http://{host}:{port}")
+    run_webui(backends, config, supervisor, host=host, port=port, open_browser=open_browser)
+
+
 def package_backends() -> str:
     version = read_version()
     out_dir = os.path.join(ROOT_DIR, "dist")
@@ -384,7 +414,7 @@ def package_backends() -> str:
 def main() -> None:
     parser = argparse.ArgumentParser(
         prog="launcher",
-        description="aiplugin4 后端一键配置与启动器（纯命令行管理）",
+        description="aiplugin4 后端管理：直接运行本脚本启动 WebUI",
     )
     sub = parser.add_subparsers(dest="command")
     sub.add_parser("list", help="列出后端与启用/运行状态")
@@ -412,7 +442,8 @@ def main() -> None:
     supervisor = Supervisor(config)
 
     if not args.command:
-        parser.print_help()
+        # 直接运行 launcher：自动安装 WebUI 依赖并启动管理界面
+        launch_webui(backends, config, supervisor)
         return
 
     by_name = {b.name: b for b in backends}
@@ -523,12 +554,8 @@ def main() -> None:
         return
 
     if args.command == "webui":
-        try:
-            from webui import run_webui
-        except ImportError:
-            print("[launcher] webui 模块缺失（backends/webui.py）")
-            sys.exit(1)
-        run_webui(backends, config, supervisor, host=args.host, port=args.port, open_browser=not args.no_browser)
+        # 与直接运行 launcher 等价（子命令由 WebUI 内部调用）
+        launch_webui(backends, config, supervisor, host=args.host, port=args.port, open_browser=not args.no_browser)
         return
 
     parser.error(f"未知命令: {args.command}")

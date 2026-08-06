@@ -3,14 +3,18 @@
 """
 aiplugin4 后端 Web 管理界面（纯 Python 标准库，无第三方依赖）。
 
-由 launcher.py webui 子命令启动：
-  python launcher.py webui [--host 127.0.0.1] [--port 8910] [--no-browser]
+由 launcher.py 直接启动：
+  python launcher.py
+
+（也可用 python launcher.py webui [--host 127.0.0.1] [--port 8910] [--no-browser] 调整参数）
 
 默认只监听 127.0.0.1（本机），无鉴权，请勿暴露到公网。
 """
 
 import json
 import os
+import subprocess
+import sys
 import threading
 import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -18,10 +22,10 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from launcher import (
     DEFAULT_LOG_DIR,
     Supervisor,
+    deps_ready,
     effective_port,
     load_runtime,
     save_runtime,
-    setup_backend,
 )
 
 PAGE = """<!DOCTYPE html>
@@ -132,6 +136,9 @@ PAGE = """<!DOCTYPE html>
   .ops { display: flex; gap: 8px; flex-wrap: wrap; }
   .ops { justify-content: center; }
   .ops button { padding: 6px 12px; font-size: 12.5px; }
+  button.loading { opacity: .8; cursor: progress; }
+  .spin { display: inline-block; width: 11px; height: 11px; border: 2px solid currentColor; border-top-color: transparent; border-radius: 50%; margin-right: 6px; vertical-align: -1px; animation: rot .8s linear infinite; }
+  @keyframes rot { to { transform: rotate(360deg); } }
   .modal {
     position: fixed; inset: 0; background: rgba(5,8,12,.55); backdrop-filter: blur(4px);
     display: none; align-items: center; justify-content: center; z-index: 50; padding: 24px;
@@ -195,6 +202,8 @@ PAGE = """<!DOCTYPE html>
 <footer>aiplugin4 · backends/launcher.py webui</footer>
 <script>
 let current = null;
+let currentType = 'backend';
+const installing = new Set();
 function esc(s){ return (s||'').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
 function toast(msg){ const t=document.getElementById('toast'); t.textContent=msg; t.style.display='block'; clearTimeout(t._h); t._h=setTimeout(()=>t.style.display='none', 3000); }
 async function api(path, method, body){
@@ -235,15 +244,41 @@ async function refresh(){
         ${b.running && b.pid ? `<span class="chip idle">pid ${b.pid}</span>` : ''}
       </div>
       <div class="ops">
-        <button onclick="setup('${b.name}')">安装依赖</button>
-        ${b.running
-          ? `<button class="danger" onclick="run('${b.name}','stop')">停止</button>`
-          : `<button class="primary" onclick="run('${b.name}','start')">启动</button>`}
+        ${installing.has(b.name)
+          ? `<button class="primary loading" disabled><span class="spin"></span>安装中</button>`
+          : b.running
+            ? `<button class="danger" onclick="run('${b.name}','stop')">停止</button>`
+            : b.deps_ready
+              ? `<button class="primary" onclick="run('${b.name}','start')">启动</button>`
+              : `<button class="primary" onclick="setupNow('${b.name}')">安装依赖</button>`}
         <button onclick="showLog('${b.name}')">日志</button>
       </div>
     </div>`).join('');
 }
-async function setup(name){ toast('开始安装依赖：' + name); await api('/api/setup/' + name, 'POST'); toast('安装完成：' + name); refresh(); }
+async function setupNow(name){
+  installing.add(name);
+  refresh();
+  showInstallLog(name);
+  try {
+    await api('/api/setup/' + name, 'POST');
+    await pollInstall(name);
+  } catch(e){}
+  installing.delete(name);
+  refresh();
+}
+async function pollInstall(name){
+  while (true){
+    const j = await api('/api/setup-log/' + name);
+    const pre = document.getElementById('logBody');
+    pre.textContent = j.log || '(暂无日志)';
+    pre.scrollTop = pre.scrollHeight;
+    if (!j.running){
+      toast(j.failed ? '安装失败：' + name : '安装完成：' + name);
+      return;
+    }
+    await new Promise(r => setTimeout(r, 1200));
+  }
+}
 async function run(name, act){ await api('/api/' + act + '/' + name, 'POST'); toast(act==='start' ? '已启动：' + name : '已停止：' + name); refresh(); }
 async function all(act){ await api('/api/' + act + '-all', 'POST'); toast('已' + (act==='start'?'启动':'停止') + '全部'); refresh(); }
 async function setPort(name, val){
@@ -254,16 +289,22 @@ async function setPort(name, val){
   refresh();
 }
 async function resetPort(name){ await api('/api/port/' + name + '/reset', 'POST'); toast('已恢复默认端口'); refresh(); }
+function showInstallLog(name){
+  current = name; currentType = 'setup';
+  document.getElementById('logTitle').textContent = '安装依赖：' + name;
+  document.getElementById('logBody').textContent = '(等待安装日志...)';
+  document.getElementById('modal').classList.add('open');
+}
 async function showLog(name){
-  current = name;
+  current = name; currentType = 'backend';
   document.getElementById('logTitle').textContent = '日志：' + name;
   document.getElementById('modal').classList.add('open');
   await loadLog();
 }
-function closeLog(){ document.getElementById('modal').classList.remove('open'); current = null; }
+function closeLog(){ document.getElementById('modal').classList.remove('open'); current = null; currentType = 'backend'; }
 async function loadLog(){
   if (!current) return;
-  const j = await api('/api/logs/' + current);
+  const j = currentType === 'setup' ? await api('/api/setup-log/' + current) : await api('/api/logs/' + current);
   const pre = document.getElementById('logBody');
   pre.textContent = j.log || '(暂无日志)';
   pre.scrollTop = pre.scrollHeight;
@@ -281,6 +322,60 @@ def run_webui(backends, config, supervisor: Supervisor, host: str = "127.0.0.1",
     """启动 Web 管理界面（阻塞，Ctrl+C 退出）"""
     log_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), config.get("log_dir", DEFAULT_LOG_DIR))
     by_name = {b.name: b for b in backends}
+    setup_state = {}  # name -> {"lines": [...], "running": bool, "failed": bool}
+    setup_lock = threading.Lock()
+
+    def start_setup(name: str) -> None:
+        """后台执行 launcher.py setup <name>，日志实时追加到 setup_state；已在运行时直接复用"""
+        with setup_lock:
+            if setup_state.get(name, {}).get("running"):
+                return
+            setup_state[name] = {"lines": [], "running": True, "failed": False}
+
+        script = os.path.join(os.path.dirname(os.path.abspath(__file__)), "launcher.py")
+        env = dict(os.environ)
+        env["PYTHONIOENCODING"] = "utf-8"
+        env["PYTHONUTF8"] = "1"
+
+        def run_setup():
+            ok = False
+            try:
+                kwargs = {}
+                if os.name == "nt":
+                    kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW  # 后台安装，不弹控制台黑框
+                proc = subprocess.Popen(
+                    [sys.executable, script, "setup", name],
+                    cwd=os.path.dirname(script),
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
+                    stdin=subprocess.DEVNULL,
+                    env=env,
+                    **kwargs,
+                )
+                for raw in iter(proc.stdout.readline, b""):
+                    line = raw.decode("utf-8", errors="replace").rstrip("\r\n")
+                    if not line:
+                        continue
+                    with setup_lock:
+                        st = setup_state.get(name)
+                        if st is not None:
+                            if len(st["lines"]) >= 2000:
+                                st["lines"].pop(0)
+                            st["lines"].append(line)
+                proc.wait()
+                ok = proc.returncode == 0
+            except Exception as e:  # noqa: BLE001
+                with setup_lock:
+                    if name in setup_state:
+                        setup_state[name]["lines"].append(f"[webui] 安装进程异常: {e}")
+            finally:
+                with setup_lock:
+                    st = setup_state.get(name)
+                    if st is not None:
+                        st["running"] = False
+                        st["failed"] = not ok
+
+        threading.Thread(target=run_setup, daemon=True).start()
 
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, fmt, *args):  # 关闭默认访问日志刷屏
@@ -325,9 +420,17 @@ def run_webui(backends, config, supervisor: Supervisor, host: str = "127.0.0.1",
                         "port": effective_port(b),
                         "default_port": b.port,
                         "running": supervisor.is_running(b.name),
+                        "deps_ready": deps_ready(b),
                         "pid": info.get("pid"),
                     })
                 self._json({"ok": True, "backends": rows})
+                return
+            if self.path.startswith("/api/setup-log/"):
+                name = self.path[len("/api/setup-log/"):]
+                with setup_lock:
+                    st = setup_state.get(name) or {"lines": [], "running": False, "failed": False}
+                    log = "\n".join(st["lines"])
+                self._json({"ok": True, "running": st["running"], "failed": st["failed"], "log": log})
                 return
             if self.path.startswith("/api/logs/"):
                 name = self.path[len("/api/logs/"):]
@@ -392,8 +495,8 @@ def run_webui(backends, config, supervisor: Supervisor, host: str = "127.0.0.1",
                         self._err(f"未知后端: {name}", 404)
                         return
                     if action == "setup":
-                        setup_backend(backend)
-                        self._json({"ok": True, "message": "setup done"})
+                        start_setup(name)
+                        self._json({"ok": True, "message": "setup started"})
                         return
                     if action == "start":
                         if name in supervisor.state.get("stopped", []):
