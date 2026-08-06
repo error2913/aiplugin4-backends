@@ -93,7 +93,8 @@ PAGE = """<!DOCTYPE html>
   .stat span { color: var(--muted); font-size: 12px; }
   .stat.green b { color: var(--green); }
   .stat.blue b { color: var(--blue); }
-  .bar { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 20px; }
+  .bar { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 20px; justify-content: space-between; align-items: center; }
+  .bar-left, .bar-right { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
   button {
     background: var(--panel-2); color: var(--text); border: 1px solid var(--border);
     border-radius: 9px; padding: 8px 15px; cursor: pointer; font-size: 13px;
@@ -183,8 +184,11 @@ PAGE = """<!DOCTYPE html>
     <div class="stat green"><b id="stRun">0</b><span>运行中</span></div>
   </div>
   <div class="bar">
-    <button class="primary" onclick="all('start')">▶ 启动全部</button>
-    <button class="danger" onclick="all('stop')">■ 停止全部</button>
+    <div class="bar-left">
+      <button class="primary" onclick="all('start')">▶ 启动全部</button>
+      <button class="danger" onclick="all('stop')">■ 停止全部</button>
+    </div>
+    <div class="bar-right" id="installAllArea"></div>
   </div>
   <div class="grid" id="grid"></div>
 </div>
@@ -205,6 +209,9 @@ PAGE = """<!DOCTYPE html>
 let current = null;
 let currentType = 'backend';
 const installing = new Set();
+let allInstalling = false;
+let allTargets = [];
+let allDone = 0;
 function esc(s){ return (s||'').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
 function fmtUptime(s){
   if (s == null) return '—';
@@ -214,7 +221,7 @@ function fmtUptime(s){
   if (m > 0) return m + '分' + sec + '秒';
   return sec + '秒';
 }
-function toast(msg){ const t=document.getElementById('toast'); t.textContent=msg; t.style.display='block'; clearTimeout(t._h); t._h=setTimeout(()=>t.style.display='none', 3000); }
+function toast(msg, ms){ const t=document.getElementById('toast'); t.textContent=msg; t.style.display='block'; clearTimeout(t._h); t._h=setTimeout(()=>t.style.display='none', ms || 3000); }
 async function api(path, method, body){
   try {
     const r = await fetch(path, {method: method||'GET', body: body || undefined});
@@ -268,6 +275,19 @@ async function refresh(){
         <button onclick="showLog('${b.name}')">日志</button>
       </div>
     </div>`).join('');
+  renderInstallAll(list);
+}
+function renderInstallAll(list){
+  const area = document.getElementById('installAllArea');
+  if (!area) return;
+  const missing = list.filter(b => !b.deps_ready && !b.running).length;
+  if (allInstalling){
+    area.innerHTML = `<button class="primary loading" disabled><span class="spin"></span>安装中 ${allDone}/${allTargets.length}</button>`;
+  } else if (missing > 0){
+    area.innerHTML = `<button class="primary" onclick="setupAll()">安装全部依赖 (${missing})</button>`;
+  } else {
+    area.innerHTML = '';
+  }
 }
 async function setupNow(name){
   installing.add(name);
@@ -294,7 +314,36 @@ async function pollInstall(name){
   }
 }
 async function run(name, act){ await api('/api/' + act + '/' + name, 'POST'); toast(act==='start' ? '已启动：' + name : '已停止：' + name); refresh(); }
-async function all(act){ await api('/api/' + act + '-all', 'POST'); toast('已' + (act==='start'?'启动':'停止') + '全部'); refresh(); }
+async function all(act){
+  const j = await api('/api/' + act + '-all', 'POST');
+  if (act === 'start' && j.skipped && j.skipped.length){
+    toast('已启动 ' + j.started.length + ' 个，跳过 ' + j.skipped.length + ' 个（依赖未安装）：' + j.skipped.join('、') + '。可点「安装全部依赖」', 8000);
+  } else {
+    toast('已' + (act==='start'?'启动':'停止') + '全部');
+  }
+  refresh();
+}
+async function setupAll(){
+  const list = await api('/api/backends');
+  allTargets = list.backends.filter(b => !b.deps_ready && !b.running).map(b => b.name);
+  allDone = 0;
+  if (!allTargets.length) return;
+  allInstalling = true;
+  showInstallLog('全部依赖');
+  refresh();
+  try {
+    for (const name of allTargets){
+      document.getElementById('logTitle').textContent = '安装全部依赖 (' + allDone + '/' + allTargets.length + ')：' + name;
+      document.getElementById('logBody').textContent = '(等待安装日志...)';
+      await api('/api/setup/' + name, 'POST');
+      await pollInstall(name);
+      allDone++;
+    }
+    toast('全部依赖安装完成');
+  } catch(e){}
+  allInstalling = false;
+  refresh();
+}
 async function setPort(name, val){
   const n = parseInt(val, 10);
   if (!n || n < 1 || n > 65535){ toast('端口必须是 1-65535'); refresh(); return; }
@@ -499,8 +548,15 @@ def run_webui(backends, config, supervisor: Supervisor, host: str = "127.0.0.1",
             path = self.path
             try:
                 if path == "/api/start-all":
-                    supervisor.start(backends)
-                    self._json({"ok": True, "message": "started"})
+                    targets = [b for b in backends if deps_ready(b)]
+                    skipped = [b.name for b in backends if not deps_ready(b)]
+                    supervisor.start(targets)
+                    self._json({
+                        "ok": True,
+                        "message": "started",
+                        "started": [b.name for b in targets],
+                        "skipped": skipped,
+                    })
                     return
                 if path == "/api/stop-all":
                     supervisor.stop(backends)
