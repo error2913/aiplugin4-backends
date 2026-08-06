@@ -111,7 +111,7 @@ PAGE = """<!DOCTYPE html>
     display: flex; flex-direction: column; align-items: center; text-align: center; gap: 12px; box-shadow: 0 1px 3px var(--shadow);
     transition: border-color .2s ease, transform .2s ease, box-shadow .2s ease;
   }
-  .card:hover { border-color: color-mix(in srgb, var(--muted) 55%, transparent); transform: translateY(-2px); box-shadow: 0 8px 20px var(--shadow); }
+  .card:hover { border-color: color-mix(in srgb, var(--muted) 55%, transparent); }
   .card.running { border-color: color-mix(in srgb, var(--green) 40%, transparent); }
   .row1 { display: flex; align-items: center; justify-content: center; gap: 10px; }
   .name { font-family: Consolas, "Courier New", monospace; font-size: 15px; font-weight: 600; }
