@@ -330,7 +330,7 @@ async function run(name, act){ await api('/api/' + act + '/' + name, 'POST'); to
 async function all(act){
   const j = await api('/api/' + act + '-all', 'POST');
   if (act === 'start' && j.started && j.started.length === 0 && j.skipped && j.skipped.length){
-    showAlert('后端依赖均未安装，已全部跳过。\n可先点右上角「安装全部依赖」，装完后再启动。');
+    showAlert('后端依赖均未安装，已全部跳过。\\n可先点右上角「安装全部依赖」，装完后再启动。');
   } else {
     toast('已' + (act==='start'?'启动':'停止') + '全部');
   }
