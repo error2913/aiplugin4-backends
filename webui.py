@@ -203,6 +203,19 @@ PAGE = """<!DOCTYPE html>
     <pre id="logBody"></pre>
   </div>
 </div>
+<div class="modal" id="alertModal">
+  <div class="dialog" style="width:min(420px,92vw)">
+    <div class="dialog-head">
+      <b>提示</b>
+      <span class="spacer"></span>
+      <button class="close" onclick="closeAlert()">✕</button>
+    </div>
+    <div id="alertBody" style="padding:20px 22px; font-size:14px; line-height:1.8;"></div>
+    <div style="padding:12px 18px; text-align:right; border-top:1px solid var(--border);">
+      <button class="primary" onclick="closeAlert()">确定</button>
+    </div>
+  </div>
+</div>
 <div id="toast"></div>
 <footer>aiplugin4 · backends/launcher.py webui</footer>
 <script>
@@ -317,12 +330,17 @@ async function run(name, act){ await api('/api/' + act + '/' + name, 'POST'); to
 async function all(act){
   const j = await api('/api/' + act + '-all', 'POST');
   if (act === 'start' && j.started && j.started.length === 0 && j.skipped && j.skipped.length){
-    toast('后端依赖均未安装，全部跳过。可点「安装全部依赖」', 8000);
+    showAlert('后端依赖均未安装，已全部跳过。\n可先点右上角「安装全部依赖」，装完后再启动。');
   } else {
     toast('已' + (act==='start'?'启动':'停止') + '全部');
   }
   refresh();
 }
+function showAlert(msg){
+  document.getElementById('alertBody').textContent = msg;
+  document.getElementById('alertModal').classList.add('open');
+}
+function closeAlert(){ document.getElementById('alertModal').classList.remove('open'); }
 async function setupAll(){
   const list = await api('/api/backends');
   allTargets = list.backends.filter(b => !b.deps_ready && !b.running).map(b => b.name);
@@ -372,7 +390,7 @@ async function loadLog(){
   pre.textContent = j.log || '(暂无日志)';
   pre.scrollTop = pre.scrollHeight;
 }
-document.addEventListener('keydown', e => { if (e.key === 'Escape') closeLog(); });
+document.addEventListener('keydown', e => { if (e.key === 'Escape'){ closeLog(); closeAlert(); } });
 applyTheme();
 refresh();
 setInterval(refresh, 3000);
