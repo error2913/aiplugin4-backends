@@ -33,7 +33,7 @@ PAGE = """<!DOCTYPE html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<link rel="icon" href="data:,">
+<link rel="icon" href="/icon-256.png" type="image/png">
 <title>aiplugin4 后端管理</title>
 <style>
   :root {
@@ -76,9 +76,7 @@ PAGE = """<!DOCTYPE html>
   header { display: flex; align-items: center; gap: 14px; margin-bottom: 22px; }
   .logo {
     width: 44px; height: 44px; border-radius: 12px; flex: none;
-    background: linear-gradient(135deg, var(--blue), #a78bfa);
-    display: flex; align-items: center; justify-content: center;
-    font-size: 22px; box-shadow: 0 8px 24px color-mix(in srgb, var(--blue) 35%, transparent);
+    object-fit: cover; box-shadow: 0 8px 24px color-mix(in srgb, var(--blue) 35%, transparent);
   }
   h1 { font-size: 22px; margin: 0; font-weight: 700; letter-spacing: .3px; }
   .sub { color: var(--muted); font-size: 13px; margin-top: 3px; }
@@ -167,7 +165,7 @@ PAGE = """<!DOCTYPE html>
 <body>
 <div class="wrap">
   <header>
-    <div class="logo">🤖</div>
+    <img class="logo" src="/icon-256.png" alt="aiplugin4">
     <div>
       <h1>aiplugin4 后端管理</h1>
       <div class="sub">launcher WebUI · 每 3 秒自动刷新 · 后端异常退出会自动拉起</div>
@@ -408,6 +406,24 @@ def run_webui(backends, config, supervisor: Supervisor, host: str = "127.0.0.1",
                 self.send_header("Content-Length", str(len(body)))
                 self.end_headers()
                 self.wfile.write(body)
+                return
+            if self.path in ("/icon.png", "/icon-256.png"):
+                icon_path = os.path.join(
+                    os.path.dirname(os.path.abspath(__file__)),
+                    "assets",
+                    os.path.basename(self.path),
+                )
+                try:
+                    with open(icon_path, "rb") as f:
+                        body = f.read()
+                    self.send_response(200)
+                    self.send_header("Content-Type", "image/png")
+                    self.send_header("Cache-Control", "max-age=86400")
+                    self.send_header("Content-Length", str(len(body)))
+                    self.end_headers()
+                    self.wfile.write(body)
+                except OSError:
+                    self._err("not found", 404)
                 return
             if self.path == "/api/backends":
                 rows = []
