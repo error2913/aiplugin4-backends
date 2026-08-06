@@ -16,6 +16,7 @@ import shutil
 import signal
 import subprocess
 import sys
+import tarfile
 import threading
 import time
 import zipfile
@@ -33,6 +34,7 @@ DEPS_MARKER = ".deps_ready"
 # 打包时排除的目录/文件
 EXCLUDE_DIRS = {"logs", "node_modules", "__pycache__", ".venv", "venv", "dist", ".git"}
 EXCLUDE_SUFFIXES = (".pyc", ".pyo")
+EXCLUDE_FILES = {".runtime.json"}  # 本机运行态配置，不进发布包
 
 
 @dataclass
@@ -490,22 +492,36 @@ def launch_webui(backends, config, supervisor, host: str = "127.0.0.1", port: in
     run_webui(backends, config, supervisor, host=host, port=port, open_browser=open_browser)
 
 
-def package_backends() -> str:
+def _package_files():
+    """遍历要打包的文件，返回 (绝对路径, 包内相对路径) 列表"""
+    for root, dirs, files in os.walk(BACKENDS_DIR):
+        dirs[:] = [d for d in dirs if d not in EXCLUDE_DIRS]
+        for name in files:
+            if name.endswith(EXCLUDE_SUFFIXES):
+                continue
+            if name in EXCLUDE_FILES:
+                continue
+            path = os.path.join(root, name)
+            arcname = os.path.relpath(path, ROOT_DIR).replace(os.sep, "/")
+            yield path, arcname
+
+
+def package_backends() -> list:
     version = read_version()
     out_dir = os.path.join(ROOT_DIR, "dist")
     os.makedirs(out_dir, exist_ok=True)
-    out = os.path.join(out_dir, f"aiplugin4-backends-{version}.zip")
-    with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as zf:
-        for root, dirs, files in os.walk(BACKENDS_DIR):
-            dirs[:] = [d for d in dirs if d not in EXCLUDE_DIRS]
-            for name in files:
-                if name.endswith(EXCLUDE_SUFFIXES):
-                    continue
-                path = os.path.join(root, name)
-                arcname = os.path.relpath(path, ROOT_DIR)
-                zf.write(path, arcname)
-    print(f"[launcher] 已打包后端: {out}")
-    return out
+    zip_out = os.path.join(out_dir, f"aiplugin4-backends-{version}.zip")
+    tar_out = os.path.join(out_dir, f"aiplugin4-backends-{version}.tar.gz")
+    files = list(_package_files())
+    with zipfile.ZipFile(zip_out, "w", zipfile.ZIP_DEFLATED) as zf:
+        for path, arcname in files:
+            zf.write(path, arcname)
+    with tarfile.open(tar_out, "w:gz") as tf:
+        for path, arcname in files:
+            tf.add(path, arcname)
+    print(f"[launcher] 已打包: {zip_out}")
+    print(f"[launcher] 已打包: {tar_out}")
+    return [zip_out, tar_out]
 
 
 def main() -> None:
