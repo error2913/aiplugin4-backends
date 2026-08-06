@@ -185,8 +185,8 @@ PAGE = """<!DOCTYPE html>
   </div>
   <div class="bar">
     <div class="bar-left">
-      <button class="primary" onclick="all('start')">▶ 启动全部</button>
-      <button class="danger" onclick="all('stop')">■ 停止全部</button>
+      <button class="primary" onclick="allAct('start')">▶ 启动全部</button>
+      <button class="danger" onclick="allAct('stop')">■ 停止全部</button>
     </div>
     <div class="bar-right" id="installAllArea"></div>
   </div>
@@ -327,7 +327,7 @@ async function pollInstall(name){
   }
 }
 async function run(name, act){ await api('/api/' + act + '/' + name, 'POST'); toast(act==='start' ? '已启动：' + name : '已停止：' + name); refresh(); }
-async function all(act){
+async function allAct(act){
   const j = await api('/api/' + act + '-all', 'POST');
   if (act === 'start' && j.started && j.started.length === 0 && j.skipped && j.skipped.length){
     showAlert('后端依赖均未安装，已全部跳过。\\n可先点右上角「安装全部依赖」，装完后再启动。');
