@@ -28,6 +28,7 @@ from launcher import (
     effective_port,
     load_runtime,
     process_memory,
+    remove_backend_deps,
     save_runtime,
 )
 
@@ -222,6 +223,7 @@ PAGE = """<!DOCTYPE html>
 let current = null;
 let currentType = 'backend';
 const installing = new Set();
+const deleting = new Set();
 let allInstalling = false;
 let allTargets = [];
 let allDone = 0;
@@ -286,6 +288,11 @@ async function refresh(){
               ? `<button class="primary" onclick="run('${b.name}','start')">启动</button>`
               : `<button class="primary" onclick="setupNow('${b.name}')">安装依赖</button>`}
         <button onclick="showLog('${b.name}')">日志</button>
+        ${b.deps_ready
+          ? deleting.has(b.name)
+            ? `<button class="danger loading" disabled><span class="spin"></span>删除中</button>`
+            : `<button class="danger" onclick="delDeps('${b.name}')">删除依赖</button>`
+          : ''}
       </div>
     </div>`).join('');
   renderInstallAll(list);
@@ -311,6 +318,16 @@ async function setupNow(name){
     await pollInstall(name);
   } catch(e){}
   installing.delete(name);
+  refresh();
+}
+async function delDeps(name){
+  deleting.add(name);
+  refresh();
+  try {
+    await api('/api/deps-delete/' + name, 'POST');
+    toast('已删除依赖：' + name);
+  } catch(e){}
+  deleting.delete(name);
   refresh();
 }
 async function pollInstall(name){
@@ -622,6 +639,13 @@ def run_webui(backends, config, supervisor: Supervisor, host: str = "127.0.0.1",
                     if action == "setup":
                         start_setup(name)
                         self._json({"ok": True, "message": "setup started"})
+                        return
+                    if action == "deps-delete":
+                        if supervisor.is_running(name):
+                            supervisor.stop([backend])
+                            time.sleep(1)
+                        remove_backend_deps(backend)
+                        self._json({"ok": True, "message": "deps removed"})
                         return
                     if action == "start":
                         if name in supervisor.state.get("stopped", []):

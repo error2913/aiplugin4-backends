@@ -17,6 +17,8 @@ python launcher.py
 
 > 按需安装：每个后端只安装自己缺失的依赖，不会预装全部；依赖清单（`requirements.txt` / `package.json`）变化后会自动重新安装。Python 后端使用独立 venv，Node 后端使用各自的 `node_modules`。
 
+已安装依赖的后端，卡片上「日志」旁边会出现「删除依赖」按钮：点击后自动停止该后端并清掉 venv / node_modules，卡片恢复为「安装依赖」的初始状态。
+
 > 提示：Puppeteer 需要下载 Chromium。若下载慢或失败（如国内网络），可设置镜像 `PUPPETEER_DOWNLOAD_BASE_URL`（例如 `https://registry.npmmirror.com/-/binary/chrome-for-testing`）后重试。
 
 ## 后端列表

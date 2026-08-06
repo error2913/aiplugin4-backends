@@ -12,6 +12,7 @@ import hashlib
 import json
 import os
 import re
+import shutil
 import signal
 import subprocess
 import sys
@@ -226,6 +227,37 @@ def process_memory(pid):
     except Exception:  # noqa: BLE001
         return None
     return None
+
+
+def remove_backend_deps(backend: Backend) -> None:
+    """删除后端已安装的依赖（python 删 .venv，node 删 node_modules），恢复未安装状态"""
+    if backend.type == "python":
+        target = os.path.join(backend.dir, VENV_DIR_NAME)
+    else:
+        target = os.path.join(backend.dir, "node_modules")
+    root = os.path.realpath(backend.dir)
+    real = os.path.realpath(target)
+    if os.path.commonpath([root, real]) != root or os.path.basename(real) not in (VENV_DIR_NAME, "node_modules"):
+        raise ValueError(f"拒绝删除非后端依赖目录: {target}")
+    if not os.path.isdir(real):
+        return
+    print(f"[launcher] 删除 {backend.name} 依赖: {real}")
+
+    def onerror(func, path, exc_info):
+        try:
+            os.chmod(path, 0o777)
+            func(path)
+        except OSError:
+            pass
+
+    for _ in range(5):
+        try:
+            shutil.rmtree(real, onerror=onerror)
+            break
+        except OSError:
+            time.sleep(0.5)
+    if os.path.isdir(real):
+        raise RuntimeError(f"依赖目录删除失败（可能仍有进程占用）: {real}")
 
 
 def ensure_environment(backend: Backend) -> list:
