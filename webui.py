@@ -316,8 +316,8 @@ async function pollInstall(name){
 async function run(name, act){ await api('/api/' + act + '/' + name, 'POST'); toast(act==='start' ? '已启动：' + name : '已停止：' + name); refresh(); }
 async function all(act){
   const j = await api('/api/' + act + '-all', 'POST');
-  if (act === 'start' && j.skipped && j.skipped.length){
-    toast('已启动 ' + j.started.length + ' 个，跳过 ' + j.skipped.length + ' 个（依赖未安装）：' + j.skipped.join('、') + '。可点「安装全部依赖」', 8000);
+  if (act === 'start' && j.started && j.started.length === 0 && j.skipped && j.skipped.length){
+    toast('后端依赖均未安装，全部跳过。可点「安装全部依赖」', 8000);
   } else {
     toast('已' + (act==='start'?'启动':'停止') + '全部');
   }
