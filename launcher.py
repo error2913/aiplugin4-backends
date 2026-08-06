@@ -165,6 +165,69 @@ def deps_ready(backend: Backend) -> bool:
     return os.path.isfile(os.path.join(backend.dir, "node_modules", ".install_ok"))
 
 
+def process_memory(pid):
+    """返回 (进程 RSS 字节, 系统总物理内存字节)；不可用或进程不存在时返回 None"""
+    if not pid:
+        return None
+    try:
+        if os.name == "nt":
+            import ctypes
+            from ctypes import wintypes
+
+            PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+            handle = ctypes.windll.kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, int(pid))
+            if not handle:
+                return None
+            try:
+                class PROCESS_MEMORY_COUNTERS(ctypes.Structure):
+                    _fields_ = [
+                        ("cb", wintypes.DWORD),
+                        ("PageFaultCount", wintypes.DWORD),
+                        ("PeakWorkingSetSize", ctypes.c_size_t),
+                        ("WorkingSetSize", ctypes.c_size_t),
+                        ("QuotaPeakPagedPoolUsage", ctypes.c_size_t),
+                        ("QuotaPagedPoolUsage", ctypes.c_size_t),
+                        ("QuotaPeakNonPagedPoolUsage", ctypes.c_size_t),
+                        ("QuotaNonPagedPoolUsage", ctypes.c_size_t),
+                        ("PagefileUsage", ctypes.c_size_t),
+                        ("PeakPagefileUsage", ctypes.c_size_t),
+                    ]
+                counters = PROCESS_MEMORY_COUNTERS()
+                if not ctypes.windll.psapi.GetProcessMemoryInfo(
+                    handle, ctypes.byref(counters), ctypes.sizeof(counters)
+                ):
+                    return None
+                rss = counters.WorkingSetSize
+            finally:
+                ctypes.windll.kernel32.CloseHandle(handle)
+
+            class MEMORYSTATUSEX(ctypes.Structure):
+                _fields_ = [
+                    ("dwLength", wintypes.DWORD),
+                    ("dwMemoryLoad", wintypes.DWORD),
+                    ("ullTotalPhys", ctypes.c_ulonglong),
+                    ("ullAvailPhys", ctypes.c_ulonglong),
+                    ("ullTotalPageFile", ctypes.c_ulonglong),
+                    ("ullAvailPageFile", ctypes.c_ulonglong),
+                    ("ullTotalVirtual", ctypes.c_ulonglong),
+                    ("ullAvailVirtual", ctypes.c_ulonglong),
+                    ("ullAvailExtendedVirtual", ctypes.c_ulonglong),
+                ]
+            mem = MEMORYSTATUSEX()
+            mem.dwLength = ctypes.sizeof(mem)
+            ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(mem))
+            return rss, mem.ullTotalPhys
+        if os.path.exists("/proc"):
+            with open(f"/proc/{int(pid)}/status", encoding="utf-8") as f:
+                rss_kb = next(int(line.split()[1]) for line in f if line.startswith("VmRSS:"))
+            with open("/proc/meminfo", encoding="utf-8") as f:
+                total_kb = next(int(line.split()[1]) for line in f if line.startswith("MemTotal:"))
+            return rss_kb * 1024, total_kb * 1024
+    except Exception:  # noqa: BLE001
+        return None
+    return None
+
+
 def ensure_environment(backend: Backend) -> list:
     """一键启动：确保依赖就绪，返回启动命令前缀（python 用 venv 内解释器）"""
     if backend.type == "python":
@@ -289,6 +352,8 @@ class Supervisor:
             self.state.pop(backend.name, None)
             self._save_state()
             self.restart_count[backend.name] = self.restart_count.get(backend.name, 0) + 1
+            self.state.setdefault("restarts", {})[backend.name] = self.restart_count[backend.name]
+            self._save_state()
             if backend.name in self.state.get("stopped", []):
                 print(f"[launcher] {backend.name} 已停止，不再自动拉起")
                 return

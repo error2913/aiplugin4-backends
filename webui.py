@@ -16,7 +16,9 @@ import os
 import subprocess
 import sys
 import threading
+import time
 import webbrowser
+from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from launcher import (
@@ -25,6 +27,7 @@ from launcher import (
     deps_ready,
     effective_port,
     load_runtime,
+    process_memory,
     save_runtime,
 )
 
@@ -203,6 +206,14 @@ let current = null;
 let currentType = 'backend';
 const installing = new Set();
 function esc(s){ return (s||'').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
+function fmtUptime(s){
+  if (s == null) return '—';
+  const d = Math.floor(s / 86400), h = Math.floor(s % 86400 / 3600), m = Math.floor(s % 3600 / 60), sec = s % 60;
+  if (d > 0) return d + '天' + h + '小时';
+  if (h > 0) return h + '小时' + m + '分';
+  if (m > 0) return m + '分' + sec + '秒';
+  return sec + '秒';
+}
 function toast(msg){ const t=document.getElementById('toast'); t.textContent=msg; t.style.display='block'; clearTimeout(t._h); t._h=setTimeout(()=>t.style.display='none', 3000); }
 async function api(path, method, body){
   try {
@@ -240,6 +251,11 @@ async function refresh(){
         <span class="portbox">端口 <input class="port" type="number" min="1" max="65535" value="${b.port}" onchange="setPort('${b.name}', this.value)" title="修改后重启后端生效"></span>
         <button class="mini" onclick="resetPort('${b.name}')" title="恢复默认端口">↺</button>
         ${b.running && b.pid ? `<span class="chip idle">pid ${b.pid}</span>` : ''}
+      </div>
+      <div class="meta">
+        <span class="chip idle">⏱ ${b.running ? fmtUptime(b.uptime_secs) : '未运行'}</span>
+        <span class="chip idle">🔄 自动拉起 ${b.restarts} 次</span>
+        ${b.running && b.mem_mb != null ? `<span class="chip idle">💾 ${b.mem_mb}MB / ${b.mem_pct}%</span>` : ''}
       </div>
       <div class="ops">
         ${installing.has(b.name)
@@ -429,13 +445,32 @@ def run_webui(backends, config, supervisor: Supervisor, host: str = "127.0.0.1",
                 rows = []
                 for b in backends:
                     info = supervisor.state.get(b.name) or {}
+                    running = supervisor.is_running(b.name)
+                    uptime_secs = None
+                    if running and info.get("started_at"):
+                        try:
+                            started = datetime.strptime(info["started_at"], "%Y-%m-%d %H:%M:%S")
+                            uptime_secs = max(0, int(time.time() - started.timestamp()))
+                        except (ValueError, TypeError):
+                            uptime_secs = None
+                    mem_mb = None
+                    mem_pct = None
+                    if running and info.get("pid"):
+                        mem = process_memory(info.get("pid"))
+                        if mem and mem[1]:
+                            mem_mb = round(mem[0] / 1024 / 1024, 1)
+                            mem_pct = round(mem[0] / mem[1] * 100, 2)
                     rows.append({
                         "name": b.name,
                         "description": b.description,
                         "type": b.type,
                         "port": effective_port(b),
                         "default_port": b.port,
-                        "running": supervisor.is_running(b.name),
+                        "running": running,
+                        "uptime_secs": uptime_secs,
+                        "restarts": supervisor.state.get("restarts", {}).get(b.name, 0),
+                        "mem_mb": mem_mb,
+                        "mem_pct": mem_pct,
                         "deps_ready": deps_ready(b),
                         "pid": info.get("pid"),
                     })
