@@ -218,7 +218,7 @@ PAGE = """<!DOCTYPE html>
   </div>
 </div>
 <div id="toast"></div>
-<footer>aiplugin4 · backends/launcher.py webui</footer>
+<footer>aiplugin4 · launcher.py webui</footer>
 <script>
 let current = null;
 let currentType = 'backend';
