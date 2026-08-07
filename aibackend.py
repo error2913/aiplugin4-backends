@@ -6,6 +6,7 @@
   python install_cli.py
 
 用法示例：
+  aibackend help [命令]                查看帮助（如 aibackend help start）
   aibackend list                       查看所有后端状态
   aibackend start --all                后台启动全部（默认后台守护，类似 pm2）
   aibackend start stream-output        后台启动单个
@@ -301,6 +302,8 @@ def build_parser():
     )
     sub = parser.add_subparsers(dest="command")
     sub.add_parser("list", help="查看所有后端状态")
+    help_p = sub.add_parser("help", help="查看帮助")
+    help_p.add_argument("topic", nargs="?", help="子命令名称（可选）")
 
     start_p = sub.add_parser("start", help="启动后端（默认后台守护）")
     start_p.add_argument("names", nargs="*")
@@ -351,6 +354,12 @@ def main(argv=None):
 
     if not args.command or args.command == "list":
         print_list(supervisor)
+        return
+    if args.command == "help":
+        if args.topic:
+            parser.parse_args([args.topic, "--help"])
+        else:
+            parser.print_help()
         return
     if args.command == "start":
         cmd_start(args, supervisor)

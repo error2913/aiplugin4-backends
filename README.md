@@ -56,6 +56,7 @@ python install_cli.py
 ```
 
 ```bash
+aibackend help [命令]                       # 查看帮助（如 aibackend help start）
 aibackend list                              # 查看所有后端状态
 aibackend start --all                       # 后台启动全部（默认后台守护，类似 pm2）
 aibackend start stream-output               # 后台启动单个
