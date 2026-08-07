@@ -47,7 +47,7 @@ assets/                WebUI 图标
 
 管理全部通过 WebUI 完成：后端启停、依赖安装/删除、端口修改、运行日志都在页面里操作。端口覆盖写入 `.runtime.json`（已 gitignore），后端通过环境变量 `AIPLUGIN4_BACKEND_PORT` 读取。
 
-## 命令行（aibackend，pm2 风格）
+## 命令行（aibackend）
 
 安装 `aibackend` 命令（写入用户 PATH，重新打开终端后即可在任意目录使用）：
 
@@ -58,7 +58,7 @@ python install_cli.py
 ```bash
 aibackend help [命令]                       # 查看帮助（如 aibackend help start）
 aibackend list                              # 查看所有后端状态
-aibackend start --all                       # 后台启动全部（默认后台守护，类似 pm2）
+aibackend start --all                       # 后台启动全部（默认后台守护）
 aibackend start stream-output               # 后台启动单个
 aibackend start stream-output --foreground  # 前台运行，Ctrl+C 停止
 aibackend stop --all                        # 停止全部

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""aibackend — aiplugin4-backends 的 pm2 风格命令行管理工具。
+"""aibackend — aiplugin4-backends 的命令行管理工具。
 
 安装命令（把 aibackend 写入 PATH）：
   python install_cli.py
@@ -8,7 +8,7 @@
 用法示例：
   aibackend help [命令]                查看帮助（如 aibackend help start）
   aibackend list                       查看所有后端状态
-  aibackend start --all                后台启动全部（默认后台守护，类似 pm2）
+  aibackend start --all                后台启动全部（默认后台守护）
   aibackend start stream-output        后台启动单个
   aibackend start stream-output --foreground   前台运行（Ctrl+C 停止）
   aibackend stop --all                 停止全部
@@ -275,7 +275,7 @@ def cmd_help(args, parser):
         parser.parse_args([args.topic, "--help"])
         return
     print()
-    print(f"  {GREEN}aibackend{RESET}  {BOLD}aiplugin4-backends{RESET} 的 pm2 风格命令行管理工具")
+    print(f"  {GREEN}aibackend{RESET}  {BOLD}aiplugin4-backends{RESET} 的命令行管理工具")
     print(f"  {DIM}命令行与 WebUI 共用同一套后端进程与状态（logs/state.json）{RESET}")
     print()
     print(f"  {GREEN}用法:{RESET}")
@@ -339,7 +339,7 @@ def cmd_webui(args):
 def build_parser():
     parser = argparse.ArgumentParser(
         prog="aibackend",
-        description="aiplugin4-backends 的 pm2 风格命令行管理工具",
+        description="aiplugin4-backends 的命令行管理工具",
     )
     sub = parser.add_subparsers(dest="command")
     sub.add_parser("list", help="查看所有后端状态")
