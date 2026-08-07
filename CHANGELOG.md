@@ -2,7 +2,7 @@
 
 标题格式为 `## <版本号>`，release 工作流按标签版本号读取对应段落作为发布说明；日常更新以「Unreleased」汇总，发版前改成版本号并补日期。
 
-## Unreleased
+## 0.9.0 - 2026-08-07
 
 - WebUI 卡片新增「⚙ 配置」弹窗：可修改端口、访问 token 与监听 IP，一键随机生成 token；token 默认留空 = 不鉴权
 - 后端支持 token 鉴权（`Authorization: Bearer <token>` / `X-Token`）与自定义监听地址（`AIPLUGIN4_BACKEND_HOST`）
@@ -14,6 +14,11 @@
 - WebUI 新增「⬆ 更新」「重启全部」按钮，aibackend 新增 update 命令
 - 新增 mcp-files-exec 后端：AI 读写文件与执行受限命令（沙箱 + 命令拦截）
 - 新增 aibackend 命令行：启停/日志/监控/依赖管理/更新，彩色 help
+- WebUI 端口支持命令行持久化修改（`webui-port`），修改后自动重启
+- Linux systemd 服务注册：开机自启 + 异常自动拉起 WebUI（`service-install` / `service-uninstall`）
+- Linux 下自动检测并补齐 Puppeteer/Chromium 系统库（`ldd` + apt）
+- WebUI 改为每 1 秒自动刷新
+- 新增更新日志（CHANGELOG）与项目知识库（AGENTS.md），README 补充后端介绍与目录
 - 打包仅保留在 release workflow，不再提供 package 命令
 
 ## 0.0.9 - 2026-08-07
