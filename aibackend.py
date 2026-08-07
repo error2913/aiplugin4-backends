@@ -38,7 +38,6 @@ from launcher import (
     effective_port,
     launch_webui,
     load_config,
-    package_backends,
     process_memory,
     remove_backend_deps,
     setup_backend,
@@ -56,7 +55,6 @@ COMMANDS = [
     ("setup", "安装后端依赖"),
     ("del-deps", "删除后端依赖"),
     ("webui", "启动 Web 管理界面"),
-    ("package", "打包 dist/ 压缩包（zip + tar.gz）"),
 ]
 
 _USE_COLOR = sys.stdout.isatty()
@@ -383,7 +381,6 @@ def build_parser():
     webui_p.add_argument("--port", type=int, default=8910)
     webui_p.add_argument("--no-browser", action="store_true")
 
-    sub.add_parser("package", help="打包 dist/ 压缩包（zip + tar.gz）")
     return parser
 
 
@@ -417,8 +414,6 @@ def main(argv=None):
         cmd_del_deps(args, supervisor)
     elif args.command == "webui":
         cmd_webui(args)
-    elif args.command == "package":
-        package_backends()
     else:
         parser.print_help()
 
