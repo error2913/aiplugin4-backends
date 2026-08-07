@@ -7,6 +7,7 @@ import os
 import time
 import uuid
 from fastapi import BackgroundTasks, FastAPI, Query, Request, HTTPException
+from fastapi.responses import JSONResponse
 from openai import OpenAI
 import uvicorn
 from typing import AsyncIterator, Dict, Any, List
@@ -93,6 +94,17 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         pass
     
 app = FastAPI(lifespan=lifespan)
+
+APP_HOST = os.environ.get("AIPLUGIN4_BACKEND_HOST", "0.0.0.0")
+AUTH_TOKEN = os.environ.get("AIPLUGIN4_BACKEND_TOKEN", "")
+
+if AUTH_TOKEN:
+    @app.middleware("http")
+    async def _require_token(request: Request, call_next):
+        auth = request.headers.get("Authorization", "")
+        if auth == f"Bearer {AUTH_TOKEN}" or request.headers.get("X-Token") == AUTH_TOKEN:
+            return await call_next(request)
+        return JSONResponse({"error": "unauthorized"}, status_code=401)
 
 def cal_len(text: str) -> float:
     """
@@ -293,5 +305,5 @@ async def end_completion(id: str = Query(...)):
 if __name__ == "__main__":
     logger.info(f"服务开始启动，版本号：{VERSION}")
     port = int(os.environ.get("AIPLUGIN4_BACKEND_PORT", "3010"))
-    uvicorn.run(app, host="0.0.0.0", port=port)
+    uvicorn.run(app, host=APP_HOST, port=port)
     logger.info("服务退出成功")

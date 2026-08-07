@@ -20,6 +20,7 @@ python launcher.py
 - 「重启全部」先停止全部，再启动依赖已就绪的后端
 - 右上角「⬆ 更新」从 Git 拉取项目更新（手动，非自动）
 - 卡片显示运行时长、自动拉起次数与内存占用；「日志」旁可点「删除依赖」恢复未安装状态
+- 卡片「⚙ 配置」弹窗可修改端口、访问 token 与监听 IP（默认 `0.0.0.0`），支持一键随机生成 token；token 默认留空 = 不鉴权
 - 后端进程异常退出会自动拉起
 
 > 按需安装：每个后端只安装自己缺失的依赖，不会预装全部；依赖清单（`requirements.txt` / `package.json`）变化后会自动重新安装。Python 后端使用独立 venv，Node 后端使用各自的 `node_modules`。
@@ -59,7 +60,7 @@ assets/                WebUI 图标
 
 ## 管理方式
 
-管理全部通过 WebUI 完成：后端启停、依赖安装/删除、端口修改、运行日志都在页面里操作。端口覆盖写入 `.runtime.json`（已 gitignore），后端通过环境变量 `AIPLUGIN4_BACKEND_PORT` 读取。
+管理全部通过 WebUI 完成：后端启停、依赖安装/删除、配置修改、运行日志都在页面里操作。端口/token/监听 IP 写入 `.runtime.json`（已 gitignore），启动时通过环境变量传给后端：`AIPLUGIN4_BACKEND_PORT`、`AIPLUGIN4_BACKEND_TOKEN`（非空时后端校验 `Authorization: Bearer <token>` 或 `X-Token: <token>`）、`AIPLUGIN4_BACKEND_HOST`。
 
 ## 命令行（aibackend）
 

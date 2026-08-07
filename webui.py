@@ -24,11 +24,12 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from launcher import (
     DEFAULT_LOG_DIR,
     Supervisor,
+    backend_config,
     deps_ready,
-    effective_port,
     load_runtime,
     process_memory,
     remove_backend_deps,
+    save_backend_config,
     save_runtime,
     update_project,
 )
@@ -137,6 +138,10 @@ PAGE = """<!DOCTYPE html>
   button.mini { padding: 4px 8px; font-size: 12px; }
   .chip { font-family: Consolas, monospace; font-size: 12px; color: var(--amber); background: var(--amber-bg); border: 1px solid color-mix(in srgb, var(--amber) 30%, transparent); padding: 3px 9px; border-radius: 8px; }
   .chip.idle { color: var(--muted); background: color-mix(in srgb, var(--muted) 10%, transparent); border-color: color-mix(in srgb, var(--muted) 22%, transparent); }
+  .chip.token { color: var(--green); background: color-mix(in srgb, var(--green) 10%, transparent); border-color: color-mix(in srgb, var(--green) 30%, transparent); }
+  .cfg-row { display: flex; align-items: center; gap: 8px; }
+  .cfg-row .port { flex: 1; width: auto; }
+  .cfg-label { font-size: 12.5px; color: var(--muted); display: grid; gap: 6px; }
   .ops { display: flex; gap: 8px; flex-wrap: wrap; }
   .ops { justify-content: center; }
   .ops button { padding: 6px 12px; font-size: 12.5px; }
@@ -220,11 +225,39 @@ PAGE = """<!DOCTYPE html>
     </div>
   </div>
 </div>
+<div class="modal" id="configModal">
+  <div class="dialog" style="width:min(430px,92vw)">
+    <div class="dialog-head">
+      <b id="configTitle">配置</b>
+      <span class="spacer"></span>
+      <button class="close" onclick="closeConfig()">✕</button>
+    </div>
+    <div style="padding:18px 22px; display:grid; gap:16px;">
+      <label class="cfg-label">端口
+        <input id="cfgPort" class="port" type="number" min="1" max="65535">
+      </label>
+      <label class="cfg-label">Token（留空 = 不鉴权）
+        <div class="cfg-row">
+          <input id="cfgToken" class="port" type="text" spellcheck="false" placeholder="留空表示无需 token">
+          <button class="mini" onclick="randomToken()" title="一键随机生成 token">🎲 随机</button>
+        </div>
+      </label>
+      <label class="cfg-label">监听 IP
+        <input id="cfgHost" class="port" type="text" spellcheck="false" placeholder="0.0.0.0">
+      </label>
+    </div>
+    <div style="padding:12px 18px; text-align:right; border-top:1px solid var(--border); display:flex; gap:8px; justify-content:flex-end;">
+      <button onclick="closeConfig()">取消</button>
+      <button class="primary" onclick="saveConfig()">保存</button>
+    </div>
+  </div>
+</div>
 <div id="toast"></div>
 <footer>aiplugin4 · launcher.py webui</footer>
 <script>
 let current = null;
 let currentType = 'backend';
+let cfgName = null;
 const installing = new Set();
 const deleting = new Set();
 let allInstalling = false;
@@ -273,8 +306,8 @@ async function refresh(){
       </div>
       <div class="desc">${esc(b.description)}</div>
       <div class="meta">
-        <span class="portbox">端口 <input class="port" type="number" min="1" max="65535" value="${b.port}" onchange="setPort('${b.name}', this.value)" title="修改后重启后端生效"></span>
-        <button class="mini" onclick="resetPort('${b.name}')" title="恢复默认端口">↺</button>
+        <button class="mini" onclick="openConfig('${b.name}')" title="端口 / token / 监听IP">⚙ 配置</button>
+        ${b.token ? `<span class="chip token" title="访问 token">🔑 ${esc(b.token)}</span>` : ''}
         ${b.running && b.pid ? `<span class="chip idle">pid ${b.pid}</span>` : ''}
       </div>
       <div class="meta">
@@ -391,14 +424,34 @@ async function setupAll(){
   allInstalling = false;
   refresh();
 }
-async function setPort(name, val){
-  const n = parseInt(val, 10);
-  if (!n || n < 1 || n > 65535){ toast('端口必须是 1-65535'); refresh(); return; }
-  await api('/api/port/' + name, 'POST', JSON.stringify({port: n}));
-  toast('端口已保存：' + name + ' → ' + n + '（重启后端生效）');
+async function openConfig(name){
+  cfgName = name;
+  const j = await api('/api/config/' + name);
+  document.getElementById('configTitle').textContent = '配置：' + name;
+  document.getElementById('cfgPort').value = j.port;
+  document.getElementById('cfgToken').value = j.token || '';
+  document.getElementById('cfgHost').value = j.host || '0.0.0.0';
+  document.getElementById('configModal').classList.add('open');
+}
+function closeConfig(){
+  document.getElementById('configModal').classList.remove('open');
+  cfgName = null;
+}
+function randomToken(){
+  const bytes = new Uint8Array(16);
+  crypto.getRandomValues(bytes);
+  document.getElementById('cfgToken').value = Array.from(bytes, b => b.toString(16).padStart(2, '0')).join('');
+}
+async function saveConfig(){
+  const port = parseInt(document.getElementById('cfgPort').value, 10);
+  const token = document.getElementById('cfgToken').value.trim();
+  const host = document.getElementById('cfgHost').value.trim() || '0.0.0.0';
+  if (!port || port < 1 || port > 65535){ toast('端口必须是 1-65535'); return; }
+  await api('/api/config/' + cfgName, 'POST', JSON.stringify({port, token, host}));
+  toast('配置已保存：' + cfgName + '（重启后端生效）');
+  closeConfig();
   refresh();
 }
-async function resetPort(name){ await api('/api/port/' + name + '/reset', 'POST'); toast('已恢复默认端口'); refresh(); }
 function showInstallLog(name){
   current = name; currentType = 'setup';
   document.getElementById('logTitle').textContent = '安装依赖：' + name;
@@ -419,7 +472,7 @@ async function loadLog(){
   pre.textContent = j.log || '(暂无日志)';
   pre.scrollTop = pre.scrollHeight;
 }
-document.addEventListener('keydown', e => { if (e.key === 'Escape'){ closeLog(); closeAlert(); } });
+document.addEventListener('keydown', e => { if (e.key === 'Escape'){ closeLog(); closeAlert(); closeConfig(); } });
 applyTheme();
 refresh();
 setInterval(refresh, 3000);
@@ -541,6 +594,7 @@ def run_webui(backends, config, supervisor: Supervisor, host: str = "127.0.0.1",
                 rows = []
                 for b in backends:
                     info = supervisor.state.get(b.name) or {}
+                    cfg = backend_config(b)
                     running = supervisor.is_running(b.name)
                     uptime_secs = None
                     if running and info.get("started_at"):
@@ -560,7 +614,9 @@ def run_webui(backends, config, supervisor: Supervisor, host: str = "127.0.0.1",
                         "name": b.name,
                         "description": b.description,
                         "type": b.type,
-                        "port": effective_port(b),
+                        "port": cfg["port"],
+                        "host": cfg["host"],
+                        "token": cfg["token"],
                         "default_port": b.port,
                         "running": running,
                         "uptime_secs": uptime_secs,
@@ -571,6 +627,15 @@ def run_webui(backends, config, supervisor: Supervisor, host: str = "127.0.0.1",
                         "pid": info.get("pid"),
                     })
                 self._json({"ok": True, "backends": rows})
+                return
+            if self.path.startswith("/api/config/"):
+                name = self.path[len("/api/config/"):]
+                backend = by_name.get(name)
+                if not backend:
+                    self._err(f"未知后端: {name}", 404)
+                    return
+                cfg = backend_config(backend)
+                self._json({"ok": True, "port": cfg["port"], "token": cfg["token"], "host": cfg["host"], "default_port": backend.port})
                 return
             if self.path.startswith("/api/setup-log/"):
                 name = self.path[len("/api/setup-log/"):]
@@ -633,6 +698,26 @@ def run_webui(backends, config, supervisor: Supervisor, host: str = "127.0.0.1",
                     except Exception as e:  # noqa: BLE001
                         self._json({"ok": False, "message": str(e), "output": str(e)})
                     return
+                if path.startswith("/api/config/"):
+                    name = path[len("/api/config/"):]
+                    backend = by_name.get(name)
+                    if not backend:
+                        self._err(f"未知后端: {name}", 404)
+                        return
+                    body = self._read_json()
+                    try:
+                        value = int(body.get("port"))
+                    except (TypeError, ValueError):
+                        self._err("端口必须是 1-65535 的整数", 400)
+                        return
+                    if not 1 <= value <= 65535:
+                        self._err("端口必须是 1-65535 的整数", 400)
+                        return
+                    token = str(body.get("token", "") or "")
+                    host = str(body.get("host", "") or "0.0.0.0")
+                    cfg = save_backend_config(name, port=value, token=token, host=host)
+                    self._json({"ok": True, "port": cfg["port"], "token": cfg["token"], "host": cfg["host"]})
+                    return
                 if path.startswith("/api/port/"):
                     rest = path[len("/api/port/"):]
                     if rest.endswith("/reset"):
@@ -642,7 +727,8 @@ def run_webui(backends, config, supervisor: Supervisor, host: str = "127.0.0.1",
                             self._err(f"未知后端: {name}", 404)
                             return
                         runtime = load_runtime()
-                        runtime.setdefault("ports", {}).pop(name, None)
+                        runtime.get("config", {}).pop(name, None)
+                        runtime.get("ports", {}).pop(name, None)
                         save_runtime(runtime)
                         self._json({"ok": True, "port": backend.port})
                         return
@@ -660,10 +746,8 @@ def run_webui(backends, config, supervisor: Supervisor, host: str = "127.0.0.1",
                     if not 1 <= value <= 65535:
                         self._err("端口必须是 1-65535 的整数", 400)
                         return
-                    runtime = load_runtime()
-                    runtime.setdefault("ports", {})[name] = value
-                    save_runtime(runtime)
-                    self._json({"ok": True, "port": value})
+                    cfg = save_backend_config(name, port=value)
+                    self._json({"ok": True, "port": cfg["port"]})
                     return
                 parts = path.strip("/").split("/")
                 if len(parts) == 3 and parts[0] == "api":

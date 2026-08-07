@@ -7,6 +7,16 @@ const fs = require('fs').promises;
 
 const app = express();
 const port = Number(process.env.AIPLUGIN4_BACKEND_PORT || 37632);
+const host = process.env.AIPLUGIN4_BACKEND_HOST || '0.0.0.0';
+const token = process.env.AIPLUGIN4_BACKEND_TOKEN || '';
+
+if (token) {
+  app.use((req, res, next) => {
+    const auth = req.headers['authorization'] || '';
+    if (auth === `Bearer ${token}` || (req.headers['x-token'] || '') === token) return next();
+    res.status(401).json({ status: 'error', message: 'unauthorized' });
+  });
+}
 
 // 配置 marked 选项
 marked.setOptions({
@@ -472,7 +482,7 @@ app.get('/health', (req, res) => {
     res.json({ status: 'ok' });
 });
 
-app.listen(port, () => {
+app.listen(port, host, () => {
     console.log(`Content renderer service running on http://localhost:${port}`);
     console.log(`Supports: Markdown, HTML, LaTeX formulas`);
     console.log(`Themes: light, dark, gradient`);

@@ -8,6 +8,17 @@ import os
 
 app = Flask(__name__)
 
+APP_HOST = os.environ.get("AIPLUGIN4_BACKEND_HOST", "0.0.0.0")
+AUTH_TOKEN = os.environ.get("AIPLUGIN4_BACKEND_TOKEN", "")
+
+if AUTH_TOKEN:
+    @app.before_request
+    def _require_token():
+        auth = request.headers.get("Authorization", "")
+        if auth == f"Bearer {AUTH_TOKEN}" or request.headers.get("X-Token") == AUTH_TOKEN:
+            return None
+        return jsonify({"error": "unauthorized"}), 401
+
 def download_image_with_retry(url, retries=3):
     for attempt in range(retries):
         try:
@@ -100,4 +111,4 @@ def image_to_base64():
 
 if __name__ == '__main__':
     port = int(os.environ.get("AIPLUGIN4_BACKEND_PORT", "46678"))
-    app.run(host='0.0.0.0', port=port)
+    app.run(host=APP_HOST, port=port)

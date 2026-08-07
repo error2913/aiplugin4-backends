@@ -15,6 +15,17 @@ import uvicorn
 
 app = FastAPI()
 
+APP_HOST = os.environ.get("AIPLUGIN4_BACKEND_HOST", "0.0.0.0")
+AUTH_TOKEN = os.environ.get("AIPLUGIN4_BACKEND_TOKEN", "")
+
+if AUTH_TOKEN:
+    @app.middleware("http")
+    async def _require_token(request: Request, call_next):
+        auth = request.headers.get("Authorization", "")
+        if auth == f"Bearer {AUTH_TOKEN}" or request.headers.get("X-Token") == AUTH_TOKEN:
+            return await call_next(request)
+        return JSONResponse({"error": "unauthorized"}, status_code=401)
+
 # 配置日志
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -165,4 +176,4 @@ async def get_chart_url(request: Request, background_tasks: BackgroundTasks):
 
 if __name__ == "__main__":
     port = int(os.environ.get("AIPLUGIN4_BACKEND_PORT", "3009"))
-    uvicorn.run(app, host="0.0.0.0", port=port)
+    uvicorn.run(app, host=APP_HOST, port=port)

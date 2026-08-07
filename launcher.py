@@ -76,9 +76,38 @@ def save_runtime(runtime: dict) -> None:
         json.dump(runtime, f, ensure_ascii=False, indent=2)
 
 
+def backend_config(backend: Backend) -> dict:
+    """后端运行配置：端口/token/监听IP，优先 .runtime.json（端口兼容旧版 ports 字段）"""
+    rt = load_runtime()
+    cfg = rt.get("config", {}).get(backend.name) or {}
+    port = cfg.get("port")
+    if port is None:
+        port = rt.get("ports", {}).get(backend.name, backend.port)
+    return {
+        "port": int(port),
+        "token": str(cfg.get("token") or ""),
+        "host": str(cfg.get("host") or "0.0.0.0"),
+    }
+
+
+def save_backend_config(name: str, port=None, token=None, host=None) -> dict:
+    """保存后端运行配置到 .runtime.json（只更新传入字段），端口同步旧版 ports 字段"""
+    rt = load_runtime()
+    cfg = rt.setdefault("config", {}).setdefault(name, {})
+    if port is not None:
+        cfg["port"] = int(port)
+        rt.setdefault("ports", {})[name] = int(port)
+    if token is not None:
+        cfg["token"] = str(token)
+    if host is not None:
+        cfg["host"] = str(host) or "0.0.0.0"
+    save_runtime(rt)
+    return cfg
+
+
 def effective_port(backend: Backend) -> int:
     """有效端口：优先 .runtime.json 中的覆盖值，否则用 backend.json 默认值"""
-    return int(load_runtime().get("ports", {}).get(backend.name, backend.port))
+    return backend_config(backend)["port"]
 
 
 def discover_backends() -> list:
@@ -343,15 +372,18 @@ class Supervisor:
         self._reload_state()
         if self.is_running(backend.name):
             return False
+        cfg = backend_config(backend)
         log_path = os.path.join(self.log_dir, f"{backend.name}.log")
         log_file = open(log_path, "a", encoding="utf-8")
-        log_file.write(f"\n===== {time.strftime('%Y-%m-%d %H:%M:%S')} 启动 {backend.name} (port {backend.port}) =====\n")
+        log_file.write(f"\n===== {time.strftime('%Y-%m-%d %H:%M:%S')} 启动 {backend.name} (host {cfg['host']}, port {cfg['port']}) =====\n")
         log_file.flush()
         # 强制子进程以 UTF-8 输出，避免 Windows 下 GBK 与 launcher 的 UTF-8 日志混编码导致乱码
         env = dict(os.environ)
         env["PYTHONIOENCODING"] = "utf-8"
         env["PYTHONUTF8"] = "1"
-        env["AIPLUGIN4_BACKEND_PORT"] = str(effective_port(backend))
+        env["AIPLUGIN4_BACKEND_PORT"] = str(cfg["port"])
+        env["AIPLUGIN4_BACKEND_HOST"] = cfg["host"]
+        env["AIPLUGIN4_BACKEND_TOKEN"] = cfg["token"]
         kwargs = {}
         if os.name == "nt":
             kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW  # 无控制台父进程（webui/后台模式）下不弹黑框
@@ -367,7 +399,7 @@ class Supervisor:
         self.procs[backend.name] = proc
         self.state[backend.name] = {"pid": proc.pid, "started_at": time.strftime("%Y-%m-%d %H:%M:%S")}
         self._save_state()
-        print(f"[launcher] 已启动 {backend.name} (pid={proc.pid}, port={backend.port}, 日志={log_path})")
+        print(f"[launcher] 已启动 {backend.name} (pid={proc.pid}, host={cfg['host']}, port={cfg['port']}, 日志={log_path})")
         return True
 
     def _monitor(self, backend: Backend) -> None:
@@ -688,13 +720,14 @@ def main() -> None:
 
     if args.command == "port":
         backend = find([args.name])[0]
-        runtime = load_runtime()
-        ports = runtime.setdefault("ports", {})
         if args.value is None:
-            print(f"{backend.name} 端口: {effective_port(backend)}（默认 {backend.port}）")
+            cfg = backend_config(backend)
+            print(f"{backend.name} 端口: {cfg['port']}（默认 {backend.port}），监听IP: {cfg['host']}，token: {'已设置' if cfg['token'] else '未设置'}")
             return
         if args.value == "reset":
-            ports.pop(backend.name, None)
+            runtime = load_runtime()
+            runtime.get("config", {}).pop(backend.name, None)
+            runtime.get("ports", {}).pop(backend.name, None)
             save_runtime(runtime)
             print(f"{backend.name} 端口已恢复默认 {backend.port}")
             return
@@ -706,8 +739,7 @@ def main() -> None:
         if not 1 <= value <= 65535:
             print("[launcher] 端口必须是 1-65535 的整数")
             sys.exit(1)
-        ports[backend.name] = value
-        save_runtime(runtime)
+        save_backend_config(backend.name, port=value)
         print(f"{backend.name} 端口已设为 {value}（重启后端后生效）")
         return
 

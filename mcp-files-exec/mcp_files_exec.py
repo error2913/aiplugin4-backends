@@ -36,6 +36,7 @@ from mcp.server.fastmcp import FastMCP
 DEFAULT_MAX_FILE = int(os.environ.get("MCP_MAX_FILE_BYTES", 1048576))
 DEFAULT_MAX_OUTPUT = int(os.environ.get("MCP_MAX_OUTPUT_BYTES", 1048576))
 DEFAULT_TIMEOUT = int(os.environ.get("MCP_DEFAULT_TIMEOUT", 30))
+_AUTH_TOKEN = os.environ.get("AIPLUGIN4_BACKEND_TOKEN", "")
 
 _CWD = os.path.abspath(os.getcwd())
 _SANDBOX_ROOTS = [
@@ -89,6 +90,34 @@ def _audit(tool: str, ok: bool, detail: str = "") -> None:
             f.write(json.dumps(entry, ensure_ascii=False) + "\n")
     except OSError:
         pass
+
+
+def _auth_asgi_wrapper(inner):
+    """纯 ASGI 包装：token 校验（Authorization: Bearer <token> 或 X-Token: <token>）"""
+    token = _AUTH_TOKEN
+
+    async def app(scope, receive, send):
+        if scope["type"] != "http":
+            await inner(scope, receive, send)
+            return
+        headers = {}
+        for k, v in scope.get("headers", []):
+            headers[k.decode("latin-1").lower()] = v.decode("latin-1")
+        if headers.get("authorization") == f"Bearer {token}" or headers.get("x-token") == token:
+            await inner(scope, receive, send)
+            return
+        body = b'{"error":"unauthorized"}'
+        await send({
+            "type": "http.response.start",
+            "status": 401,
+            "headers": [
+                (b"content-type", b"application/json"),
+                (b"content-length", str(len(body)).encode()),
+            ],
+        })
+        await send({"type": "http.response.body", "body": body})
+
+    return app
 
 
 def _resolve(path: str) -> str:
@@ -262,7 +291,7 @@ def run_command(command: str, cwd: Optional[str] = None, timeout: Optional[int] 
 def main() -> None:
     parser = argparse.ArgumentParser(description="MCP 文件与命令后端（沙箱 + 命令拦截）")
     parser.add_argument("--stdio", action="store_true", help="使用 stdio 传输（默认 streamable-http）")
-    parser.add_argument("--host", default="0.0.0.0", help="streamable-http 监听地址")
+    parser.add_argument("--host", default=os.environ.get("AIPLUGIN4_BACKEND_HOST", "0.0.0.0"), help="streamable-http 监听地址")
     parser.add_argument("--port", type=int, default=int(os.environ.get("AIPLUGIN4_BACKEND_PORT", "3910")))
     args = parser.parse_args()
 
@@ -279,7 +308,26 @@ def main() -> None:
     else:
         mcp.settings.host = args.host
         mcp.settings.port = args.port
-        mcp.run(transport="streamable-http")
+        app = None
+        if hasattr(mcp, "streamable_http_app"):
+            try:
+                import uvicorn
+            except ImportError:
+                uvicorn = None
+            if uvicorn is not None:
+                inner = mcp.streamable_http_app()
+                app = _auth_asgi_wrapper(inner) if _AUTH_TOKEN else inner
+        if app is None:
+            if _AUTH_TOKEN:
+                print(
+                    "[mcp-files-exec] 当前 mcp/uvicorn 版本不支持 token 校验，拒绝启动（请升级依赖后重试）",
+                    file=sys.stderr,
+                    flush=True,
+                )
+                sys.exit(1)
+            mcp.run(transport="streamable-http")
+        else:
+            uvicorn.run(app, host=args.host, port=args.port)
 
 
 if __name__ == "__main__":
