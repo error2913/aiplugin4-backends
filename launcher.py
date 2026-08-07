@@ -12,6 +12,7 @@ import hashlib
 import json
 import os
 import re
+import shlex
 import shutil
 import signal
 import subprocess
@@ -602,6 +603,72 @@ def stop_webui() -> bool:
     return stopped
 
 
+def _sudo(args: list) -> int:
+    """以 root 执行命令（非 root 时自动加 sudo），仅 Linux"""
+    if os.geteuid() == 0:
+        return subprocess.call(args)
+    return subprocess.call(["sudo"] + args)
+
+
+def _webui_service_unit() -> str:
+    """生成 systemd unit 内容：前台运行 webui（--no-browser），异常自动拉起"""
+    exe = shlex.quote(sys.executable)
+    entry = shlex.quote(os.path.abspath(__file__))
+    return f"""[Unit]
+Description=aiplugin4 WebUI
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory={ROOT_DIR}
+ExecStart={exe} {entry} webui --no-browser
+Restart=always
+RestartSec=3
+Environment=PYTHONIOENCODING=utf-8
+Environment=PYTHONUTF8=1
+
+[Install]
+WantedBy=multi-user.target
+"""
+
+
+def install_webui_service() -> None:
+    """注册 systemd 服务：WebUI 开机自启、异常退出自动拉起（仅 Linux）"""
+    if os.name != "posix":
+        print("[launcher] 系统服务仅支持 Linux")
+        sys.exit(1)
+    stop_webui()  # 释放端口，避免与已有后台 WebUI 冲突
+    unit = _webui_service_unit()
+    unit_path = "/etc/systemd/system/aiplugin4-webui.service"
+    tmp = "/tmp/aiplugin4-webui.service"
+    with open(tmp, "w", encoding="utf-8") as f:
+        f.write(unit)
+    try:
+        _sudo(["install", "-m", "644", tmp, unit_path])
+        _sudo(["systemctl", "daemon-reload"])
+        _sudo(["systemctl", "enable", "--now", "aiplugin4-webui"])
+    finally:
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
+    print("[launcher] 已注册 systemd 服务 aiplugin4-webui（开机自启 + 异常自动拉起）")
+    print("[launcher] 查看状态: systemctl status aiplugin4-webui")
+    print("[launcher] 查看日志: journalctl -u aiplugin4-webui -f")
+
+
+def uninstall_webui_service() -> None:
+    """移除 systemd 服务（仅 Linux）"""
+    if os.name != "posix":
+        print("[launcher] 系统服务仅支持 Linux")
+        sys.exit(1)
+    _sudo(["systemctl", "disable", "--now", "aiplugin4-webui"])
+    _sudo(["rm", "-f", "/etc/systemd/system/aiplugin4-webui.service"])
+    _sudo(["systemctl", "daemon-reload"])
+    print("[launcher] 已移除 systemd 服务 aiplugin4-webui")
+
+
 def _git_head() -> str:
     try:
         out = subprocess.run(
@@ -768,6 +835,8 @@ def main() -> None:
     webui_p.add_argument("--port", type=int, default=8910, help="监听端口（默认 8910）")
     webui_p.add_argument("--no-browser", action="store_true", help="启动后不自动打开浏览器")
     sub.add_parser("webui-stop", help="停止后台 WebUI")
+    sub.add_parser("service-install", help="[Linux] 注册 systemd 服务：开机自启 + 自动拉起 WebUI")
+    sub.add_parser("service-uninstall", help="[Linux] 移除 systemd 服务")
     args = parser.parse_args()
 
     config = load_config()
@@ -894,6 +963,14 @@ def main() -> None:
 
     if args.command == "webui-stop":
         stop_webui()
+        return
+
+    if args.command == "service-install":
+        install_webui_service()
+        return
+
+    if args.command == "service-uninstall":
+        uninstall_webui_service()
         return
 
     parser.error(f"未知命令: {args.command}")

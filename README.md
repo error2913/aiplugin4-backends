@@ -9,12 +9,10 @@ aiplugin4 的配套后端服务：流式输出、图片转 base64、用量图表
 环境要求：Python 3.9+、Node.js 18+（仅 `web-read` / `md-html-render` 两个后端需要 Node）。
 
 ```bash
-git clone https://github.com/error2913/aiplugin4-backends.git
-cd aiplugin4-backends
-python launcher.py
+git clone https://github.com/error2913/aiplugin4-backends.git && cd aiplugin4-backends && python launcher.py
 ```
 
-直接运行 launcher 会自动检查/安装 WebUI 依赖并**在后台启动**管理界面（不占用终端、无控制台窗口），随后自动打开 http://127.0.0.1:8910（仅本机）。停止后台 WebUI：`python launcher.py webui-stop` 或 `aibackend webui-stop`。所有管理都在页面里完成：
+首次运行即自动安装所需依赖并**在后台启动**管理界面（不占用终端、无控制台窗口），随后自动打开 http://127.0.0.1:8910（仅本机）。停止后台 WebUI：`python launcher.py webui-stop` 或 `aibackend webui-stop`。所有管理都在页面里完成：
 
 - 首次启动某后端时，按钮显示「安装依赖」：点击后创建独立 venv / 执行 `npm install`，弹窗实时显示日志、按钮转圈，装完恢复为「启动」；之后再次启动不再安装，秒开
 - 有后端依赖未安装时，右上角出现「安装全部依赖」，可一键补齐
@@ -39,6 +37,17 @@ Windows 与 Linux 均支持，同一套代码无需改动：
 - 安装 `aibackend` 命令：Windows 生成 `aibackend.cmd`，Linux 生成 shell 脚本并写入 shell 配置（`.bashrc` / `.zshrc` / `.profile`）
 
 Linux 注意：Puppeteer 需要 Chromium 系统依赖，若启动 `web-read` / `md-html-render` 报缺失库，先安装（如 Debian/Ubuntu 的 `libnss3`、`libatk-1.0-0`、`libx11-xcb1` 等）。
+
+## Linux 系统服务
+
+注册 systemd 服务后，WebUI 开机自启、异常退出自动拉起（`Restart=always`），首次启动自动安装依赖并直接运行：
+
+```bash
+python launcher.py service-install      # 注册并立即启动（需 root/sudo）
+python launcher.py service-uninstall    # 停止并移除服务
+```
+
+服务前台运行，日志通过 `journalctl -u aiplugin4-webui -f` 查看；安装服务前会自动停掉已有后台 WebUI 以释放端口。
 
 ## 后端列表
 
