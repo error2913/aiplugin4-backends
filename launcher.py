@@ -607,7 +607,10 @@ def _sudo(args: list) -> int:
     """以 root 执行命令（非 root 时自动加 sudo），仅 Linux"""
     if os.geteuid() == 0:
         return subprocess.call(args)
-    return subprocess.call(["sudo"] + args)
+    if shutil.which("sudo"):
+        return subprocess.call(["sudo"] + args)
+    print(f"[launcher] 需要 root 权限但未找到 sudo，请用 root 或 su 后重试: {' '.join(args)}", file=sys.stderr)
+    return 127
 
 
 def _webui_service_unit() -> str:
@@ -638,6 +641,12 @@ def install_webui_service() -> None:
     if os.name != "posix":
         print("[launcher] 系统服务仅支持 Linux")
         sys.exit(1)
+    if not shutil.which("systemctl"):
+        print(
+            "[launcher] 未检测到 systemd（找不到 systemctl），当前系统可能使用 SysV/Upstart/OpenRC 等其他 init，无法注册 systemd 服务",
+            file=sys.stderr,
+        )
+        sys.exit(1)
     stop_webui()  # 释放端口，避免与已有后台 WebUI 冲突
     unit = _webui_service_unit()
     unit_path = "/etc/systemd/system/aiplugin4-webui.service"
@@ -645,9 +654,15 @@ def install_webui_service() -> None:
     with open(tmp, "w", encoding="utf-8") as f:
         f.write(unit)
     try:
-        _sudo(["install", "-m", "644", tmp, unit_path])
-        _sudo(["systemctl", "daemon-reload"])
-        _sudo(["systemctl", "enable", "--now", "aiplugin4-webui"])
+        if _sudo(["install", "-m", "644", tmp, unit_path]) != 0:
+            print("[launcher] 写入 systemd 单元失败（权限不足或路径不可写）", file=sys.stderr)
+            sys.exit(1)
+        if _sudo(["systemctl", "daemon-reload"]) != 0:
+            print("[launcher] systemctl daemon-reload 失败", file=sys.stderr)
+            sys.exit(1)
+        if _sudo(["systemctl", "enable", "--now", "aiplugin4-webui"]) != 0:
+            print("[launcher] systemctl enable --now 失败，可手动执行：sudo systemctl enable --now aiplugin4-webui", file=sys.stderr)
+            sys.exit(1)
     finally:
         try:
             os.remove(tmp)
@@ -663,6 +678,10 @@ def uninstall_webui_service() -> None:
     if os.name != "posix":
         print("[launcher] 系统服务仅支持 Linux")
         sys.exit(1)
+    if not shutil.which("systemctl"):
+        _sudo(["rm", "-f", "/etc/systemd/system/aiplugin4-webui.service"])
+        print("[launcher] 未检测到 systemd，已尝试删除单元文件")
+        return
     _sudo(["systemctl", "disable", "--now", "aiplugin4-webui"])
     _sudo(["rm", "-f", "/etc/systemd/system/aiplugin4-webui.service"])
     _sudo(["systemctl", "daemon-reload"])

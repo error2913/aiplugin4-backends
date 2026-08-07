@@ -21,6 +21,8 @@
   aibackend update                     从 Git 拉取项目更新
   aibackend webui                      后台启动 Web 管理界面（不占终端）
   aibackend webui-stop                 停止后台 WebUI
+  aibackend service-install            [Linux] 注册 systemd 服务（开机自启 + 自动拉起）
+  aibackend service-uninstall          [Linux] 停止并移除 systemd 服务
 
 命令行与 WebUI 共用同一套后端进程与状态（logs/state.json）。
 """
@@ -41,9 +43,11 @@ from launcher import (
     load_config,
     process_memory,
     remove_backend_deps,
+    install_webui_service,
     setup_backend,
     start_webui_background,
     stop_webui,
+    uninstall_webui_service,
     update_project,
 )
 
@@ -61,6 +65,8 @@ COMMANDS = [
     ("update", "从 Git 拉取项目更新"),
     ("webui", "后台启动 Web 管理界面（不占终端）"),
     ("webui-stop", "停止后台 WebUI"),
+    ("service-install", "[Linux] 注册 systemd 服务：开机自启 + 自动拉起 WebUI"),
+    ("service-uninstall", "[Linux] 停止并移除 systemd 服务"),
 ]
 
 
@@ -304,6 +310,8 @@ def cmd_help(args, parser):
     print()
     print(f"  {GREEN}命令:{RESET}")
     for name, desc in COMMANDS:
+        if name in ("service-install", "service-uninstall") and os.name != "posix":
+            continue  # 系统服务仅 Linux，其他平台不展示
         print(f"    {CYAN}{name:<12}{RESET}{desc}")
     print()
     print(f"  {DIM}查看单个命令详细参数：aibackend help <命令>{RESET}")
@@ -366,6 +374,14 @@ def cmd_webui_stop(args):
     stop_webui()
 
 
+def cmd_service_install(args):
+    install_webui_service()
+
+
+def cmd_service_uninstall(args):
+    uninstall_webui_service()
+
+
 def build_parser():
     parser = argparse.ArgumentParser(
         prog="aibackend",
@@ -415,6 +431,8 @@ def build_parser():
     webui_p.add_argument("--port", type=int, default=8910)
     webui_p.add_argument("--no-browser", action="store_true")
     sub.add_parser("webui-stop", help="停止后台 WebUI")
+    sub.add_parser("service-install", help="[Linux] 注册 systemd 服务：开机自启 + 自动拉起 WebUI")
+    sub.add_parser("service-uninstall", help="[Linux] 停止并移除 systemd 服务")
 
     return parser
 
@@ -453,6 +471,10 @@ def main(argv=None):
         cmd_webui(args)
     elif args.command == "webui-stop":
         cmd_webui_stop(args)
+    elif args.command == "service-install":
+        cmd_service_install(args)
+    elif args.command == "service-uninstall":
+        cmd_service_uninstall(args)
     else:
         parser.print_help()
 

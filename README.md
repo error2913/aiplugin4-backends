@@ -4,6 +4,16 @@ aiplugin4 的配套后端服务：流式输出、图片转 base64、用量图表
 
 配合 [aiplugin4](https://github.com/error2913/aiplugin4) 使用：把各服务地址填入插件「后端」配置分组（见 aiplugin4 的 docs/08）。
 
+## 目录
+
+- [快速开始](#快速开始)
+- [跨平台](#跨平台)
+- [Linux 系统服务](#linux-系统服务)
+- [后端列表](#后端列表)
+- [目录结构](#目录结构)
+- [管理方式](#管理方式)
+- [命令行（aibackend）](#命令行aibackend)
+
 ## 快速开始
 
 环境要求：Python 3.9+、Node.js 18+（仅 `web-read` / `md-html-render` 两个后端需要 Node）。
@@ -97,6 +107,8 @@ aibackend del-deps stream-output            # 删除单个后端依赖
 aibackend update                            # 从 Git 拉取项目更新（手动）
 aibackend webui                             # 后台启动 Web 管理界面（不占终端）
 aibackend webui-stop                        # 停止后台 WebUI
+aibackend service-install                   # [Linux] 注册 systemd 服务（开机自启 + 自动拉起）
+aibackend service-uninstall                 # [Linux] 停止并移除 systemd 服务
 ```
 
 命令行与 WebUI 共用同一套后端进程与状态（`logs/state.json`），可以混用。
