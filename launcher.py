@@ -535,7 +535,10 @@ def start_webui_background(host: str = "127.0.0.1", port: int = 8910, open_brows
             with open(WEBUI_PID_FILE, encoding="utf-8") as f:
                 old_pid = int(f.read().strip() or 0)
             if old_pid and Supervisor._pid_alive(old_pid):
-                print(f"[launcher] WebUI 已在后台运行 (pid={old_pid})，无需重复启动")
+                url = f"http://{host}:{port}"
+                print(f"[launcher] WebUI 已在后台运行 (pid={old_pid})，无需重复启动: {url}")
+                if open_browser and os.name == "nt":
+                    webbrowser.open(url)
                 return old_pid
         except (OSError, ValueError):
             pass
