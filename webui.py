@@ -179,7 +179,7 @@ PAGE = """<!DOCTYPE html>
     <img class="logo" src="/icon-256.png" alt="aiplugin4">
     <div>
       <h1>aiplugin4 后端管理</h1>
-      <div class="sub">launcher WebUI · 每 3 秒自动刷新 · 后端异常退出会自动拉起</div>
+      <div class="sub">launcher WebUI</div>
     </div>
     <div class="header-right">
       <button id="themeBtn" onclick="cycleTheme()">主题</button>
@@ -477,7 +477,7 @@ async function loadLog(){
 document.addEventListener('keydown', e => { if (e.key === 'Escape'){ closeLog(); closeAlert(); closeConfig(); } });
 applyTheme();
 refresh();
-setInterval(refresh, 3000);
+setInterval(refresh, 1000);
 </script>
 </body>
 </html>"""
