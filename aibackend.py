@@ -44,6 +44,28 @@ from launcher import (
     setup_backend,
 )
 
+COMMANDS = [
+    ("list", "查看所有后端状态"),
+    ("help", "查看帮助"),
+    ("start", "启动后端（默认后台守护）"),
+    ("stop", "停止后端（默认停止全部）"),
+    ("restart", "重启后端（默认后台）"),
+    ("logs", "查看后端日志"),
+    ("info", "查看后端详情"),
+    ("monitor", "实时监控面板"),
+    ("setup", "安装后端依赖"),
+    ("del-deps", "删除后端依赖"),
+    ("webui", "启动 Web 管理界面"),
+    ("package", "打包 dist/ 压缩包（zip + tar.gz）"),
+]
+
+_USE_COLOR = sys.stdout.isatty()
+GREEN = "\x1b[32m" if _USE_COLOR else ""
+CYAN = "\x1b[36m" if _USE_COLOR else ""
+DIM = "\x1b[2m" if _USE_COLOR else ""
+BOLD = "\x1b[1m" if _USE_COLOR else ""
+RESET = "\x1b[0m" if _USE_COLOR else ""
+
 
 def fmt_uptime(secs):
     if secs is None:
@@ -248,6 +270,25 @@ def cmd_info(args, supervisor):
     print(f"日志     : logs/{args.name}.log")
 
 
+def cmd_help(args, parser):
+    if args.topic:
+        parser.parse_args([args.topic, "--help"])
+        return
+    print()
+    print(f"  {GREEN}aibackend{RESET}  {BOLD}aiplugin4-backends{RESET} 的 pm2 风格命令行管理工具")
+    print(f"  {DIM}命令行与 WebUI 共用同一套后端进程与状态（logs/state.json）{RESET}")
+    print()
+    print(f"  {GREEN}用法:{RESET}")
+    print("    aibackend <命令> [参数]")
+    print()
+    print(f"  {GREEN}命令:{RESET}")
+    for name, desc in COMMANDS:
+        print(f"    {CYAN}{name:<12}{RESET}{desc}")
+    print()
+    print(f"  {DIM}查看单个命令详细参数：aibackend help <命令>{RESET}")
+    print()
+
+
 def cmd_monitor(args, supervisor):
     try:
         while True:
@@ -356,10 +397,7 @@ def main(argv=None):
         print_list(supervisor)
         return
     if args.command == "help":
-        if args.topic:
-            parser.parse_args([args.topic, "--help"])
-        else:
-            parser.print_help()
+        cmd_help(args, parser)
         return
     if args.command == "start":
         cmd_start(args, supervisor)
