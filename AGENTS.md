@@ -37,7 +37,7 @@ aibackend help                         # 查看所有命令
 
 ## 数据与状态文件（logs/ 与根目录，均 gitignore）
 
-- `.runtime.json`：每后端运行时配置 `config/<name> = {port, token, host}`；`ports` 为旧版字段（读兼容、写同步）。读写统一走 `launcher.backend_config()` / `save_backend_config()`。
+- `.runtime.json`：每后端运行时配置 `config/<name> = {port, token, host}`；`ports` 为旧版字段（读兼容、写同步）；`webui.port` 为 WebUI 管理界面端口（命令行 `launcher.py webui-port <端口|reset>` / `aibackend webui-port` 读写，修改后自动重启 WebUI）。读写统一走 `launcher.backend_config()` / `save_backend_config()` / `configure_webui_port()`。
 - `logs/state.json`：Supervisor 进程状态（`pid`、`started_at`、`restarts`、`stopped` 标记）。
 - `logs/webui.pid`：后台 WebUI 进程号。
 - `logs/<backend>.log`：各后端日志；`logs/webui.log`：WebUI 日志。

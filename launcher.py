@@ -111,6 +111,46 @@ def effective_port(backend: Backend) -> int:
     return backend_config(backend)["port"]
 
 
+def effective_webui_port(default: int = 8910) -> int:
+    """WebUI 管理界面端口：优先 .runtime.json 中的覆盖值，否则默认 8910"""
+    return int(load_runtime().get("webui", {}).get("port", default))
+
+
+def save_webui_port(port: int) -> None:
+    rt = load_runtime()
+    rt.setdefault("webui", {})["port"] = int(port)
+    save_runtime(rt)
+
+
+def reset_webui_port() -> None:
+    rt = load_runtime()
+    rt.get("webui", {}).pop("port", None)
+    if not rt.get("webui"):
+        rt.pop("webui", None)
+    save_runtime(rt)
+
+
+def configure_webui_port(value=None) -> int:
+    """查看/修改 WebUI 端口；修改后若后台 WebUI 在运行则自动重启到新端口，返回有效端口"""
+    if value is None:
+        return effective_webui_port()
+    if value == "reset":
+        reset_webui_port()
+        port = 8910
+    else:
+        try:
+            port = int(value)
+        except (TypeError, ValueError):
+            raise ValueError("端口必须是 1-65535 的整数")
+        if not 1 <= port <= 65535:
+            raise ValueError("端口必须是 1-65535 的整数")
+        save_webui_port(port)
+    if stop_webui():
+        print("[launcher] 旧 WebUI 已停止，正在用新端口重启...")
+        start_webui_background(port=port, open_browser=False)
+    return port
+
+
 def discover_backends() -> list:
     backends = []
     for entry in sorted(os.listdir(BACKENDS_DIR)):
@@ -632,9 +672,10 @@ def ensure_webui_deps() -> None:
     subprocess.check_call([sys.executable, "-m", "pip", "install", "-r", req])
 
 
-def launch_webui(backends, config, supervisor, host: str = "127.0.0.1", port: int = 8910, open_browser: bool = True) -> None:
+def launch_webui(backends, config, supervisor, host: str = "127.0.0.1", port: int = None, open_browser: bool = True) -> None:
     """安装 WebUI 依赖并启动管理界面（阻塞，Ctrl+C 退出）"""
     ensure_webui_deps()
+    port = int(port) if port else effective_webui_port()
     try:
         from webui import run_webui
     except ImportError:
@@ -644,8 +685,9 @@ def launch_webui(backends, config, supervisor, host: str = "127.0.0.1", port: in
     run_webui(backends, config, supervisor, host=host, port=port, open_browser=open_browser)
 
 
-def start_webui_background(host: str = "127.0.0.1", port: int = 8910, open_browser: bool = True) -> int:
+def start_webui_background(host: str = "127.0.0.1", port: int = None, open_browser: bool = True) -> int:
     """后台启动 WebUI（不占用终端、无控制台窗口），返回 pid；已在运行则返回现有 pid"""
+    port = int(port) if port else effective_webui_port()
     log_dir = os.path.join(ROOT_DIR, "logs")
     os.makedirs(log_dir, exist_ok=True)
     if os.path.exists(WEBUI_PID_FILE):
@@ -968,9 +1010,11 @@ def main() -> None:
     sub.add_parser("package", help="打包 backends/ 为 zip")
     webui_p = sub.add_parser("webui", help="启动 Web 管理界面")
     webui_p.add_argument("--host", default="127.0.0.1", help="监听地址（默认 127.0.0.1，仅本机）")
-    webui_p.add_argument("--port", type=int, default=8910, help="监听端口（默认 8910）")
+    webui_p.add_argument("--port", type=int, default=None, help="监听端口（默认取 webui-port 配置，未配置为 8910）")
     webui_p.add_argument("--no-browser", action="store_true", help="启动后不自动打开浏览器")
     sub.add_parser("webui-stop", help="停止后台 WebUI")
+    webui_port_p = sub.add_parser("webui-port", help="查看/修改 WebUI 端口（修改后自动重启 WebUI）")
+    webui_port_p.add_argument("value", nargs="?", help="新端口 1-65535，或 reset 恢复默认 8910")
     sub.add_parser("service-install", help="[Linux] 注册 systemd 服务：开机自启 + 自动拉起 WebUI")
     sub.add_parser("service-uninstall", help="[Linux] 移除 systemd 服务")
     args = parser.parse_args()
@@ -1032,6 +1076,20 @@ def main() -> None:
             sys.exit(1)
         save_backend_config(backend.name, port=value)
         print(f"{backend.name} 端口已设为 {value}（重启后端后生效）")
+        return
+
+    if args.command == "webui-port":
+        try:
+            port = configure_webui_port(args.value)
+        except ValueError as e:
+            print(f"[launcher] {e}")
+            sys.exit(1)
+        if args.value is None:
+            print(f"[launcher] WebUI 端口: {port}（默认 8910，保存在 .runtime.json）")
+        elif args.value == "reset":
+            print(f"[launcher] WebUI 端口已恢复默认 8910")
+        else:
+            print(f"[launcher] WebUI 端口已设为 {port}")
         return
 
     if args.command == "start":

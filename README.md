@@ -10,6 +10,7 @@ aiplugin4 的配套后端服务：流式输出、图片转 base64、用量图表
 - [跨平台](#跨平台)
 - [Linux 系统服务](#linux-系统服务)
 - [后端列表](#后端列表)
+- [后端介绍](#后端介绍)
 - [目录结构](#目录结构)
 - [管理方式](#管理方式)
 - [命令行（aibackend）](#命令行aibackend)
@@ -70,6 +71,64 @@ python launcher.py service-uninstall    # 停止并移除服务
 | `md-html-render` | Markdown/HTML 渲染为图片 | 37632 | Node |
 | `mcp-files-exec` | MCP：AI 读写文件与执行受限命令（沙箱 + 拦截） | 3910 | Python |
 
+## 后端介绍
+
+### stream-output — 流式输出中转
+
+代理 OpenAI 兼容接口，把流式输出按符号/长度切成片段，前端可实时轮询出打字机效果，结束后返回用量统计。
+
+- 默认端口 3010（Python / FastAPI），接口：
+  - `POST /start`：body `{url, api_key, body_obj}`（`body_obj` 为 chat.completions 参数），返回任务 `{id}`
+  - `GET /poll?id=<id>`：轮询已生成的分块
+  - `GET /end?id=<id>`：结束任务，返回片段与 usage
+- 依赖：`fastapi`、`openai`、`tiktoken`、`uvicorn`
+
+### image-url-to-base64 — 图片 URL 转 base64
+
+下载图片并转成 base64，自动识别格式（jpg / png / gif / webp），静态 GIF 自动转成 PNG。
+
+- 默认端口 46678（Python / Flask）
+- 接口：`POST /image-to-base64`，body `{url}`，返回 `{base64, format}`
+- 依赖：`flask`、`Pillow`、`imageio`、`requests`
+
+### usage-chart — token 用量图表
+
+按月/年聚合数据生成图表图片，返回临时图片 URL（约 120 秒后自动清理）。
+
+- 默认端口 3009（Python / FastAPI）
+- 接口：`POST /chart`，body `{chart_type, data}`，`chart_type` 支持 `year` / `month`，返回 `{image_url}`（图片在 `/temp_images/<file>.png`）
+- 依赖：`fastapi`、`matplotlib`、`python-dateutil`、`uvicorn`
+
+### web-read — 网页读取
+
+用 Puppeteer 无头浏览器抓取网页，返回标题、正文与页面链接。
+
+- 默认端口 46799（Node / Express）
+- 接口：`POST /scrape`，body `{url}`，返回 `{title, content, links}`
+- 依赖：`express`、`puppeteer`（需要 Chromium，Linux 下 launcher 自动检测并补齐系统库）
+
+### md-html-render — Markdown / HTML 渲染为图片
+
+把 Markdown 或 HTML 渲染成图片，支持 LaTeX 公式、浅色/深色/渐变主题与宽度/质量参数。
+
+- 默认端口 37632（Node / Express）
+- 接口：
+  - `POST /render/markdown`：body `{markdown, theme?, width?, quality?, hasImages?}`，返回 `{imageId, base64, ...}`
+  - `POST /render/html`：body `{html, theme?, width?, quality?, hasImages?}`，返回同结构
+  - `GET /images/<imageId>.png`：取图；`DELETE /images/<imageId>`：删图；`GET /health`：健康检查
+- 依赖：`express`、`puppeteer`、`marked`（需要 Chromium）
+
+### mcp-files-exec — MCP 文件与命令执行
+
+AI 通过 MCP 协议读写文件、执行受限命令：路径沙箱（realpath 防逃逸）、危险命令拦截、可选命令白名单、审计日志、超时强杀进程树。
+
+- 默认端口 3910（Python / FastMCP），传输 streamable-http；加 `--stdio` 切换为 stdio 传输
+- Tools：`read_file`、`write_file`（支持追加）、`run_command`
+- 环境变量：`MCP_SANDBOX_ROOTS`（沙箱根目录）、`MCP_ALLOWED_COMMANDS`（命令白名单）、`MCP_MAX_FILE_BYTES` / `MCP_MAX_OUTPUT_BYTES`（读写/输出上限）、`MCP_DEFAULT_TIMEOUT`（命令超时）、`MCP_LOG_FILE`（审计日志）
+- 依赖：`mcp`、`uvicorn`
+
+> 所有后端统一支持：卡片「⚙ 配置」可改端口、token 与监听 IP；设置 token 后请求需带 `Authorization: Bearer <token>` 或 `X-Token: <token>`，监听 IP 默认 `0.0.0.0`。
+
 ## 目录结构
 
 ```text
@@ -107,6 +166,7 @@ aibackend del-deps stream-output            # 删除单个后端依赖
 aibackend update                            # 从 Git 拉取项目更新（手动）
 aibackend webui                             # 后台启动 Web 管理界面（不占终端）
 aibackend webui-stop                        # 停止后台 WebUI
+aibackend webui-port 9000                   # 查看/修改 WebUI 端口（修改后自动重启）
 aibackend service-install                   # [Linux] 注册 systemd 服务（开机自启 + 自动拉起）
 aibackend service-uninstall                 # [Linux] 停止并移除 systemd 服务
 ```

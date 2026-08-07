@@ -21,6 +21,7 @@
   aibackend update                     从 Git 拉取项目更新
   aibackend webui                      后台启动 Web 管理界面（不占终端）
   aibackend webui-stop                 停止后台 WebUI
+  aibackend webui-port [端口|reset]    查看/修改 WebUI 端口（修改后自动重启）
   aibackend service-install            [Linux] 注册 systemd 服务（开机自启 + 自动拉起）
   aibackend service-uninstall          [Linux] 停止并移除 systemd 服务
 
@@ -37,6 +38,7 @@ from datetime import datetime
 from launcher import (
     ROOT_DIR,
     Supervisor,
+    configure_webui_port,
     deps_ready,
     discover_backends,
     effective_port,
@@ -65,6 +67,7 @@ COMMANDS = [
     ("update", "从 Git 拉取项目更新"),
     ("webui", "后台启动 Web 管理界面（不占终端）"),
     ("webui-stop", "停止后台 WebUI"),
+    ("webui-port", "查看/修改 WebUI 端口（修改后自动重启 WebUI）"),
     ("service-install", "[Linux] 注册 systemd 服务：开机自启 + 自动拉起 WebUI"),
     ("service-uninstall", "[Linux] 停止并移除 systemd 服务"),
 ]
@@ -374,6 +377,20 @@ def cmd_webui_stop(args):
     stop_webui()
 
 
+def cmd_webui_port(args):
+    try:
+        port = configure_webui_port(args.value)
+    except ValueError as e:
+        print(str(e))
+        sys.exit(1)
+    if args.value is None:
+        print(f"WebUI 端口: {port}（默认 8910）")
+    elif args.value == "reset":
+        print("WebUI 端口已恢复默认 8910")
+    else:
+        print(f"WebUI 端口已设为 {port}")
+
+
 def cmd_service_install(args):
     install_webui_service()
 
@@ -428,9 +445,11 @@ def build_parser():
 
     webui_p = sub.add_parser("webui", help="启动 Web 管理界面")
     webui_p.add_argument("--host", default="127.0.0.1")
-    webui_p.add_argument("--port", type=int, default=8910)
+    webui_p.add_argument("--port", type=int, default=None)
     webui_p.add_argument("--no-browser", action="store_true")
     sub.add_parser("webui-stop", help="停止后台 WebUI")
+    webui_port_p = sub.add_parser("webui-port", help="查看/修改 WebUI 端口（修改后自动重启 WebUI）")
+    webui_port_p.add_argument("value", nargs="?", help="新端口 1-65535，或 reset 恢复默认 8910")
     sub.add_parser("service-install", help="[Linux] 注册 systemd 服务：开机自启 + 自动拉起 WebUI")
     sub.add_parser("service-uninstall", help="[Linux] 停止并移除 systemd 服务")
 
@@ -471,6 +490,8 @@ def main(argv=None):
         cmd_webui(args)
     elif args.command == "webui-stop":
         cmd_webui_stop(args)
+    elif args.command == "webui-port":
+        cmd_webui_port(args)
     elif args.command == "service-install":
         cmd_service_install(args)
     elif args.command == "service-uninstall":
