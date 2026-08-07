@@ -34,7 +34,11 @@ def main():
 def install_windows(target):
     cmd_file = BIN_DIR / "aibackend.cmd"
     cmd_file.write_text(
-        f'@echo off\r\n"{sys.executable}" "{target}" %*\r\n',
+        # 利用 cmd 怪癖：goto 到不存在的标签会让批处理立即结束，
+        # 剩余命令在"命令行上下文"执行，Ctrl+C 时不再弹"终止批处理操作吗(Y/N)?"
+        '@echo off\r\n'
+        '@goto #_undefined_# 2>NUL || @title %COMSPEC% & '
+        f'"{sys.executable}" "{target}" %*\r\n',
         encoding="utf-8",
     )
     add_to_user_path_windows(str(BIN_DIR))
