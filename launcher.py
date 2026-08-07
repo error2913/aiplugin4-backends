@@ -847,6 +847,13 @@ def uninstall_webui_service() -> None:
     print("[launcher] 已移除 systemd 服务 aiplugin4-webui")
 
 
+def _no_window_kwargs() -> dict:
+    """Windows 下无控制台进程（WebUI/后台）跑子进程时不弹黑框"""
+    if os.name == "nt":
+        return {"creationflags": subprocess.CREATE_NO_WINDOW}
+    return {}
+
+
 def _git_head() -> str:
     try:
         out = subprocess.run(
@@ -857,6 +864,7 @@ def _git_head() -> str:
             encoding="utf-8",
             errors="replace",
             timeout=30,
+            **_no_window_kwargs(),
         )
         return (out.stdout or "").strip()
     except Exception:  # noqa: BLE001
@@ -882,9 +890,6 @@ def update_project(timeout: int = 120) -> dict:
     """git pull 更新项目（手动触发）；返回 {"updated": bool, "changelog": str, "output": str}；失败抛异常"""
     old_head = _git_head()
     try:
-        kwargs = {}
-        if os.name == "nt":
-            kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW  # 后台更新，不弹控制台黑框
         proc = subprocess.run(
             ["git", "pull", "--ff-only"],
             cwd=ROOT_DIR,
@@ -893,7 +898,7 @@ def update_project(timeout: int = 120) -> dict:
             encoding="utf-8",
             errors="replace",
             timeout=timeout,
-            **kwargs,
+            **_no_window_kwargs(),
         )
     except FileNotFoundError:
         raise RuntimeError("未找到 git 命令，请先安装 Git")
@@ -919,6 +924,7 @@ def _update_changelog(old_head: str, new_head: str) -> str:
             encoding="utf-8",
             errors="replace",
             timeout=30,
+            **_no_window_kwargs(),
         ).stdout
         old_versions = set(_changelog_versions(old_text))
         new_file = os.path.join(ROOT_DIR, "CHANGELOG.md")
@@ -952,6 +958,7 @@ def _update_changelog(old_head: str, new_head: str) -> str:
         encoding="utf-8",
         errors="replace",
         timeout=30,
+        **_no_window_kwargs(),
     ).stdout.strip()
     return log or "已拉取更新"
 
