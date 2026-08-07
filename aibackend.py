@@ -346,11 +346,15 @@ def cmd_del_deps(args, supervisor):
 
 def cmd_update(args):
     try:
-        output = update_project()
+        res = update_project()
     except Exception as e:  # noqa: BLE001
         print(f"更新失败：{e}")
         sys.exit(1)
-    print(output)
+    if not res["updated"]:
+        print("没有可以更新的")
+        return
+    print("更新完成：")
+    print(res["changelog"] or res["output"] or "已拉取更新")
     print("提示：若更新了 launcher/webui，请重启对应进程后生效")
 
 

@@ -23,9 +23,29 @@ jobs:
       - name: Package backends
         run: python3 launcher.py package
 
+      - name: Extract changelog for release
+        id: changelog
+        shell: bash
+        run: |
+          python3 - "${GITHUB_REF_NAME#v}" <<'PY'
+          import re, sys
+          version = sys.argv[1]
+          try:
+              text = open("CHANGELOG.md", encoding="utf-8").read()
+          except OSError:
+              text = ""
+          m = re.search(rf"^##\s+{re.escape(version)}\b(.*?)(?=^##\s|\Z)", text, re.S | re.M)
+          body = (m.group(1).strip() if m else "") or f"未找到 {version} 的更新日志（请检查 CHANGELOG.md）"
+          lines = body.splitlines()
+          if lines and lines[0].lstrip().startswith("-"):
+              body = "\n".join(lines[1:]).strip()
+          open(".release_body.md", "w", encoding="utf-8").write(body)
+          PY
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
+          body_path: .release_body.md
           files: |
             dist/*.zip
             dist/*.tar.gz

@@ -602,8 +602,40 @@ def stop_webui() -> bool:
     return stopped
 
 
-def update_project(timeout: int = 120) -> str:
-    """git pull 自动更新项目，返回输出；失败抛异常"""
+def _git_head() -> str:
+    try:
+        out = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=ROOT_DIR,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=30,
+        )
+        return (out.stdout or "").strip()
+    except Exception:  # noqa: BLE001
+        return ""
+
+
+def _changelog_versions(text: str) -> dict:
+    """解析 CHANGELOG.md，返回 {版本号: 段落内容}，跳过 Unreleased"""
+    result = {}
+    for m in re.finditer(r"^##\s+([0-9]+(?:\.[0-9]+)*)(.*?)(?=^##\s|\Z)", text or "", re.S | re.M):
+        result[m.group(1)] = m.group(2).strip()
+    return result
+
+
+def _version_key(version: str) -> tuple:
+    try:
+        return tuple(int(x) for x in version.split("."))
+    except ValueError:
+        return (0,)
+
+
+def update_project(timeout: int = 120) -> dict:
+    """git pull 更新项目（手动触发）；返回 {"updated": bool, "changelog": str, "output": str}；失败抛异常"""
+    old_head = _git_head()
     try:
         kwargs = {}
         if os.name == "nt":
@@ -625,7 +657,58 @@ def update_project(timeout: int = 120) -> str:
     output = ((proc.stdout or "") + (proc.stderr or "")).strip()
     if proc.returncode != 0:
         raise RuntimeError(f"git pull 失败（exit {proc.returncode}）:\n{output}")
-    return output or "已是最新"
+    new_head = _git_head()
+    if not new_head or new_head == old_head:
+        return {"updated": False, "changelog": "", "output": output or "Already up to date."}
+    return {"updated": True, "changelog": _update_changelog(old_head, new_head), "output": output}
+
+
+def _update_changelog(old_head: str, new_head: str) -> str:
+    """有新提交时，收集 CHANGELOG.md 中新增且高于当前 VERSION 的版本段落；没有则退回 git log"""
+    try:
+        old_text = subprocess.run(
+            ["git", "show", f"{old_head}:CHANGELOG.md"],
+            cwd=ROOT_DIR,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=30,
+        ).stdout
+        old_versions = set(_changelog_versions(old_text))
+        new_file = os.path.join(ROOT_DIR, "CHANGELOG.md")
+        try:
+            with open(new_file, encoding="utf-8") as f:
+                new_text = f.read()
+        except OSError:
+            new_text = ""
+        current = _version_key(read_version())
+        sections = []
+        for version, body in _changelog_versions(new_text).items():
+            if version not in old_versions and _version_key(version) > current:
+                body_lines = body.splitlines()
+                date_part = ""
+                if body_lines and body_lines[0].lstrip().startswith("-"):
+                    date_part = body_lines[0].strip()[1:].strip()
+                    body = "\n".join(body_lines[1:]).strip()
+                head = f"## {version}" + (f" - {date_part}" if date_part else "")
+                section = head + (f"\n\n{body}" if body else "")
+                sections.append((_version_key(version), section))
+        if sections:
+            sections.sort(key=lambda item: item[0], reverse=True)
+            return "\n\n".join(body for _, body in sections)
+    except Exception:  # noqa: BLE001
+        pass
+    log = subprocess.run(
+        ["git", "log", "--oneline", "--no-decorate", f"{old_head}..{new_head}"],
+        cwd=ROOT_DIR,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        timeout=30,
+    ).stdout.strip()
+    return log or "已拉取更新"
 
 
 def _package_files():

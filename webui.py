@@ -393,7 +393,9 @@ async function updateNow(){
   try {
     const r = await fetch('/api/update', {method: 'POST'});
     const j = await r.json();
-    showAlert((j.ok ? '更新完成' : '更新失败') + '：\\n\\n' + (j.output || j.message || ''));
+    if (!j.ok){ showAlert('更新失败：\\n\\n' + (j.output || j.message || '')); return; }
+    if (!j.updated){ showAlert('没有可以更新的'); return; }
+    showAlert('更新完成：\\n\\n' + (j.changelog || j.output || '已拉取更新'));
   } catch(e){
     showAlert('更新失败：' + e.message);
   }
@@ -693,8 +695,14 @@ def run_webui(backends, config, supervisor: Supervisor, host: str = "127.0.0.1",
                     return
                 if path == "/api/update":
                     try:
-                        output = update_project()
-                        self._json({"ok": True, "message": "updated", "output": output})
+                        res = update_project()
+                        self._json({
+                            "ok": True,
+                            "message": "updated" if res["updated"] else "no-update",
+                            "updated": res["updated"],
+                            "changelog": res["changelog"],
+                            "output": res["output"],
+                        })
                     except Exception as e:  # noqa: BLE001
                         self._json({"ok": False, "message": str(e), "output": str(e)})
                     return

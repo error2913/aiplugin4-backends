@@ -1,0 +1,25 @@
+# 更新日志
+
+标题格式为 `## <版本号>`，release 工作流按标签版本号读取对应段落作为发布说明；日常更新以「Unreleased」汇总，发版前改成版本号并补日期。
+
+## Unreleased
+
+- WebUI 卡片新增「⚙ 配置」弹窗：可修改端口、访问 token 与监听 IP，一键随机生成 token；token 默认留空 = 不鉴权
+- 后端支持 token 鉴权（`Authorization: Bearer <token>` / `X-Token`）与自定义监听地址（`AIPLUGIN4_BACKEND_HOST`）
+- 点击更新：无可用更新时提示「没有可以更新的」，有更新时弹出本次更新日志
+- WebUI 已在后台运行时输出访问链接，Windows 自动打开浏览器
+- WebUI 点击更新后台执行 git pull，不再弹出控制台黑框
+- aibackend Windows 命令不再弹「终止批处理操作(Y/N)?」提示
+- launcher 直接运行即后台挂起 WebUI，不占用终端
+- WebUI 新增「⬆ 更新」「重启全部」按钮，aibackend 新增 update 命令
+- 新增 mcp-files-exec 后端：AI 读写文件与执行受限命令（沙箱 + 命令拦截）
+- 新增 aibackend 命令行：启停/日志/监控/依赖管理/更新，彩色 help
+- 打包仅保留在 release workflow，不再提供 package 命令
+
+## 0.0.9 - 2026-08-07
+
+- aiplugin4 配套后端管理：直接启动 WebUI，后端按需安装依赖
+- 后端启停/全部启停/重启全部/安装全部依赖/删除依赖/端口修改/运行日志
+- 卡片展示运行时长、自动拉起次数与内存占用，异常退出自动拉起
+- 使用 aiplugin4 插件包图标
+- release 自动打包 zip + tar.gz 并发布
