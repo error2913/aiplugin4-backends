@@ -9,6 +9,8 @@ aiplugin4 的配套后端服务：流式输出、图片转 base64、用量图表
 环境要求：Python 3.9+、Node.js 18+（仅 `web-read` / `md-html-render` 两个后端需要 Node）。
 
 ```bash
+git clone https://github.com/error2913/aiplugin4-backends.git
+cd aiplugin4-backends
 python launcher.py
 ```
 
