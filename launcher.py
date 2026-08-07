@@ -570,6 +570,9 @@ def stop_webui() -> bool:
 def update_project(timeout: int = 120) -> str:
     """git pull 自动更新项目，返回输出；失败抛异常"""
     try:
+        kwargs = {}
+        if os.name == "nt":
+            kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW  # 后台更新，不弹控制台黑框
         proc = subprocess.run(
             ["git", "pull", "--ff-only"],
             cwd=ROOT_DIR,
@@ -578,6 +581,7 @@ def update_project(timeout: int = 120) -> str:
             encoding="utf-8",
             errors="replace",
             timeout=timeout,
+            **kwargs,
         )
     except FileNotFoundError:
         raise RuntimeError("未找到 git 命令，请先安装 Git")
