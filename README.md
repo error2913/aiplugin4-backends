@@ -24,6 +24,17 @@ python launcher.py
 
 > 提示：Puppeteer 需要下载 Chromium。下载慢或失败（如国内网络）时，可设置镜像 `PUPPETEER_DOWNLOAD_BASE_URL`（例如 `https://registry.npmmirror.com/-/binary/chrome-for-testing`）后重试。
 
+## 跨平台
+
+Windows 与 Linux 均支持，同一套代码无需改动：
+
+- 依赖按平台处理：Python 后端用独立 venv（Windows 取 `.venv\Scripts\python.exe`，Linux 取 `.venv/bin/python`），Node 后端 Windows 下自动走 `npm.cmd`
+- 后台守护：Windows 用 `DETACHED_PROCESS`（不弹控制台黑框），Linux 用 `start_new_session`
+- 内存读取：Windows 走系统 API，Linux 读 `/proc`；运行时长/自动拉起次数两平台一致
+- 安装 `aibackend` 命令：Windows 生成 `aibackend.cmd`，Linux 生成 shell 脚本并写入 shell 配置（`.bashrc` / `.zshrc` / `.profile`）
+
+Linux 注意：Puppeteer 需要 Chromium 系统依赖，若启动 `web-read` / `md-html-render` 报缺失库，先安装（如 Debian/Ubuntu 的 `libnss3`、`libatk-1.0-0`、`libx11-xcb1` 等）。
+
 ## 后端列表
 
 | 目录 | 服务 | 默认端口 | 类型 |

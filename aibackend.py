@@ -57,6 +57,23 @@ COMMANDS = [
     ("webui", "启动 Web 管理界面"),
 ]
 
+
+def _enable_vt():
+    """Windows 旧版控制台（非 Windows Terminal）默认不解析 ANSI 颜色，这里显式开启 VT 支持"""
+    if os.name == "nt" and sys.stdout.isatty():
+        try:
+            import ctypes
+
+            kernel32 = ctypes.windll.kernel32
+            handle = kernel32.GetStdHandle(-11)  # STD_OUTPUT_HANDLE
+            mode = ctypes.c_uint32()
+            if kernel32.GetConsoleMode(handle, ctypes.byref(mode)):
+                kernel32.SetConsoleMode(handle, mode.value | 0x0004)
+        except Exception:  # noqa: BLE001
+            pass
+
+
+_enable_vt()
 _USE_COLOR = sys.stdout.isatty()
 GREEN = "\x1b[32m" if _USE_COLOR else ""
 CYAN = "\x1b[36m" if _USE_COLOR else ""
