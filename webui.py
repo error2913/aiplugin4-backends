@@ -30,6 +30,7 @@ from launcher import (
     process_memory,
     remove_backend_deps,
     save_runtime,
+    update_project,
 )
 
 PAGE = """<!DOCTYPE html>
@@ -177,6 +178,7 @@ PAGE = """<!DOCTYPE html>
     </div>
     <div class="header-right">
       <button id="themeBtn" onclick="cycleTheme()">主题</button>
+      <button onclick="updateNow()">⬆ 更新</button>
       <button onclick="refresh()">⟳ 刷新</button>
     </div>
   </header>
@@ -188,6 +190,7 @@ PAGE = """<!DOCTYPE html>
     <div class="bar-left">
       <button class="primary" onclick="allAct('start')">▶ 启动全部</button>
       <button class="danger" onclick="allAct('stop')">■ 停止全部</button>
+      <button onclick="allAct('restart')">🔄 重启全部</button>
     </div>
     <div class="bar-right" id="installAllArea"></div>
   </div>
@@ -346,12 +349,21 @@ async function pollInstall(name){
 async function run(name, act){ await api('/api/' + act + '/' + name, 'POST'); toast(act==='start' ? '已启动：' + name : '已停止：' + name); refresh(); }
 async function allAct(act){
   const j = await api('/api/' + act + '-all', 'POST');
-  if (act === 'start' && j.started && j.started.length === 0 && j.skipped && j.skipped.length){
+  if ((act === 'start' || act === 'restart') && j.started && j.started.length === 0 && j.skipped && j.skipped.length){
     showAlert('后端依赖均未安装，已全部跳过。\\n可先点右上角「安装全部依赖」，装完后再启动。');
   } else {
-    toast('已' + (act==='start'?'启动':'停止') + '全部');
+    toast(act==='start' ? '已启动全部' : act==='restart' ? '已重启全部' : '已停止全部');
   }
   refresh();
+}
+async function updateNow(){
+  try {
+    const r = await fetch('/api/update', {method: 'POST'});
+    const j = await r.json();
+    showAlert((j.ok ? '更新完成' : '更新失败') + '：\\n\\n' + (j.output || j.message || ''));
+  } catch(e){
+    showAlert('更新失败：' + e.message);
+  }
 }
 function showAlert(msg){
   document.getElementById('alertBody').textContent = msg;
@@ -593,9 +605,33 @@ def run_webui(backends, config, supervisor: Supervisor, host: str = "127.0.0.1",
                         "skipped": skipped,
                     })
                     return
+                if path == "/api/restart-all":
+                    supervisor.stop(backends)
+                    time.sleep(0.5)
+                    targets = [b for b in backends if deps_ready(b)]
+                    skipped = [b.name for b in backends if not deps_ready(b)]
+                    for name in targets:
+                        if name in supervisor.state.setdefault("stopped", []):
+                            supervisor.state["stopped"].remove(name)
+                    supervisor._save_state()
+                    supervisor.start(targets)
+                    self._json({
+                        "ok": True,
+                        "message": "restarted",
+                        "started": [b.name for b in targets],
+                        "skipped": skipped,
+                    })
+                    return
                 if path == "/api/stop-all":
                     supervisor.stop(backends)
                     self._json({"ok": True, "message": "stopped"})
+                    return
+                if path == "/api/update":
+                    try:
+                        output = update_project()
+                        self._json({"ok": True, "message": "updated", "output": output})
+                    except Exception as e:  # noqa: BLE001
+                        self._json({"ok": False, "message": str(e), "output": str(e)})
                     return
                 if path.startswith("/api/port/"):
                     rest = path[len("/api/port/"):]

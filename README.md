@@ -17,6 +17,8 @@ python launcher.py
 - 首次启动某后端时，按钮显示「安装依赖」：点击后创建独立 venv / 执行 `npm install`，弹窗实时显示日志、按钮转圈，装完恢复为「启动」；之后再次启动不再安装，秒开
 - 有后端依赖未安装时，右上角出现「安装全部依赖」，可一键补齐
 - 「启动全部」只启动依赖已就绪的后端；若全部依赖未安装会弹出提示
+- 「重启全部」先停止全部，再启动依赖已就绪的后端
+- 右上角「⬆ 更新」从 Git 拉取项目更新（手动，非自动）
 - 卡片显示运行时长、自动拉起次数与内存占用；「日志」旁可点「删除依赖」恢复未安装状态
 - 后端进程异常退出会自动拉起
 
@@ -80,6 +82,7 @@ aibackend info stream-output                # 进程详情（pid/时长/内存/�
 aibackend monitor                           # 实时监控面板
 aibackend setup --all                       # 安装全部后端依赖
 aibackend del-deps stream-output            # 删除单个后端依赖
+aibackend update                            # 从 Git 拉取项目更新（手动）
 aibackend webui                             # 启动 Web 管理界面
 ```
 

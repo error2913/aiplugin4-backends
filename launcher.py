@@ -492,6 +492,28 @@ def launch_webui(backends, config, supervisor, host: str = "127.0.0.1", port: in
     run_webui(backends, config, supervisor, host=host, port=port, open_browser=open_browser)
 
 
+def update_project(timeout: int = 120) -> str:
+    """git pull 自动更新项目，返回输出；失败抛异常"""
+    try:
+        proc = subprocess.run(
+            ["git", "pull", "--ff-only"],
+            cwd=ROOT_DIR,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=timeout,
+        )
+    except FileNotFoundError:
+        raise RuntimeError("未找到 git 命令，请先安装 Git")
+    except subprocess.TimeoutExpired:
+        raise RuntimeError(f"git pull 超时（>{timeout}s）")
+    output = ((proc.stdout or "") + (proc.stderr or "")).strip()
+    if proc.returncode != 0:
+        raise RuntimeError(f"git pull 失败（exit {proc.returncode}）:\n{output}")
+    return output or "已是最新"
+
+
 def _package_files():
     """遍历要打包的文件，返回 (绝对路径, 包内相对路径) 列表"""
     for root, dirs, files in os.walk(BACKENDS_DIR):

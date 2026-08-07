@@ -18,6 +18,7 @@
   aibackend monitor                    实时监控面板
   aibackend setup --all                安装全部后端依赖
   aibackend del-deps stream-output     删除单个后端依赖
+  aibackend update                     从 Git 拉取项目更新
   aibackend webui                      启动 Web 管理界面
 
 命令行与 WebUI 共用同一套后端进程与状态（logs/state.json）。
@@ -41,6 +42,7 @@ from launcher import (
     process_memory,
     remove_backend_deps,
     setup_backend,
+    update_project,
 )
 
 COMMANDS = [
@@ -54,6 +56,7 @@ COMMANDS = [
     ("monitor", "实时监控面板"),
     ("setup", "安装后端依赖"),
     ("del-deps", "删除后端依赖"),
+    ("update", "从 Git 拉取项目更新"),
     ("webui", "启动 Web 管理界面"),
 ]
 
@@ -338,6 +341,16 @@ def cmd_del_deps(args, supervisor):
     print("依赖已删除")
 
 
+def cmd_update(args):
+    try:
+        output = update_project()
+    except Exception as e:  # noqa: BLE001
+        print(f"更新失败：{e}")
+        sys.exit(1)
+    print(output)
+    print("提示：若更新了 launcher/webui，请重启对应进程后生效")
+
+
 def cmd_webui(args):
     config = load_config()
     supervisor = Supervisor(config)
@@ -393,6 +406,8 @@ def build_parser():
     del_p.add_argument("names", nargs="*")
     del_p.add_argument("--all", action="store_true")
 
+    sub.add_parser("update", help="从 Git 拉取项目更新")
+
     webui_p = sub.add_parser("webui", help="启动 Web 管理界面")
     webui_p.add_argument("--host", default="127.0.0.1")
     webui_p.add_argument("--port", type=int, default=8910)
@@ -429,6 +444,8 @@ def main(argv=None):
         cmd_setup(args)
     elif args.command == "del-deps":
         cmd_del_deps(args, supervisor)
+    elif args.command == "update":
+        cmd_update(args)
     elif args.command == "webui":
         cmd_webui(args)
     else:
