@@ -48,7 +48,7 @@ aibackend help                         # 查看所有命令
 `ensure_webui_deps()`（无 webui-requirements.txt 时为空操作）→ `start_webui_background()`：检测 pid 文件避免重复启动；detach 子进程（Windows `DETACHED_PROCESS | CREATE_NO_WINDOW`，Linux `start_new_session`）；Windows 已运行时打印访问链接并自动开浏览器。
 
 ### 后端启动（`Supervisor.spawn`）
-按需安装依赖（首次）→ 注入环境变量 `AIPLUGIN4_BACKEND_PORT / _HOST / _TOKEN`（值来自 `.runtime.json`）→ 子进程日志重定向到 `logs/<name>.log`，`CREATE_NO_WINDOW`。`_monitor` 线程负责异常退出后按退避时间自动拉起；手动停止写入 `stopped` 标记则不再拉起。
+按需安装依赖（首次）→ Linux 下 node 后端自动检测/补齐 Puppeteer Chromium 系统库（`ldd` 找 missing，Debian/Ubuntu 用 `apt-get` 自动装，映射见 `_PUPPETEER_LIB_PACKAGES`）→ 注入环境变量 `AIPLUGIN4_BACKEND_PORT / _HOST / _TOKEN`（值来自 `.runtime.json`）→ 子进程日志重定向到 `logs/<name>.log`，`CREATE_NO_WINDOW`。`_monitor` 线程负责异常退出后按退避时间自动拉起；手动停止写入 `stopped` 标记则不再拉起。
 
 ### 后端 token/监听 IP
 后端读取 `AIPLUGIN4_BACKEND_HOST`（默认 `0.0.0.0`）与 `AIPLUGIN4_BACKEND_TOKEN`（默认空）。token 非空时校验请求头 `Authorization: Bearer <token>` 或 `X-Token: <token>`，否则 401。六个后端均已实现（Flask/FastAPI 中间件、express 中间件、mcp-files-exec 的 ASGI 包装）。

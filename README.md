@@ -46,7 +46,7 @@ Windows 与 Linux 均支持，同一套代码无需改动：
 - 内存读取：Windows 走系统 API，Linux 读 `/proc`；运行时长/自动拉起次数两平台一致
 - 安装 `aibackend` 命令：Windows 生成 `aibackend.cmd`，Linux 生成 shell 脚本并写入 shell 配置（`.bashrc` / `.zshrc` / `.profile`）
 
-Linux 注意：Puppeteer 需要 Chromium 系统依赖，若启动 `web-read` / `md-html-render` 报缺失库，先安装（如 Debian/Ubuntu 的 `libnss3`、`libatk-1.0-0`、`libx11-xcb1` 等）。
+Linux 注意：Puppeteer 需要 Chromium 系统依赖。启动 `web-read` / `md-html-render` 时会自动用 `ldd` 检测缺失的共享库，并在 Debian/Ubuntu 下自动 `apt-get install` 补齐（需 root/sudo）；非 apt 发行版或自动安装失败时，按日志提示手动安装（如 `libnss3`、`libatk-1.0-0`、`libx11-xcb1` 等）。
 
 ## Linux 系统服务
 

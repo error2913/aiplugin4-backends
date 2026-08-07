@@ -298,7 +298,124 @@ def ensure_environment(backend: Backend) -> list:
     """一键启动：确保依赖就绪，返回启动命令前缀（python 用 venv 内解释器）"""
     if backend.type == "python":
         return [ensure_venv(backend)]
-    return [ensure_node(backend)]
+    prefix = [ensure_node(backend)]
+    ensure_chromium_libs(backend)  # Linux 下 node 后端自动检测/补齐 Chromium 系统库
+    return prefix
+
+
+# Puppeteer/Chromium 在 Linux 上需要的共享库 -> Debian/Ubuntu apt 包名（ldd 前缀匹配）
+_PUPPETEER_LIB_PACKAGES = {
+    "libnss3.so": "libnss3",
+    "libnssckbi.so": "libnss3",
+    "libatk-1.0.so": "libatk1.0-0",
+    "libatk-bridge-2.0.so": "libatk-bridge2.0-0",
+    "libatspi.so": "libatspi2.0-0",
+    "libcups.so": "libcups2",
+    "libdrm.so": "libdrm2",
+    "libxkbcommon.so": "libxkbcommon0",
+    "libxkbcommon-x11.so": "libxkbcommon-x11-0",
+    "libxcomposite.so": "libxcomposite1",
+    "libxdamage.so": "libxdamage1",
+    "libxfixes.so": "libxfixes3",
+    "libxrandr.so": "libxrandr2",
+    "libxrender.so": "libxrender1",
+    "libxshmfence.so": "libxshmfence1",
+    "libgbm.so": "libgbm1",
+    "libpango-1.0.so": "libpango-1.0-0",
+    "libpangocairo-1.0.so": "libpango-1.0-0",
+    "libcairo.so": "libcairo2",
+    "libasound.so": "libasound2",
+    "libx11-xcb.so": "libx11-xcb1",
+    "libxcb.so": "libxcb1",
+    "libxext.so": "libxext6",
+    "libX11.so": "libx11-6",
+    "libXss.so": "libxss1",
+    "libgtk-3.so": "libgtk-3-0",
+    "libgdk-3.so": "libgtk-3-0",
+    "libgdk_pixbuf-2.0.so": "libgdk-pixbuf-2.0-0",
+    "libglib-2.0.so": "libglib2.0-0",
+    "libgobject-2.0.so": "libglib2.0-0",
+    "libfontconfig.so": "libfontconfig1",
+    "libfreetype.so": "libfreetype6",
+    "libexpat.so": "libexpat1",
+}
+
+
+def _node_uses_puppeteer(backend: Backend) -> bool:
+    """node 后端是否依赖 puppeteer（读 package.json）"""
+    try:
+        with open(os.path.join(backend.dir, "package.json"), encoding="utf-8") as f:
+            data = json.load(f)
+    except (OSError, ValueError):
+        return False
+    deps = {**(data.get("dependencies") or {}), **(data.get("devDependencies") or {})}
+    return "puppeteer" in deps
+
+
+def _chrome_executable(backend: Backend) -> str:
+    try:
+        out = subprocess.run(
+            ["node", "-e", "process.stdout.write(require('puppeteer').executablePath())"],
+            cwd=backend.dir,
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+        return (out.stdout or "").strip()
+    except Exception:  # noqa: BLE001
+        return ""
+
+
+def _missing_chromium_libs(chrome: str) -> list:
+    """ldd 检查 Chromium 缺少哪些共享库（'not found' 行）"""
+    try:
+        out = subprocess.run(["ldd", chrome], capture_output=True, text=True, timeout=60)
+    except Exception:  # noqa: BLE001
+        return []
+    missing = []
+    for line in (out.stdout or "").splitlines():
+        if "not found" in line:
+            name = line.split("=>")[0].strip()
+            if name:
+                missing.append(name)
+    return missing
+
+
+def _map_lib_package(soname: str) -> str:
+    """ldd soname 常带版本后缀（如 libX11.so.6），按前缀匹配 apt 包名"""
+    for key, pkg in _PUPPETEER_LIB_PACKAGES.items():
+        if soname.startswith(key):
+            return pkg
+    return ""
+
+
+def ensure_chromium_libs(backend: Backend) -> None:
+    """Linux 下检测并补齐 Puppeteer/Chromium 系统库（Debian/Ubuntu 用 apt 自动装）"""
+    if os.name != "posix" or backend.type != "node":
+        return
+    if not _node_uses_puppeteer(backend):
+        return
+    chrome = _chrome_executable(backend)
+    if not chrome or not os.path.isfile(chrome):
+        print(f"[launcher] {backend.name} 未找到 Chromium 可执行文件，跳过系统库检查")
+        return
+    missing = _missing_chromium_libs(chrome)
+    if not missing:
+        return
+    packages = sorted({pkg for k in missing if (pkg := _map_lib_package(k))})
+    unknown = [k for k in missing if not _map_lib_package(k)]
+    if not shutil.which("apt-get"):
+        print(f"[launcher] {backend.name} 缺少 Chromium 系统库: {', '.join(missing)}（当前非 apt 发行版，请手动安装对应包）")
+        return
+    if packages:
+        print(f"[launcher] {backend.name} 检测到缺少 Chromium 系统库，自动安装: {', '.join(packages)}")
+        if _sudo(["apt-get", "install", "-y"] + packages) != 0:
+            print("[launcher] apt-get install 失败，尝试先 apt-get update...")
+            _sudo(["apt-get", "update"])
+            if _sudo(["apt-get", "install", "-y"] + packages) != 0:
+                print(f"[launcher] 自动安装失败，请手动执行: sudo apt-get install -y {' '.join(packages)}", file=sys.stderr)
+    if unknown:
+        print(f"[launcher] {backend.name} 还缺少未收录的系统库: {', '.join(unknown)}，请手动安装对应包")
 
 
 class Supervisor:
