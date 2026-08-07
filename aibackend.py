@@ -22,6 +22,7 @@
   aibackend webui                      后台启动 Web 管理界面（不占终端）
   aibackend webui-stop                 停止后台 WebUI
   aibackend webui-port [端口|reset]    查看/修改 WebUI 端口（修改后自动重启）
+  aibackend uninstall                  卸载 aibackend 命令（删除命令与 PATH 配置）
   aibackend service-install            [Linux] 注册 systemd 服务（开机自启 + 自动拉起）
   aibackend service-uninstall          [Linux] 停止并移除 systemd 服务
 
@@ -68,6 +69,7 @@ COMMANDS = [
     ("webui", "后台启动 Web 管理界面（不占终端）"),
     ("webui-stop", "停止后台 WebUI"),
     ("webui-port", "查看/修改 WebUI 端口（修改后自动重启 WebUI）"),
+    ("uninstall", "卸载 aibackend 命令（删除命令与 PATH 配置）"),
     ("service-install", "[Linux] 注册 systemd 服务：开机自启 + 自动拉起 WebUI"),
     ("service-uninstall", "[Linux] 停止并移除 systemd 服务"),
 ]
@@ -399,6 +401,88 @@ def cmd_service_uninstall(args):
     uninstall_webui_service()
 
 
+def _remove_path_windows(bin_dir: str) -> bool:
+    """从用户 PATH（注册表）移除 bin_dir，返回是否改动"""
+    import winreg
+
+    key = winreg.OpenKey(
+        winreg.HKEY_CURRENT_USER,
+        "Environment",
+        0,
+        winreg.KEY_QUERY_VALUE | winreg.KEY_SET_VALUE,
+    )
+    try:
+        try:
+            current, _ = winreg.QueryValueEx(key, "Path")
+        except FileNotFoundError:
+            return False
+        items = [p for p in current.split(";") if p and p.lower() != bin_dir.lower()]
+        changed = len(items) != len([p for p in current.split(";") if p])
+        if changed:
+            winreg.SetValueEx(key, "Path", 0, winreg.REG_EXPAND_SZ, ";".join(items))
+    finally:
+        winreg.CloseKey(key)
+    if changed:
+        try:
+            import ctypes
+
+            ctypes.windll.user32.SendMessageTimeoutW(
+                0xFFFF, 0x1A, 0, "Environment", 0, 1000, None
+            )
+        except Exception:  # noqa: BLE001
+            pass
+    return changed
+
+
+def _remove_path_unix(bin_dir: str) -> bool:
+    """从 .bashrc / .zshrc / .profile 移除安装脚本写入的 PATH 行"""
+    changed = False
+    for name in (".bashrc", ".zshrc", ".profile"):
+        rc = os.path.join(os.path.expanduser("~"), name)
+        if not os.path.isfile(rc):
+            continue
+        try:
+            with open(rc, encoding="utf-8") as f:
+                lines = f.readlines()
+        except OSError:
+            continue
+        new_lines = [ln for ln in lines if not (bin_dir in ln and "PATH" in ln)]
+        if len(new_lines) != len(lines):
+            try:
+                with open(rc, "w", encoding="utf-8") as f:
+                    f.writelines(new_lines)
+                changed = True
+            except OSError:
+                pass
+    return changed
+
+
+def cmd_uninstall(args):
+    """卸载 aibackend 命令：删除命令文件并移除 PATH 配置"""
+    bin_dir = os.path.join(os.path.expanduser("~"), ".aibackend", "bin")
+    shim = os.path.join(bin_dir, "aibackend.cmd" if os.name == "nt" else "aibackend")
+    removed_file = False
+    try:
+        if os.path.isfile(shim):
+            os.remove(shim)
+            removed_file = True
+    except OSError as e:
+        print(f"删除命令失败: {e}")
+    try:
+        if os.path.isdir(bin_dir) and not os.listdir(bin_dir):
+            os.rmdir(bin_dir)
+    except OSError:
+        pass
+    if os.name == "nt":
+        removed_path = _remove_path_windows(bin_dir)
+    else:
+        removed_path = _remove_path_unix(bin_dir)
+    if removed_path:
+        print("已从 PATH 移除:", bin_dir)
+    print("已删除 aibackend 命令" if removed_file else "未找到 aibackend 命令（可能已卸载）")
+    print("卸载完成，重新打开终端后生效")
+
+
 def build_parser():
     parser = argparse.ArgumentParser(
         prog="aibackend",
@@ -450,6 +534,7 @@ def build_parser():
     sub.add_parser("webui-stop", help="停止后台 WebUI")
     webui_port_p = sub.add_parser("webui-port", help="查看/修改 WebUI 端口（修改后自动重启 WebUI）")
     webui_port_p.add_argument("value", nargs="?", help="新端口 1-65535，或 reset 恢复默认 8910")
+    sub.add_parser("uninstall", help="卸载 aibackend 命令（删除命令与 PATH 配置）")
     sub.add_parser("service-install", help="[Linux] 注册 systemd 服务：开机自启 + 自动拉起 WebUI")
     sub.add_parser("service-uninstall", help="[Linux] 停止并移除 systemd 服务")
 
@@ -492,6 +577,8 @@ def main(argv=None):
         cmd_webui_stop(args)
     elif args.command == "webui-port":
         cmd_webui_port(args)
+    elif args.command == "uninstall":
+        cmd_uninstall(args)
     elif args.command == "service-install":
         cmd_service_install(args)
     elif args.command == "service-uninstall":

@@ -167,6 +167,7 @@ aibackend update                            # 从 Git 拉取项目更新（手�
 aibackend webui                             # 后台启动 Web 管理界面（不占终端）
 aibackend webui-stop                        # 停止后台 WebUI
 aibackend webui-port 9000                   # 查看/修改 WebUI 端口（修改后自动重启）
+aibackend uninstall                         # 卸载 aibackend 命令（删除命令与 PATH 配置）
 aibackend service-install                   # [Linux] 注册 systemd 服务（开机自启 + 自动拉起）
 aibackend service-uninstall                 # [Linux] 停止并移除 systemd 服务
 ```
