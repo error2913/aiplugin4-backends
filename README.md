@@ -44,6 +44,7 @@ Linux 注意：Puppeteer 需要 Chromium 系统依赖，若启动 `web-read` / `
 | `usage-chart` | token 用量图表 | 3009 | Python |
 | `web-read` | 网页 URL 内容读取 | 46799 | Node |
 | `md-html-render` | Markdown/HTML 渲染为图片 | 37632 | Node |
+| `mcp-files-exec` | MCP：AI 读写文件与执行受限命令（沙箱 + 拦截） | 3910 | Python |
 
 ## 目录结构
 
@@ -83,3 +84,27 @@ aibackend webui                             # 启动 Web 管理界面
 ```
 
 命令行与 WebUI 共用同一套后端进程与状态（`logs/state.json`），可以混用。
+
+## MCP 文件与命令后端（mcp-files-exec）
+
+给 AI 提供 MCP 工具：读写文件、列目录、删除文件、执行受限命令。默认 `streamable-http` 传输（端口 3910），也可 `--stdio` 本地模式（供 MCP 客户端直接拉起）。
+
+工具：`read_file` / `list_dir` / `write_file` / `delete_file` / `run_command`。
+
+安全设计：
+
+- 路径沙箱：所有文件操作必须落在 `MCP_SANDBOX_ROOTS` 目录内（realpath 校验，防符号链接逃逸）
+- 命令拦截：默认按危险规则拦截（rm -rf 根目录、sudo、关机、格式化、管道下载执行、fork 炸弹等）；设置 `MCP_ALLOWED_COMMANDS` 后进入白名单模式，只放行指定前缀
+- 执行隔离：命令限定在沙箱工作目录内，超时强制终止进程树，输出截断
+- 审计日志：每次调用（含被拦截的命令）记录到 `logs/mcp-files-exec.log`
+
+环境变量：
+
+| 变量 | 说明 | 默认 |
+| --- | --- | --- |
+| `MCP_SANDBOX_ROOTS` | 允许的沙箱根目录，`os.pathsep` 分隔 | 进程当前目录 |
+| `MCP_ALLOWED_COMMANDS` | 命令白名单前缀，`os.pathsep` 分隔 | 未启用（危险规则拦截） |
+| `MCP_MAX_FILE_BYTES` | 单文件读写上限 | 1048576 |
+| `MCP_MAX_OUTPUT_BYTES` | 命令输出上限 | 1048576 |
+| `MCP_DEFAULT_TIMEOUT` | 命令默认超时（秒） | 30 |
+| `MCP_LOG_FILE` | 审计日志路径 | `logs/mcp-files-exec.log` |
