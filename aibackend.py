@@ -19,7 +19,8 @@
   aibackend setup --all                安装全部后端依赖
   aibackend del-deps stream-output     删除单个后端依赖
   aibackend update                     从 Git 拉取项目更新
-  aibackend webui                      启动 Web 管理界面
+  aibackend webui                      后台启动 Web 管理界面（不占终端）
+  aibackend webui-stop                 停止后台 WebUI
 
 命令行与 WebUI 共用同一套后端进程与状态（logs/state.json）。
 """
@@ -37,11 +38,12 @@ from launcher import (
     deps_ready,
     discover_backends,
     effective_port,
-    launch_webui,
     load_config,
     process_memory,
     remove_backend_deps,
     setup_backend,
+    start_webui_background,
+    stop_webui,
     update_project,
 )
 
@@ -57,7 +59,8 @@ COMMANDS = [
     ("setup", "安装后端依赖"),
     ("del-deps", "删除后端依赖"),
     ("update", "从 Git 拉取项目更新"),
-    ("webui", "启动 Web 管理界面"),
+    ("webui", "后台启动 Web 管理界面（不占终端）"),
+    ("webui-stop", "停止后台 WebUI"),
 ]
 
 
@@ -352,16 +355,11 @@ def cmd_update(args):
 
 
 def cmd_webui(args):
-    config = load_config()
-    supervisor = Supervisor(config)
-    launch_webui(
-        discover_backends(),
-        config,
-        supervisor,
-        host=args.host,
-        port=args.port,
-        open_browser=not args.no_browser,
-    )
+    start_webui_background(host=args.host, port=args.port, open_browser=not args.no_browser)
+
+
+def cmd_webui_stop(args):
+    stop_webui()
 
 
 def build_parser():
@@ -412,6 +410,7 @@ def build_parser():
     webui_p.add_argument("--host", default="127.0.0.1")
     webui_p.add_argument("--port", type=int, default=8910)
     webui_p.add_argument("--no-browser", action="store_true")
+    sub.add_parser("webui-stop", help="停止后台 WebUI")
 
     return parser
 
@@ -448,6 +447,8 @@ def main(argv=None):
         cmd_update(args)
     elif args.command == "webui":
         cmd_webui(args)
+    elif args.command == "webui-stop":
+        cmd_webui_stop(args)
     else:
         parser.print_help()
 

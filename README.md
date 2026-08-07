@@ -12,7 +12,7 @@ aiplugin4 的配套后端服务：流式输出、图片转 base64、用量图表
 python launcher.py
 ```
 
-直接运行 launcher 会自动检查/安装 WebUI 依赖并启动管理界面，随后自动打开 http://127.0.0.1:8910（仅本机）。所有管理都在页面里完成：
+直接运行 launcher 会自动检查/安装 WebUI 依赖并**在后台启动**管理界面（不占用终端、无控制台窗口），随后自动打开 http://127.0.0.1:8910（仅本机）。停止后台 WebUI：`python launcher.py webui-stop` 或 `aibackend webui-stop`。所有管理都在页面里完成：
 
 - 首次启动某后端时，按钮显示「安装依赖」：点击后创建独立 venv / 执行 `npm install`，弹窗实时显示日志、按钮转圈，装完恢复为「启动」；之后再次启动不再安装，秒开
 - 有后端依赖未安装时，右上角出现「安装全部依赖」，可一键补齐
@@ -83,7 +83,8 @@ aibackend monitor                           # 实时监控面板
 aibackend setup --all                       # 安装全部后端依赖
 aibackend del-deps stream-output            # 删除单个后端依赖
 aibackend update                            # 从 Git 拉取项目更新（手动）
-aibackend webui                             # 启动 Web 管理界面
+aibackend webui                             # 后台启动 Web 管理界面（不占终端）
+aibackend webui-stop                        # 停止后台 WebUI
 ```
 
 命令行与 WebUI 共用同一套后端进程与状态（`logs/state.json`），可以混用。

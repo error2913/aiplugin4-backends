@@ -19,6 +19,7 @@ import sys
 import tarfile
 import threading
 import time
+import webbrowser
 import zipfile
 from dataclasses import dataclass
 
@@ -28,6 +29,7 @@ CONFIG_FILE = os.path.join(BACKENDS_DIR, "launcher.json")
 MANIFEST_FILE = "backend.json"
 DEFAULT_LOG_DIR = "logs"
 RUNTIME_FILE = ".runtime.json"
+WEBUI_PID_FILE = os.path.join(ROOT_DIR, "logs", "webui.pid")
 VENV_DIR_NAME = ".venv"
 DEPS_MARKER = ".deps_ready"
 
@@ -492,6 +494,79 @@ def launch_webui(backends, config, supervisor, host: str = "127.0.0.1", port: in
     run_webui(backends, config, supervisor, host=host, port=port, open_browser=open_browser)
 
 
+def start_webui_background(host: str = "127.0.0.1", port: int = 8910, open_browser: bool = True) -> int:
+    """后台启动 WebUI（不占用终端、无控制台窗口），返回 pid；已在运行则返回现有 pid"""
+    log_dir = os.path.join(ROOT_DIR, "logs")
+    os.makedirs(log_dir, exist_ok=True)
+    if os.path.exists(WEBUI_PID_FILE):
+        try:
+            with open(WEBUI_PID_FILE, encoding="utf-8") as f:
+                old_pid = int(f.read().strip() or 0)
+            if old_pid and Supervisor._pid_alive(old_pid):
+                print(f"[launcher] WebUI 已在后台运行 (pid={old_pid})，无需重复启动")
+                return old_pid
+        except (OSError, ValueError):
+            pass
+    script = os.path.abspath(__file__)
+    cmd = [
+        sys.executable, script, "webui", "--no-browser",
+        "--host", str(host), "--port", str(port),
+    ]
+    log_file = open(os.path.join(log_dir, "webui.log"), "a", encoding="utf-8")
+    log_file.write(f"\n===== {time.strftime('%Y-%m-%d %H:%M:%S')} 启动 WebUI (port {port}) =====\n")
+    log_file.flush()
+    kwargs = {}
+    if os.name == "nt":
+        kwargs["creationflags"] = (
+            subprocess.CREATE_NEW_PROCESS_GROUP
+            | subprocess.DETACHED_PROCESS
+            | subprocess.CREATE_NO_WINDOW
+        )
+    else:
+        kwargs["start_new_session"] = True
+    proc = subprocess.Popen(
+        cmd,
+        cwd=ROOT_DIR,
+        stdin=subprocess.DEVNULL,
+        stdout=log_file,
+        stderr=subprocess.STDOUT,
+        **kwargs,
+    )
+    with open(WEBUI_PID_FILE, "w", encoding="utf-8") as f:
+        f.write(str(proc.pid))
+    print(f"[launcher] WebUI 已在后台启动: http://{host}:{port} (pid={proc.pid}, 日志=logs/webui.log)")
+    if open_browser:
+        threading.Timer(0.5, lambda: webbrowser.open(f"http://{host}:{port}")).start()
+    return proc.pid
+
+
+def stop_webui() -> bool:
+    """停止后台 WebUI，返回是否成功停止"""
+    if not os.path.exists(WEBUI_PID_FILE):
+        print("[launcher] WebUI 未在后台运行（无 pid 文件）")
+        return False
+    try:
+        with open(WEBUI_PID_FILE, encoding="utf-8") as f:
+            pid = int(f.read().strip() or 0)
+    except (OSError, ValueError):
+        pid = 0
+    stopped = False
+    if pid and Supervisor._pid_alive(pid):
+        try:
+            os.kill(pid, signal.SIGTERM)
+            stopped = True
+            print(f"[launcher] 已停止 WebUI (pid={pid})")
+        except OSError as e:
+            print(f"[launcher] 停止 WebUI 失败: {e}")
+    else:
+        print("[launcher] WebUI 进程已不存在")
+    try:
+        os.remove(WEBUI_PID_FILE)
+    except OSError:
+        pass
+    return stopped
+
+
 def update_project(timeout: int = 120) -> str:
     """git pull 自动更新项目，返回输出；失败抛异常"""
     try:
@@ -570,6 +645,7 @@ def main() -> None:
     webui_p.add_argument("--host", default="127.0.0.1", help="监听地址（默认 127.0.0.1，仅本机）")
     webui_p.add_argument("--port", type=int, default=8910, help="监听端口（默认 8910）")
     webui_p.add_argument("--no-browser", action="store_true", help="启动后不自动打开浏览器")
+    sub.add_parser("webui-stop", help="停止后台 WebUI")
     args = parser.parse_args()
 
     config = load_config()
@@ -577,8 +653,9 @@ def main() -> None:
     supervisor = Supervisor(config)
 
     if not args.command:
-        # 直接运行 launcher：自动安装 WebUI 依赖并启动管理界面
-        launch_webui(backends, config, supervisor)
+        # 直接运行 launcher：后台启动 WebUI（不占用终端），并自动打开浏览器
+        ensure_webui_deps()
+        start_webui_background()
         return
 
     by_name = {b.name: b for b in backends}
@@ -691,6 +768,10 @@ def main() -> None:
     if args.command == "webui":
         # 与直接运行 launcher 等价（子命令由 WebUI 内部调用）
         launch_webui(backends, config, supervisor, host=args.host, port=args.port, open_browser=not args.no_browser)
+        return
+
+    if args.command == "webui-stop":
+        stop_webui()
         return
 
     parser.error(f"未知命令: {args.command}")
