@@ -1143,10 +1143,28 @@ def ensure_cli_installed() -> None:
         print(f"[launcher] aibackend 自动安装失败（可手动执行 python install_cli.py）: {e}", file=sys.stderr)
 
 
+def _auto_close_console() -> None:
+    """Windows 双击运行：安装/启动完成后自动关闭独占的控制台窗口；在已有终端里运行则不动"""
+    if os.name != "nt":
+        return
+    try:
+        import ctypes
+
+        kernel32 = ctypes.windll.kernel32
+        # 控制台只有本进程时（count<=1）说明是双击打开的独立窗口；>1 说明运行在 cmd/终端里
+        count = kernel32.GetConsoleProcessList(ctypes.byref(ctypes.c_uint32()), 1)
+        if count <= 1:
+            print("[launcher] 安装完成，窗口即将自动关闭", flush=True)
+            time.sleep(2)
+            os._exit(0)
+    except Exception:  # noqa: BLE001
+        pass
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         prog="launcher",
-        description="错误后端（aiplugin4-backends）管理：直接运行本脚本启动 WebUI",
+        description="aiplugin4 后端管理：直接运行本脚本启动 WebUI",
     )
     sub = parser.add_subparsers(dest="command")
     sub.add_parser("list", help="列出后端与启用/运行状态")
@@ -1188,6 +1206,7 @@ def main() -> None:
         # 直接运行 launcher：后台启动 WebUI（不占用终端），并自动打开浏览器
         ensure_webui_deps()
         start_webui_background()
+        _auto_close_console()
         return
 
     by_name = {b.name: b for b in backends}

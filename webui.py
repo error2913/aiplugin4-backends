@@ -48,7 +48,7 @@ PAGE = """<!DOCTYPE html>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <link rel="icon" href="/icon-256.png" type="image/png">
-<title>错误后端管理</title>
+    <title>aiplugin4 后端管理</title>
 <style>
   :root {
     --bg: #eef1f6; --panel: #ffffff; --panel-2: #f4f6fa;
@@ -185,7 +185,7 @@ PAGE = """<!DOCTYPE html>
 <body>
 <div id="loginScreen" style="position:fixed; inset:0; background:var(--bg); display:flex; align-items:center; justify-content:center; z-index:100;">
   <div style="width:min(360px,92vw); background:var(--panel); border:1px solid var(--border); border-radius:14px; padding:28px; display:grid; gap:14px; text-align:center; box-shadow:0 12px 32px var(--shadow);">
-    <div style="font-size:20px; font-weight:700;">错误后端管理</div>
+    <div style="font-size:20px; font-weight:700;">aiplugin4 后端管理</div>
     <div style="color:var(--muted); font-size:13px;">请输入 WebUI token（登录后记住一年）</div>
     <input id="loginToken" type="password" spellcheck="false" autocomplete="off" placeholder="访问 token"
            style="width:100%; padding:10px 12px; border:1px solid var(--border); border-radius:9px; background:var(--panel-2); color:var(--text); font-size:14px; outline:none;"
@@ -196,9 +196,9 @@ PAGE = """<!DOCTYPE html>
 </div>
 <div class="wrap">
   <header>
-    <img class="logo" src="/icon-256.png" alt="错误后端">
+    <img class="logo" src="/icon-256.png" alt="aiplugin4">
     <div>
-      <h1>错误后端管理</h1>
+      <h1>aiplugin4 后端管理</h1>
       <div class="sub">launcher WebUI</div>
     </div>
     <div class="header-right">

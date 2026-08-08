@@ -313,7 +313,7 @@ def cmd_help(args, parser):
         parser.parse_args([args.topic, "--help"])
         return
     print()
-    print(f"  {GREEN}aibackend{RESET}  {BOLD}错误后端（aiplugin4-backends）{RESET} 的命令行管理工具")
+    print(f"  {GREEN}aibackend{RESET}  {BOLD}aiplugin4-backends{RESET} 的命令行管理工具")
     print(f"  {DIM}命令行与 WebUI 共用同一套后端进程与状态（logs/state.json）{RESET}")
     print()
     print(f"  {GREEN}用法:{RESET}")
@@ -520,7 +520,7 @@ def cmd_uninstall(args):
 def build_parser():
     parser = argparse.ArgumentParser(
         prog="aibackend",
-        description="错误后端（aiplugin4-backends）的命令行管理工具",
+        description="aiplugin4-backends 的命令行管理工具",
     )
     sub = parser.add_subparsers(dest="command")
     sub.add_parser("list", help="查看所有后端状态")
