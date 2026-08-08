@@ -23,7 +23,7 @@ aiplugin4 的配套后端服务：流式输出、图片转 base64、用量图表
 git clone https://github.com/error2913/aiplugin4-backends.git && cd aiplugin4-backends && python launcher.py
 ```
 
-首次运行即自动安装所需依赖、自动安装 `aibackend` 命令行并**在后台启动**管理界面（不占用终端、无控制台窗口）。WebUI 默认监听 `0.0.0.0`（全部网卡），端口与访问 token 首次运行随机生成并保持稳定，打开页面后输入 token 登录（记住一年）。自动开浏览器只在有图形环境时进行（Windows 直接开；Linux/macOS 需检测到 `DISPLAY` / `WAYLAND_DISPLAY` 且显式设置 `BROWSER`），无头服务器只打印访问地址。Windows 双击 `launcher.py` 时，安装/启动完成后窗口自动关闭（在已有终端里运行则保留终端）。停止后台 WebUI：`python launcher.py webui-stop` 或 `aibackend webui-stop`。所有管理都在页面里完成：
+首次运行即自动安装所需依赖、自动安装 `aibackend` 命令行并**在后台启动**管理界面（不占用终端、无控制台窗口，launcher 启动完成后立即退出）。WebUI 默认监听 `0.0.0.0`（全部网卡），端口与访问 token 首次运行随机生成并保持稳定，打开页面后输入 token 登录（记住一年）。自动开浏览器只在有图形环境时进行（Windows 直接开；Linux/macOS 需检测到 `DISPLAY` / `WAYLAND_DISPLAY` 且显式设置 `BROWSER`），无头服务器只打印访问地址。停止后台 WebUI：`python launcher.py webui-stop` 或 `aibackend webui-stop`。所有管理都在页面里完成：
 
 - 首次启动某后端时，按钮显示「安装依赖」：点击后创建独立 venv / 执行 `npm install`，弹窗实时显示日志、按钮转圈，装完恢复为「启动」；之后再次启动不再安装，秒开
 - 有后端依赖未安装时，右上角出现「安装全部依赖」，可一键补齐
