@@ -1,8 +1,0 @@
-{
-  "name": "ocr",
-  "description": "OCR 图片文字识别（tesseract.js，支持 URL / base64 / 本地路径）",
-  "type": "node",
-  "entry": "server.js",
-  "deps": "package.json",
-  "port": 18699
-}

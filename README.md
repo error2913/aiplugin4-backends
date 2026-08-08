@@ -70,7 +70,6 @@ python launcher.py service-uninstall    # 停止并移除服务
 | `web-read` | 网页 URL 内容读取 | 46799 | Node |
 | `md-html-render` | Markdown/HTML 渲染为图片 | 37632 | Node |
 | `mcp-files-exec` | MCP：AI 读写文件与执行受限命令（沙箱 + 拦截） | 3910 | Python |
-| `ocr` | OCR 图片文字识别（tesseract.js，支持 URL / base64 / 本地路径） | 18699 | Node |
 
 ## 后端介绍
 
@@ -127,17 +126,6 @@ AI 通过 MCP 协议读写文件、执行受限命令：路径沙箱（realpath 
 - Tools：`read_file`、`write_file`（支持追加）、`run_command`
 - 环境变量：`MCP_SANDBOX_ROOTS`（沙箱根目录）、`MCP_ALLOWED_COMMANDS`（命令白名单）、`MCP_MAX_FILE_BYTES` / `MCP_MAX_OUTPUT_BYTES`（读写/输出上限）、`MCP_DEFAULT_TIMEOUT`（命令超时）、`MCP_LOG_FILE`（审计日志）
 - 依赖：`mcp`、`uvicorn`
-
-### ocr — OCR 图片文字识别
-
-基于 tesseract.js 的图片文字识别，支持 URL、base64 与本地路径三种输入，可指定语言、识别模式与白名单字符，返回文本与置信度。
-
-- 默认端口 18699（Node / Express，与海豹插件默认配置一致）
-- 接口：
-  - `GET /health`：健康检查（含识别统计）
-  - `POST /api/ocr`：body `{url 或 imageUrl, base64?, mime?, lang?, psm?, whitelist?}`，返回 `{ok, text, confidence, ...}`
-- 首次识别自动下载对应语言的 tesseract 语言包（缓存在 `lang-data/` / `cache/`，已 gitignore）
-- 依赖：`express`、`tesseract.js`（Node 18+）
 
 > 所有后端统一支持：卡片「⚙ 配置」可改端口、token 与监听 IP；设置 token 后请求需带 `Authorization: Bearer <token>` 或 `X-Token: <token>`，监听 IP 默认 `0.0.0.0`。
 

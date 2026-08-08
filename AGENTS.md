@@ -30,7 +30,6 @@ aibackend help                         # 查看所有命令
 | `aibackend.py` | 命令行工具（复用 launcher 逻辑），彩色 help |
 | `install_cli.py` | 安装 `aibackend` 到 PATH（Windows `.aibackend\bin\aibackend.cmd` / Linux shell 脚本）；launcher 启动时自动调用 `install()` 幂等刷新 |
 | `backends/*/backend.json` | 后端清单：`name` / `type`(python\|node) / `entry` / `deps` / `port` / `description` |
-| `ocr/` | OCR 后端（tesseract.js，Node），支持 URL / base64 / 本地路径识别 |
 | `CHANGELOG.md` | 更新日志：`## <版本号>` 段落，release 与更新弹窗都从这里取 |
 | `VERSION` | 当前版本号（release 时由 tag 写入） |
 | `launcher.json` | 全局配置：`auto_restart`、`restart_backoff_seconds`、`log_dir` |

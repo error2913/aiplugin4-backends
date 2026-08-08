@@ -10,7 +10,6 @@
 - launcher 启动时自动安装/刷新 aibackend 命令行（幂等）
 - WebUI 自愈：监听配置不一致时自动重启，启动崩溃打印最近日志
 - Linux/macOS 自动开浏览器需有图形环境且显式设置 `BROWSER`（避免 SSH -X 误开）
-- 新增 ocr 后端：tesseract.js OCR，支持 URL / base64 / 本地路径识别
 
 ## 0.9.0 - 2026-08-07
 
