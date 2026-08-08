@@ -15,7 +15,7 @@ aiplugin4 的配套后端管理仓库：一个 launcher 管理若干 HTTP/MCP �
 ## 快速启动
 
 ```bash
-python launcher.py                     # 首次自动装依赖并后台启动 WebUI: http://127.0.0.1:8910
+python launcher.py                     # 自动装依赖 + 自动安装 aibackend，后台启动 WebUI（默认 0.0.0.0，端口与访问 token 首次随机生成）
 python launcher.py webui-stop          # 停止后台 WebUI
 python install_cli.py                  # 安装 aibackend 命令（Windows 生成 .cmd，Linux 写入 shell 配置）
 aibackend help                         # 查看所有命令
@@ -28,8 +28,9 @@ aibackend help                         # 查看所有命令
 | `launcher.py` | 核心入口：后端发现/启停/依赖安装/运行时配置/WebUI 启停/更新/打包/systemd 服务 |
 | `webui.py` | Web 管理界面：内嵌 HTML/CSS/JS（`PAGE` 常量）+ 标准库 HTTP 服务 |
 | `aibackend.py` | 命令行工具（复用 launcher 逻辑），彩色 help |
-| `install_cli.py` | 安装 `aibackend` 到 PATH（Windows `.aibackend\bin\aibackend.cmd` / Linux shell 脚本） |
+| `install_cli.py` | 安装 `aibackend` 到 PATH（Windows `.aibackend\bin\aibackend.cmd` / Linux shell 脚本）；launcher 启动时自动调用 `install()` 幂等刷新 |
 | `backends/*/backend.json` | 后端清单：`name` / `type`(python\|node) / `entry` / `deps` / `port` / `description` |
+| `ocr/` | OCR 后端（tesseract.js，Node），支持 URL / base64 / 本地路径识别 |
 | `CHANGELOG.md` | 更新日志：`## <版本号>` 段落，release 与更新弹窗都从这里取 |
 | `VERSION` | 当前版本号（release 时由 tag 写入） |
 | `launcher.json` | 全局配置：`auto_restart`、`restart_backoff_seconds`、`log_dir` |
@@ -37,15 +38,15 @@ aibackend help                         # 查看所有命令
 
 ## 数据与状态文件（logs/ 与根目录，均 gitignore）
 
-- `.runtime.json`：每后端运行时配置 `config/<name> = {port, token, host}`；`ports` 为旧版字段（读兼容、写同步）；`webui.port` 为 WebUI 管理界面端口（命令行 `launcher.py webui-port <端口|reset>` / `aibackend webui-port` 读写，修改后自动重启 WebUI）。读写统一走 `launcher.backend_config()` / `save_backend_config()` / `configure_webui_port()`。
+- `.runtime.json`：每后端运行时配置 `config/<name> = {port, token, host}`；`ports` 为旧版字段（读兼容、写同步）；`webui` 段含 `port`（首次随机生成五位数）/`host`（默认 `0.0.0.0`）/`token`（首次自动生成）。读写统一走 `launcher.backend_config()` / `save_backend_config()` / `configure_webui_port()` / `configure_webui_host()` / `configure_webui_token()`。
 - `logs/state.json`：Supervisor 进程状态（`pid`、`started_at`、`restarts`、`stopped` 标记）。
-- `logs/webui.pid`：后台 WebUI 进程号。
+- `logs/webui.pid`：后台 WebUI 进程号，格式 `pid host port`（自愈用）。
 - `logs/<backend>.log`：各后端日志；`logs/webui.log`：WebUI 日志。
 
 ## 关键流程
 
 ### 一键启动（`python launcher.py`）
-`ensure_webui_deps()`（无 webui-requirements.txt 时为空操作）→ `start_webui_background()`：检测 pid 文件避免重复启动；detach 子进程（Windows `DETACHED_PROCESS | CREATE_NO_WINDOW`，Linux `start_new_session`）；自动开浏览器统一走 `_can_open_browser()`——Windows 直接开，Linux/macOS 仅在有 `DISPLAY` / `WAYLAND_DISPLAY` 时开，无头服务器只打印访问地址（不调用 xdg-open）。
+`ensure_cli_installed()`（自动安装/刷新 aibackend，幂等）→ `ensure_webui_deps()`（无 webui-requirements.txt 时为空操作）→ `start_webui_background()`：检测 pid 文件避免重复启动，pid 里记录的 host/port 与当前配置不一致时自动重启（自愈），启动崩溃打印最近日志；detach 子进程（Windows `DETACHED_PROCESS | CREATE_NO_WINDOW`，Linux `start_new_session`）；WebUI 默认监听 `0.0.0.0`，端口与访问 token 首次运行随机生成；自动开浏览器统一走 `_can_open_browser()`——Windows 直接开，Linux/macOS 需有 `DISPLAY`/`WAYLAND_DISPLAY` **且**显式设置 `BROWSER`，无头服务器只打印访问地址（不调用 xdg-open）。
 
 ### 后端启动（`Supervisor.spawn`）
 按需安装依赖（首次）→ Linux 下 node 后端自动检测/补齐 Puppeteer Chromium 系统库（`ldd` 找 missing，Debian/Ubuntu 用 `apt-get` 自动装，映射见 `_PUPPETEER_LIB_PACKAGES`）→ 注入环境变量 `AIPLUGIN4_BACKEND_PORT / _HOST / _TOKEN`（值来自 `.runtime.json`）→ 子进程日志重定向到 `logs/<name>.log`，`CREATE_NO_WINDOW`。`_monitor` 线程负责异常退出后按退避时间自动拉起；手动停止写入 `stopped` 标记则不再拉起。
@@ -63,6 +64,8 @@ aibackend help                         # 查看所有命令
 Git tag `v*` 触发 `.github/workflows/release.yml`：tag 去掉 `v` 写进 VERSION → `launcher.py package` 生成 `dist/aiplugin4-backends-<version>.zip/.tar.gz` → 从 CHANGELOG.md 按版本号提取段落作为 release 描述。发版前记得把 CHANGELOG 的 `Unreleased` 改成版本号并补日期。
 
 ## WebUI API
+
+所有 API 均需 WebUI 访问 token（登录页输入，记住一年；请求带 `Authorization: Bearer <token>` 或 `X-Token: <token>`，否则 401）。token 由 `.runtime.json` 的 `webui.token` 提供，`launcher.py webui-token` / `aibackend webui-token` 可查看/修改/重新生成。
 
 - `GET /api/backends`：卡片数据（含 `port`/`host`/`token`/`running`/`uptime_secs`/`restarts`/`mem_*`/`deps_ready`）
 - `GET|POST /api/config/<name>`：查询/保存 {port, token, host}

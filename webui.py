@@ -1,14 +1,16 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-aiplugin4 后端 Web 管理界面（纯 Python 标准库，无第三方依赖）。
+aiplugin4 后端管理 Web 界面（纯 Python 标准库，无第三方依赖）。
 
 由 launcher.py 直接启动：
   python launcher.py
 
-（也可用 python launcher.py webui [--host 127.0.0.1] [--port 8910] [--no-browser] 调整参数）
+（也可用 python launcher.py webui [--host 0.0.0.0] [--port <端口>] [--no-browser] 调整参数）
 
-默认只监听 127.0.0.1（本机），无鉴权，请勿暴露到公网。
+默认监听 0.0.0.0（全部网卡），访问 token 首次运行自动生成（launcher webui-token 可改），
+端口首次运行随机生成五位数（launcher webui-port 可改），
+API 请求需带 Authorization: Bearer <token> 或 X-Token: <token>。
 """
 
 import json
@@ -22,16 +24,21 @@ from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from launcher import (
+    _can_open_browser,
     DEFAULT_LOG_DIR,
     Supervisor,
-    _can_open_browser,
     backend_config,
+    effective_webui_port,
     deps_ready,
+    effective_webui_host,
+    effective_webui_token,
     load_runtime,
     process_memory,
     remove_backend_deps,
+    reset_webui_token,
     save_backend_config,
     save_runtime,
+    save_webui_token,
     update_project,
 )
 
@@ -41,7 +48,7 @@ PAGE = """<!DOCTYPE html>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <link rel="icon" href="/icon-256.png" type="image/png">
-<title>aiplugin4 后端管理</title>
+<title>错误后端管理</title>
 <style>
   :root {
     --bg: #eef1f6; --panel: #ffffff; --panel-2: #f4f6fa;
@@ -109,6 +116,7 @@ PAGE = """<!DOCTYPE html>
   button.primary { background: var(--blue-bg); border-color: color-mix(in srgb, var(--blue) 45%, transparent); color: var(--blue); }
   button.danger { background: var(--red-bg); border-color: color-mix(in srgb, var(--red) 40%, transparent); color: var(--red); }
   .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(330px, 1fr)); gap: 14px; }
+  .empty { grid-column: 1 / -1; border: 1px dashed var(--border); border-radius: 14px; padding: 48px 20px; color: var(--muted); font-size: 13px; text-align: center; background: color-mix(in srgb, var(--panel) 55%, transparent); }
   .card {
     background: var(--panel); border: 1px solid var(--border); border-radius: 14px; padding: 16px;
     display: flex; flex-direction: column; align-items: center; text-align: center; gap: 12px; box-shadow: 0 1px 3px var(--shadow);
@@ -175,15 +183,27 @@ PAGE = """<!DOCTYPE html>
 </style>
 </head>
 <body>
+<div id="loginScreen" style="position:fixed; inset:0; background:var(--bg); display:flex; align-items:center; justify-content:center; z-index:100;">
+  <div style="width:min(360px,92vw); background:var(--panel); border:1px solid var(--border); border-radius:14px; padding:28px; display:grid; gap:14px; text-align:center; box-shadow:0 12px 32px var(--shadow);">
+    <div style="font-size:20px; font-weight:700;">错误后端管理</div>
+    <div style="color:var(--muted); font-size:13px;">请输入 WebUI token（登录后记住一年）</div>
+    <input id="loginToken" type="password" spellcheck="false" autocomplete="off" placeholder="访问 token"
+           style="width:100%; padding:10px 12px; border:1px solid var(--border); border-radius:9px; background:var(--panel-2); color:var(--text); font-size:14px; outline:none;"
+           onkeydown="if(event.key==='Enter')login()">
+    <button class="primary" onclick="login()" style="padding:10px 0; font-size:14px;">登录</button>
+    <div id="loginErr" style="color:var(--red); font-size:12px; min-height:16px;"></div>
+  </div>
+</div>
 <div class="wrap">
   <header>
-    <img class="logo" src="/icon-256.png" alt="aiplugin4">
+    <img class="logo" src="/icon-256.png" alt="错误后端">
     <div>
-      <h1>aiplugin4 后端管理</h1>
+      <h1>错误后端管理</h1>
       <div class="sub">launcher WebUI</div>
     </div>
     <div class="header-right">
       <button id="themeBtn" onclick="cycleTheme()">主题</button>
+      <button onclick="openToken()">🔑 Token</button>
       <button onclick="updateNow()">⬆ 更新</button>
       <button onclick="refresh()">⟳ 刷新</button>
     </div>
@@ -253,8 +273,34 @@ PAGE = """<!DOCTYPE html>
     </div>
   </div>
 </div>
+<div class="modal" id="tokenModal">
+  <div class="dialog" style="width:min(460px,92vw)">
+    <div class="dialog-head">
+      <b>WebUI Token</b>
+      <span class="spacer"></span>
+      <button class="close" onclick="closeToken()">✕</button>
+    </div>
+    <div style="padding:18px 22px; display:grid; gap:16px;">
+      <label class="cfg-label">服务器当前 Token（已生效）
+        <div class="cfg-row">
+          <input id="tokServer" class="port" type="text" readonly spellcheck="false" placeholder="加载中...">
+        </div>
+      </label>
+      <label class="cfg-label">新 Token（直接输入，保存后立即生效）
+        <div class="cfg-row">
+          <input id="tokNew" class="port" type="text" spellcheck="false" placeholder="输入新 token">
+          <button class="mini" onclick="genToken()" title="随机生成新 token">🎲 随机</button>
+        </div>
+      </label>
+    </div>
+    <div style="padding:12px 18px; text-align:right; border-top:1px solid var(--border); display:flex; gap:8px; justify-content:flex-end;">
+      <button onclick="closeToken()">取消</button>
+      <button class="primary" onclick="saveServerToken()">保存并生效</button>
+    </div>
+  </div>
+</div>
 <div id="toast"></div>
-<footer>aiplugin4 · launcher.py webui</footer>
+<footer>aiplugin4-backends · launcher.py webui</footer>
 <script>
 let current = null;
 let currentType = 'backend';
@@ -264,6 +310,8 @@ const deleting = new Set();
 let allInstalling = false;
 let allTargets = [];
 let allDone = 0;
+const TOKEN_TTL_MS = 365 * 24 * 60 * 60 * 1000;  // 登录后记住一年
+let loggedIn = false;
 function esc(s){ return (s||'').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
 function fmtUptime(s){
   if (s == null) return '—';
@@ -274,13 +322,84 @@ function fmtUptime(s){
   return sec + '秒';
 }
 function toast(msg, ms){ const t=document.getElementById('toast'); t.textContent=msg; t.style.display='block'; clearTimeout(t._h); t._h=setTimeout(()=>t.style.display='none', ms || 3000); }
+function getStoredToken(){
+  const t = localStorage.getItem('webui_token');
+  const exp = Number(localStorage.getItem('webui_token_exp') || 0);
+  if (t && exp && Date.now() > exp) {
+    localStorage.removeItem('webui_token');
+    localStorage.removeItem('webui_token_exp');
+    return '';
+  }
+  return t || '';
+}
+function setStoredToken(v){
+  if (v) {
+    localStorage.setItem('webui_token', v);
+    localStorage.setItem('webui_token_exp', String(Date.now() + TOKEN_TTL_MS));
+  } else {
+    localStorage.removeItem('webui_token');
+    localStorage.removeItem('webui_token_exp');
+  }
+}
 async function api(path, method, body){
+  const headers = {};
+  const t = getStoredToken();
+  if (t) headers['X-Token'] = t;
   try {
-    const r = await fetch(path, {method: method||'GET', body: body || undefined});
+    const r = await fetch(path, {method: method||'GET', headers: headers, body: body || undefined});
+    if (r.status === 401) {
+      loggedIn = false;
+      showLogin();
+      throw new Error('需要 WebUI token');
+    }
     const j = await r.json();
     if (!j.ok) throw new Error(j.message || ('HTTP ' + r.status));
     return j;
-  } catch(e){ toast('请求失败: ' + e.message); throw e; }
+  } catch(e){
+    if (!(e && e.message === '需要 WebUI token') && !document.getElementById('tokenModal').classList.contains('open')) toast('请求失败: ' + e.message);
+    throw e;
+  }
+}
+function showLogin(){ document.getElementById('loginScreen').style.display = 'flex'; }
+function hideLogin(){ document.getElementById('loginScreen').style.display = 'none'; }
+async function login(){
+  const v = document.getElementById('loginToken').value.trim();
+  const err = document.getElementById('loginErr');
+  if (!v) { err.textContent = '请输入 token'; return; }
+  setStoredToken(v);
+  try {
+    await refresh();
+    loggedIn = true;
+    hideLogin();
+    err.textContent = '';
+  } catch(e) {
+    setStoredToken('');
+    err.textContent = 'token 错误，请重试';
+  }
+}
+function openToken(){
+  document.getElementById('tokenModal').classList.add('open');
+  document.getElementById('tokNew').value = '';
+  api('/api/webui-token').then(j => {
+    document.getElementById('tokServer').value = j.token || '';
+  }).catch(() => {
+    document.getElementById('tokServer').value = '(无法读取，请重试)';
+  });
+}
+function closeToken(){ document.getElementById('tokenModal').classList.remove('open'); }
+function genToken(){
+  const bytes = new Uint8Array(24);
+  crypto.getRandomValues(bytes);
+  document.getElementById('tokNew').value = Array.from(bytes, b => b.toString(16).padStart(2, '0')).join('');
+}
+async function saveServerToken(){
+  const v = document.getElementById('tokNew').value.trim();
+  if (!v) { toast('请输入新 token，或点击 🎲 随机生成'); return; }
+  const j = await api('/api/webui-token', 'POST', JSON.stringify({ token: v }));
+  setStoredToken(j.token);
+  closeToken();
+  toast('WebUI token 已更新并立即生效');
+  refresh();
 }
 function applyTheme(){
   const t = localStorage.getItem('theme') || 'auto';
@@ -298,7 +417,7 @@ async function refresh(){
   const list = j.backends;
   document.getElementById('stTotal').textContent = list.length;
   document.getElementById('stRun').textContent = list.filter(b => b.running).length;
-  document.getElementById('grid').innerHTML = list.map(b => `
+  document.getElementById('grid').innerHTML = list.length ? list.map(b => `
     <div class="card ${b.running ? 'running' : ''}">
       <div class="row1">
         <span class="name">${esc(b.name)}</span>
@@ -331,7 +450,7 @@ async function refresh(){
             : `<button class="danger" onclick="delDeps('${b.name}')">删除依赖</button>`
           : ''}
       </div>
-    </div>`).join('');
+    </div>`).join('') : '<div class="empty">暂无已收录的后端 — 放入含 <code>backend.json</code> 的后端目录后会自动出现在这里</div>';
   renderInstallAll(list);
 }
 function renderInstallAll(list){
@@ -475,17 +594,25 @@ async function loadLog(){
   pre.textContent = j.log || '(暂无日志)';
   pre.scrollTop = pre.scrollHeight;
 }
-document.addEventListener('keydown', e => { if (e.key === 'Escape'){ closeLog(); closeAlert(); closeConfig(); } });
+document.addEventListener('keydown', e => { if (e.key === 'Escape'){ closeLog(); closeAlert(); closeConfig(); closeToken(); } });
 applyTheme();
-refresh();
-setInterval(refresh, 1000);
+setInterval(() => { if (loggedIn) refresh().catch(() => {}); }, 1000);
+(async () => {
+  if (getStoredToken()) {
+    try { await refresh(); loggedIn = true; hideLogin(); return; } catch(e){}
+  }
+  showLogin();
+})();
 </script>
 </body>
 </html>"""
 
 
-def run_webui(backends, config, supervisor: Supervisor, host: str = "127.0.0.1", port: int = 8910, open_browser: bool = True) -> None:
+def run_webui(backends, config, supervisor: Supervisor, host: str = None, port: int = None, open_browser: bool = True) -> None:
     """启动 Web 管理界面（阻塞，Ctrl+C 退出）"""
+    host = host or effective_webui_host()
+    port = int(port) if port else effective_webui_port()
+    token = effective_webui_token()
     log_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), config.get("log_dir", DEFAULT_LOG_DIR))
     by_name = {b.name: b for b in backends}
     setup_state = {}  # name -> {"lines": [...], "running": bool, "failed": bool}
@@ -547,6 +674,13 @@ def run_webui(backends, config, supervisor: Supervisor, host: str = "127.0.0.1",
         def log_message(self, fmt, *args):  # 关闭默认访问日志刷屏
             pass
 
+        def _authorized(self) -> bool:
+            tok = getattr(self, "webui_token", "")
+            if not tok:
+                return True
+            auth = self.headers.get("Authorization") or ""
+            return auth == f"Bearer {tok}" or (self.headers.get("X-Token") or "") == tok
+
         def _json(self, obj, status=200):
             body = json.dumps(obj, ensure_ascii=False).encode("utf-8")
             self.send_response(status)
@@ -567,6 +701,9 @@ def run_webui(backends, config, supervisor: Supervisor, host: str = "127.0.0.1",
                 return {}
 
         def do_GET(self):
+            if self.path not in ("/", "/icon.png", "/icon-256.png") and not self._authorized():
+                self._err("unauthorized", 401)
+                return
             if self.path == "/":
                 body = PAGE.encode("utf-8")
                 self.send_response(200)
@@ -592,6 +729,9 @@ def run_webui(backends, config, supervisor: Supervisor, host: str = "127.0.0.1",
                     self.wfile.write(body)
                 except OSError:
                     self._err("not found", 404)
+                return
+            if self.path == "/api/webui-token":
+                self._json({"ok": True, "token": self.webui_token})
                 return
             if self.path == "/api/backends":
                 rows = []
@@ -660,8 +800,25 @@ def run_webui(backends, config, supervisor: Supervisor, host: str = "127.0.0.1",
             self._err("not found", 404)
 
         def do_POST(self):
+            if not self._authorized():
+                self._err("unauthorized", 401)
+                return
             path = self.path
             try:
+                if path == "/api/webui-token":
+                    body = self._read_json()
+                    if body.get("reset"):
+                        reset_webui_token()
+                        token = effective_webui_token()
+                    else:
+                        token = str(body.get("token", "") or "").strip()
+                        if not token:
+                            self._err("token 不能为空", 400)
+                            return
+                        save_webui_token(token)
+                    Handler.webui_token = token  # 立即生效，无需重启
+                    self._json({"ok": True, "token": token})
+                    return
                 if path == "/api/start-all":
                     targets = [b for b in backends if deps_ready(b)]
                     skipped = [b.name for b in backends if not deps_ready(b)]
@@ -791,10 +948,13 @@ def run_webui(backends, config, supervisor: Supervisor, host: str = "127.0.0.1",
             except Exception as e:  # noqa: BLE001
                 self._err(str(e))
 
+    Handler.webui_token = token
     server = ThreadingHTTPServer((host, port), Handler)
-    print(f"[launcher] WebUI 已启动: http://{host}:{port}（Ctrl+C 退出）")
+    url = f"http://127.0.0.1:{port}" if host in ("0.0.0.0", "::") else f"http://{host}:{port}"
+    print(f"[launcher] WebUI 已启动: {url}（Ctrl+C 退出）")
+    print(f"[launcher] WebUI 访问 token: {token}（可用 aibackend webui-token 修改）")
     if open_browser and _can_open_browser():
-        threading.Timer(0.5, lambda: webbrowser.open(f"http://{host}:{port}")).start()
+        threading.Timer(0.5, lambda: webbrowser.open(url)).start()
     try:
         server.serve_forever()
     except KeyboardInterrupt:

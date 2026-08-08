@@ -5,6 +5,12 @@
 ## Unreleased
 
 - 无图形环境（无头服务器）不再尝试自动打开浏览器，只打印访问地址；Linux/macOS 仅在检测到 `DISPLAY` / `WAYLAND_DISPLAY` 时自动开浏览器
+- WebUI 默认监听 `0.0.0.0`，端口与访问 token 首次运行随机生成；新增登录页（记住一年），API 需带 token
+- 新增 `webui-host` / `webui-token` 命令（launcher 与 aibackend），修改后自动重启 WebUI
+- launcher 启动时自动安装/刷新 aibackend 命令行（幂等）
+- WebUI 自愈：监听配置不一致时自动重启，启动崩溃打印最近日志
+- Linux/macOS 自动开浏览器需有图形环境且显式设置 `BROWSER`（避免 SSH -X 误开）
+- 新增 ocr 后端：tesseract.js OCR，支持 URL / base64 / 本地路径识别
 
 ## 0.9.0 - 2026-08-07
 
