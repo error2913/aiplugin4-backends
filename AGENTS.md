@@ -45,7 +45,7 @@ aibackend help                         # 查看所有命令
 ## 关键流程
 
 ### 一键启动（`python launcher.py`）
-`ensure_webui_deps()`（无 webui-requirements.txt 时为空操作）→ `start_webui_background()`：检测 pid 文件避免重复启动；detach 子进程（Windows `DETACHED_PROCESS | CREATE_NO_WINDOW`，Linux `start_new_session`）；Windows 已运行时打印访问链接并自动开浏览器。
+`ensure_webui_deps()`（无 webui-requirements.txt 时为空操作）→ `start_webui_background()`：检测 pid 文件避免重复启动；detach 子进程（Windows `DETACHED_PROCESS | CREATE_NO_WINDOW`，Linux `start_new_session`）；自动开浏览器统一走 `_can_open_browser()`——Windows 直接开，Linux/macOS 仅在有 `DISPLAY` / `WAYLAND_DISPLAY` 时开，无头服务器只打印访问地址（不调用 xdg-open）。
 
 ### 后端启动（`Supervisor.spawn`）
 按需安装依赖（首次）→ Linux 下 node 后端自动检测/补齐 Puppeteer Chromium 系统库（`ldd` 找 missing，Debian/Ubuntu 用 `apt-get` 自动装，映射见 `_PUPPETEER_LIB_PACKAGES`）→ 注入环境变量 `AIPLUGIN4_BACKEND_PORT / _HOST / _TOKEN`（值来自 `.runtime.json`）→ 子进程日志重定向到 `logs/<name>.log`，`CREATE_NO_WINDOW`。`_monitor` 线程负责异常退出后按退避时间自动拉起；手动停止写入 `stopped` 标记则不再拉起。

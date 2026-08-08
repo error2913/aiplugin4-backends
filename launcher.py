@@ -685,6 +685,13 @@ def launch_webui(backends, config, supervisor, host: str = "127.0.0.1", port: in
     run_webui(backends, config, supervisor, host=host, port=port, open_browser=open_browser)
 
 
+def _can_open_browser() -> bool:
+    """自动打开浏览器是否可行：Windows 桌面直接开；Linux/macOS 需有图形环境（DISPLAY / WAYLAND_DISPLAY）"""
+    if os.name == "nt":
+        return True
+    return bool(os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY"))
+
+
 def start_webui_background(host: str = "127.0.0.1", port: int = None, open_browser: bool = True) -> int:
     """后台启动 WebUI（不占用终端、无控制台窗口），返回 pid；已在运行则返回现有 pid"""
     port = int(port) if port else effective_webui_port()
@@ -697,7 +704,7 @@ def start_webui_background(host: str = "127.0.0.1", port: int = None, open_brows
             if old_pid and Supervisor._pid_alive(old_pid):
                 url = f"http://{host}:{port}"
                 print(f"[launcher] WebUI 已在后台运行 (pid={old_pid})，无需重复启动: {url}")
-                if open_browser and os.name == "nt":
+                if open_browser and _can_open_browser():
                     webbrowser.open(url)
                 return old_pid
         except (OSError, ValueError):
@@ -730,7 +737,7 @@ def start_webui_background(host: str = "127.0.0.1", port: int = None, open_brows
     with open(WEBUI_PID_FILE, "w", encoding="utf-8") as f:
         f.write(str(proc.pid))
     print(f"[launcher] WebUI 已在后台启动: http://{host}:{port} (pid={proc.pid}, 日志=logs/webui.log)")
-    if open_browser:
+    if open_browser and _can_open_browser():
         threading.Timer(0.5, lambda: webbrowser.open(f"http://{host}:{port}")).start()
     return proc.pid
 

@@ -24,6 +24,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from launcher import (
     DEFAULT_LOG_DIR,
     Supervisor,
+    _can_open_browser,
     backend_config,
     deps_ready,
     load_runtime,
@@ -792,7 +793,7 @@ def run_webui(backends, config, supervisor: Supervisor, host: str = "127.0.0.1",
 
     server = ThreadingHTTPServer((host, port), Handler)
     print(f"[launcher] WebUI 已启动: http://{host}:{port}（Ctrl+C 退出）")
-    if open_browser:
+    if open_browser and _can_open_browser():
         threading.Timer(0.5, lambda: webbrowser.open(f"http://{host}:{port}")).start()
     try:
         server.serve_forever()
