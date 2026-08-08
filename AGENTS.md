@@ -67,6 +67,7 @@ Git tag `v*` 触发 `.github/workflows/release.yml`：tag 去掉 `v` 写进 VERS
 所有 API 均需 WebUI 访问 token（登录页输入，记住一年；请求带 `Authorization: Bearer <token>` 或 `X-Token: <token>`，否则 401）。token 由 `.runtime.json` 的 `webui.token` 提供，`launcher.py webui-token` / `aibackend webui-token` 可查看/修改/重新生成。
 
 - `GET /api/backends`：卡片数据（含 `port`/`host`/`token`/`running`/`uptime_secs`/`restarts`/`mem_*`/`deps_ready`）
+- `POST /api/webui-restart`：重启 WebUI（响应先返回，随后由独立进程执行 `launcher.py webui-restart`，用于重新加载后端清单）
 - `GET|POST /api/config/<name>`：查询/保存 {port, token, host}
 - `POST /api/port/<name>`、`/api/port/<name>/reset`：旧版端口接口（写同一份配置，保留兼容）
 - `POST /api/setup/<name>`、`/api/deps-delete/<name>`、`GET /api/setup-log/<name>`：依赖安装/删除/日志轮询
@@ -81,6 +82,7 @@ Git tag `v*` 触发 `.github/workflows/release.yml`：tag 去掉 `v` 写进 VERS
 - 确保不弹黑框：任何在 WebUI/后台（无控制台）进程里执行的子进程调用，Windows 下必须带 `CREATE_NO_WINDOW`——统一用 `launcher._no_window_kwargs()` 注入，新增 git 命令一律走该辅助函数；改完用 `rg -n "subprocess"` 排查所有调用点，逐处确认。
 - 日志统一 UTF-8：子进程环境加 `PYTHONIOENCODING=utf-8`、`PYTHONUTF8=1`（同 `Supervisor.spawn` 的写法）。
 - 运行时配置读写只通过 `launcher.backend_config()` / `save_backend_config()`，不要直接改 `.runtime.json` 结构。
+- 新增「重启 WebUI」入口时三处同步：WebUI 页面按钮（`POST /api/webui-restart`）+ `launcher.py webui-restart` + `aibackend.py webui-restart`。
 - 命令行与 WebUI 共用同一套后端进程与状态（`logs/state.json`），改动两处入口都要同步（如新增子命令：`launcher.py` + `aibackend.py` + README）。
 - 平台差异：Windows 与 Linux 行为保持一致；系统服务类命令在非 Linux 平台提示「仅支持 Linux」并不展示在 help（`aibackend` 的 cmd_help 按 `os.name` 过滤）。
 - 更新日志：改动记录进 CHANGELOG.md（日常写在 `Unreleased`）。

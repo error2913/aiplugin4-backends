@@ -1168,6 +1168,7 @@ def main() -> None:
     webui_p.add_argument("--port", type=int, default=None, help="监听端口（默认取 webui-port 配置，首次运行随机生成五位数）")
     webui_p.add_argument("--no-browser", action="store_true", help="启动后不自动打开浏览器")
     sub.add_parser("webui-stop", help="停止后台 WebUI")
+    sub.add_parser("webui-restart", help="重启后台 WebUI（先停止再启动，用于重新加载后端清单）")
     webui_port_p = sub.add_parser("webui-port", help="查看/修改 WebUI 端口（修改后自动重启 WebUI）")
     webui_port_p.add_argument("value", nargs="?", help="新端口 1-65535，或 reset 重新随机生成")
     webui_host_p = sub.add_parser("webui-host", help="查看/修改 WebUI 监听地址（修改后自动重启 WebUI）")
@@ -1346,6 +1347,12 @@ def main() -> None:
 
     if args.command == "webui-stop":
         stop_webui()
+        return
+
+    if args.command == "webui-restart":
+        stop_webui()
+        time.sleep(0.5)
+        start_webui_background(open_browser=False)
         return
 
     if args.command == "service-install":

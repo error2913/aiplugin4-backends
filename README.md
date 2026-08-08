@@ -142,6 +142,8 @@ assets/                WebUI 图标
 
 管理全部通过 WebUI 完成：后端启停、依赖安装/删除、配置修改、运行日志都在页面里操作。端口/token/监听 IP 写入 `.runtime.json`（已 gitignore），启动时通过环境变量传给后端：`AIPLUGIN4_BACKEND_PORT`、`AIPLUGIN4_BACKEND_TOKEN`（非空时后端校验 `Authorization: Bearer <token>` 或 `X-Token: <token>`）、`AIPLUGIN4_BACKEND_HOST`。
 
+右上角「🔄 重启 WebUI」可让管理界面重新加载后端清单（新增/修改后端、代码更新后无需手动重启进程）；命令行等价 `launcher.py webui-restart` / `aibackend webui-restart`。
+
 ## 命令行（aibackend）
 
 安装 `aibackend` 命令（写入用户 PATH，重新打开终端后即可在任意目录使用）：
@@ -166,6 +168,7 @@ aibackend del-deps stream-output            # 删除单个后端依赖
 aibackend update                            # 从 Git 拉取项目更新（手动）
 aibackend webui                             # 后台启动 Web 管理界面（不占终端）
 aibackend webui-stop                        # 停止后台 WebUI
+aibackend webui-restart                     # 重启后台 WebUI（重新加载后端清单）
 aibackend webui-port 9000                   # 查看/修改 WebUI 端口（修改后自动重启）
 aibackend webui-host 0.0.0.0                # 查看/修改 WebUI 监听地址（修改后自动重启）
 aibackend webui-token                       # 查看/修改 WebUI 访问 token（reset 重新生成）

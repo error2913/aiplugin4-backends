@@ -205,6 +205,7 @@ PAGE = """<!DOCTYPE html>
       <button id="themeBtn" onclick="cycleTheme()">主题</button>
       <button onclick="openToken()">🔑 Token</button>
       <button onclick="updateNow()">⬆ 更新</button>
+      <button onclick="restartWebUI()">🔄 重启 WebUI</button>
       <button onclick="refresh()">⟳ 刷新</button>
     </div>
   </header>
@@ -401,6 +402,12 @@ async function saveServerToken(){
   toast('WebUI token 已更新并立即生效');
   refresh();
 }
+async function restartWebUI(){
+  if (!confirm('确定重启 WebUI 吗？会短暂断开连接，约 2 秒后自动刷新。')) return;
+  try { await api('/api/webui-restart', 'POST'); } catch(e){}
+  toast('正在重启 WebUI，稍后自动刷新...');
+  setTimeout(() => location.reload(), 2500);
+}
 function applyTheme(){
   const t = localStorage.getItem('theme') || 'auto';
   document.documentElement.dataset.theme = t === 'auto' ? '' : t;
@@ -511,13 +518,12 @@ async function allAct(act){
 }
 async function updateNow(){
   try {
-    const r = await fetch('/api/update', {method: 'POST'});
-    const j = await r.json();
+    const j = await api('/api/update', 'POST');
     if (!j.ok){ showAlert('更新失败：\\n\\n' + (j.output || j.message || '')); return; }
     if (!j.updated){ showAlert('没有可以更新的'); return; }
     showAlert('更新完成：\\n\\n' + (j.changelog || j.output || '已拉取更新'));
   } catch(e){
-    showAlert('更新失败：' + e.message);
+    if (!(e && e.message === '需要 WebUI token')) showAlert('更新失败：' + e.message);
   }
 }
 function showAlert(msg){
@@ -670,6 +676,27 @@ def run_webui(backends, config, supervisor: Supervisor, host: str = None, port: 
 
         threading.Thread(target=run_setup, daemon=True).start()
 
+    def _restart_webui() -> None:
+        """响应返回后延迟触发：由独立进程先停旧 WebUI 再启动新 WebUI（重新加载后端清单）"""
+        script = os.path.join(os.path.dirname(os.path.abspath(__file__)), "launcher.py")
+        env = dict(os.environ)
+        env["PYTHONIOENCODING"] = "utf-8"
+        env["PYTHONUTF8"] = "1"
+        kwargs = {}
+        if os.name == "nt":
+            kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
+        else:
+            kwargs["start_new_session"] = True
+        subprocess.Popen(
+            [sys.executable, script, "webui-restart"],
+            cwd=os.path.dirname(script),
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            env=env,
+            **kwargs,
+        )
+
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, fmt, *args):  # 关闭默认访问日志刷屏
             pass
@@ -818,6 +845,10 @@ def run_webui(backends, config, supervisor: Supervisor, host: str = None, port: 
                         save_webui_token(token)
                     Handler.webui_token = token  # 立即生效，无需重启
                     self._json({"ok": True, "token": token})
+                    return
+                if path == "/api/webui-restart":
+                    self._json({"ok": True, "message": "restarting"})
+                    threading.Timer(0.3, _restart_webui).start()
                     return
                 if path == "/api/start-all":
                     targets = [b for b in backends if deps_ready(b)]

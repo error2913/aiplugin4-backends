@@ -21,6 +21,7 @@
   aibackend update                     从 Git 拉取项目更新
   aibackend webui                      后台启动 Web 管理界面（不占终端）
   aibackend webui-stop                 停止后台 WebUI
+  aibackend webui-restart              重启后台 WebUI（重新加载后端清单）
   aibackend webui-port [端口|reset]    查看/修改 WebUI 端口（修改后自动重启）
   aibackend webui-host [地址|reset]    查看/修改 WebUI 监听地址（修改后自动重启）
   aibackend webui-token [token|reset]  查看/修改 WebUI 访问 token（修改后自动重启）
@@ -72,6 +73,7 @@ COMMANDS = [
     ("update", "从 Git 拉取项目更新"),
     ("webui", "后台启动 Web 管理界面（不占终端）"),
     ("webui-stop", "停止后台 WebUI"),
+    ("webui-restart", "重启后台 WebUI（先停止再启动，重新加载后端清单）"),
     ("webui-port", "查看/修改 WebUI 端口（修改后自动重启 WebUI）"),
     ("webui-host", "查看/修改 WebUI 监听地址（修改后自动重启 WebUI）"),
     ("webui-token", "查看/修改 WebUI 访问 token（修改后自动重启 WebUI）"),
@@ -385,6 +387,12 @@ def cmd_webui_stop(args):
     stop_webui()
 
 
+def cmd_webui_restart(args):
+    stop_webui()
+    time.sleep(0.5)
+    start_webui_background(open_browser=False)
+
+
 def cmd_webui_port(args):
     try:
         port = configure_webui_port(args.value)
@@ -566,6 +574,7 @@ def build_parser():
     webui_p.add_argument("--port", type=int, default=None)
     webui_p.add_argument("--no-browser", action="store_true")
     sub.add_parser("webui-stop", help="停止后台 WebUI")
+    sub.add_parser("webui-restart", help="重启后台 WebUI（先停止再启动，重新加载后端清单）")
     webui_port_p = sub.add_parser("webui-port", help="查看/修改 WebUI 端口（修改后自动重启 WebUI）")
     webui_port_p.add_argument("value", nargs="?", help="新端口 1-65535，或 reset 重新随机生成")
     webui_host_p = sub.add_parser("webui-host", help="查看/修改 WebUI 监听地址（修改后自动重启 WebUI）")
@@ -613,6 +622,8 @@ def main(argv=None):
         cmd_webui(args)
     elif args.command == "webui-stop":
         cmd_webui_stop(args)
+    elif args.command == "webui-restart":
+        cmd_webui_restart(args)
     elif args.command == "webui-port":
         cmd_webui_port(args)
     elif args.command == "webui-host":
