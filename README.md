@@ -27,11 +27,11 @@ git clone https://github.com/error2913/aiplugin4-backends.git && cd aiplugin4-ba
 
 - 后端以「商店」形式随仓库分发（`backends/<名称>/`，注册表 `backends.json`）：未安装时卡片显示「安装」，点击后复制/下载程序文件到运行目录 `installed/` 并安装依赖（弹窗实时日志、按钮转圈），装完变「启动」；「卸载」只删运行副本，商店源文件不动
 - 依赖精确同步：依赖清单（`requirements.txt` / `package.json`）变化后自动重建 venv / `npm ci`，保证依赖不多不少
-- 有后端依赖未安装时，右上角出现「安装全部依赖」，可一键补齐
+- 有后端未安装时，右上角出现「安装全部」，可批量安装（复制/下载程序 + 装依赖）
 - 「启动全部」只启动依赖已就绪的后端；若全部依赖未安装会弹出提示
 - 「重启全部」先停止全部，再启动依赖已就绪的后端
 - 右上角「⬆ 更新」从 Git 拉取项目更新（手动，非自动）
-- 卡片显示运行时长、自动拉起次数与内存占用；「日志」旁可点「删除依赖」恢复未安装状态
+- 卡片显示版本、运行时长、自动拉起次数与内存占用；「卸载」可删除运行副本恢复未安装状态
 - 卡片「⚙ 配置」弹窗可修改端口、访问 token 与监听 IP（默认 `0.0.0.0`），支持一键随机生成 token；token 默认留空 = 不鉴权
 - 后端进程异常退出会自动拉起
 
@@ -175,10 +175,8 @@ aibackend restart stream-output             # 重启
 aibackend logs stream-output -f             # 查看/跟随日志
 aibackend info stream-output                # 进程详情（pid/时长/内存/拉起次数）
 aibackend monitor                           # 实时监控面板
-aibackend setup --all                       # 安装全部后端依赖
 aibackend install-backend web-read          # 安装后端（复制/下载程序 + 安装依赖）
 aibackend uninstall-backend web-read        # 卸载后端（停止并删除运行副本）
-aibackend del-deps stream-output            # 删除单个后端依赖
 aibackend update                            # 从 Git 拉取项目更新（手动）
 aibackend webui                             # 后台启动 Web 管理界面（不占终端）
 aibackend webui-stop                        # 停止后台 WebUI

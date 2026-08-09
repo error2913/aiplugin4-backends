@@ -20,6 +20,8 @@
 - 自定义后端配置：`backend.json` 声明 `config` schema（label/type/default/env），WebUI 配置弹窗编辑并注入环境变量
 - WebUI 页面禁用缓存（no-store）、主题按钮移至右下角、修复 PAGE 内 JS 反斜杠转义
 - 升级自动清理：launcher 启动时删除旧版顶层后端残留目录（node_modules/.venv/缓存，仅限 git 已不跟踪的旧目录）
+- 「安装全部」改为批量安装所有未安装后端；移除手动 setup / del-deps 命令与对应 API（安装/卸载统一走 install-backend / uninstall-backend）
+- 清理历史遗留的「错误后端」命名（统一为 aiplugin4-backends / aibackend）
 
 ## 0.9.0 - 2026-08-07
 

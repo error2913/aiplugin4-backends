@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""aibackend — 错误后端（aiplugin4-backends）的命令行管理工具。
+"""aibackend — aiplugin4-backends 的命令行管理工具。
 
 安装命令（把 aibackend 写入 PATH）：
   python install_cli.py
@@ -16,10 +16,8 @@
   aibackend logs <后端名>               查看日志（-n 行数，-f 跟随）
   aibackend info <后端名>               查看进程详情（pid/时长/内存/拉起次数）
   aibackend monitor                    实时监控面板
-  aibackend setup --all                安装全部后端依赖
   aibackend install-backend <后端名>    安装后端（下载程序 + 安装依赖）
   aibackend uninstall-backend <后端名>  卸载后端（停止并删除程序与依赖）
-  aibackend del-deps <后端名>           删除单个后端依赖
   aibackend update                     从 Git 拉取项目更新
   aibackend webui                      后台启动 Web 管理界面（不占终端）
   aibackend webui-stop                 停止后台 WebUI
@@ -53,10 +51,8 @@ from launcher import (
     install_backend,
     load_config,
     process_memory,
-    remove_backend_deps,
     remove_backend_dir,
     install_webui_service,
-    setup_backend,
     start_webui_background,
     stop_webui,
     uninstall_webui_service,
@@ -72,10 +68,8 @@ COMMANDS = [
     ("logs", "查看后端日志"),
     ("info", "查看后端详情"),
     ("monitor", "实时监控面板"),
-    ("setup", "安装后端依赖"),
     ("install-backend", "安装后端（下载程序 + 安装依赖）"),
     ("uninstall-backend", "卸载后端（停止并删除程序与依赖）"),
-    ("del-deps", "删除后端依赖"),
     ("update", "从 Git 拉取项目更新"),
     ("webui", "后台启动 Web 管理界面（不占终端）"),
     ("webui-stop", "停止后台 WebUI"),
@@ -321,7 +315,7 @@ def cmd_help(args, parser):
         parser.parse_args([args.topic, "--help"])
         return
     print()
-    print(f"  {GREEN}aibackend{RESET}  {BOLD}错误后端（aiplugin4-backends）{RESET} 的命令行管理工具")
+    print(f"  {GREEN}aibackend{RESET}  {BOLD}aiplugin4-backends{RESET} 的命令行管理工具")
     print(f"  {DIM}命令行与 WebUI 共用同一套后端进程与状态（logs/state.json）{RESET}")
     print()
     print(f"  {GREEN}用法:{RESET}")
@@ -348,16 +342,6 @@ def cmd_monitor(args, supervisor):
         pass
 
 
-def cmd_setup(args):
-    targets = resolve(args)
-    if not targets:
-        print("请指定后端名称或使用 --all")
-        return
-    for b in targets:
-        setup_backend(b)
-    print("依赖安装完成")
-
-
 def cmd_install_backend(args):
     try:
         install_backend(args.name)
@@ -376,19 +360,6 @@ def cmd_uninstall_backend(args, supervisor):
     time.sleep(1)
     remove_backend_dir(args.name)
     print(f"已卸载后端: {args.name}")
-
-
-def cmd_del_deps(args, supervisor):
-    targets = resolve(args)
-    if not targets:
-        print("请指定后端名称或使用 --all")
-        return
-    for b in targets:
-        if supervisor.is_running(b.name):
-            supervisor.stop([b])
-            time.sleep(0.5)
-        remove_backend_deps(b)
-    print("依赖已删除")
 
 
 def cmd_update(args):
@@ -554,7 +525,7 @@ def cmd_uninstall(args):
 def build_parser():
     parser = argparse.ArgumentParser(
         prog="aibackend",
-        description="错误后端（aiplugin4-backends）的命令行管理工具",
+        description="aiplugin4-backends 的命令行管理工具",
     )
     sub = parser.add_subparsers(dest="command")
     sub.add_parser("list", help="查看所有后端状态")
@@ -585,17 +556,9 @@ def build_parser():
 
     sub.add_parser("monitor", help="实时监控面板")
 
-    setup_p = sub.add_parser("setup", help="安装后端依赖")
-    setup_p.add_argument("names", nargs="*")
-    setup_p.add_argument("--all", action="store_true")
-
     install_b_p = sub.add_parser("install-backend", help="安装后端（下载程序 + 安装依赖）")
     install_b_p.add_argument("name")
     sub.add_parser("uninstall-backend", help="卸载后端（停止并删除程序与依赖）").add_argument("name")
-
-    del_p = sub.add_parser("del-deps", help="删除后端依赖")
-    del_p.add_argument("names", nargs="*")
-    del_p.add_argument("--all", action="store_true")
 
     sub.add_parser("update", help="从 Git 拉取项目更新")
 
@@ -642,14 +605,10 @@ def main(argv=None):
         cmd_info(args, supervisor)
     elif args.command == "monitor":
         cmd_monitor(args, supervisor)
-    elif args.command == "setup":
-        cmd_setup(args)
     elif args.command == "install-backend":
         cmd_install_backend(args)
     elif args.command == "uninstall-backend":
         cmd_uninstall_backend(args, supervisor)
-    elif args.command == "del-deps":
-        cmd_del_deps(args, supervisor)
     elif args.command == "update":
         cmd_update(args)
     elif args.command == "webui":

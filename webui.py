@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-错误后端（aiplugin4-backends）Web 管理界面（纯 Python 标准库，无第三方依赖）。
+aiplugin4 后端管理 Web 界面（纯 Python 标准库，无第三方依赖）。
 
 由 launcher.py 直接启动：
   python launcher.py
@@ -39,7 +39,6 @@ from launcher import (
     load_registry,
     load_runtime,
     process_memory,
-    remove_backend_deps,
     remove_backend_dir,
     reset_webui_token,
     save_backend_config,
@@ -56,7 +55,7 @@ PAGE = """<!DOCTYPE html>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <link rel="icon" href="/icon-256.png" type="image/png">
-<title>错误后端管理</title>
+    <title>aiplugin4 后端管理</title>
 <style>
   :root {
     --bg: #eef1f6; --panel: #ffffff; --panel-2: #f4f6fa;
@@ -195,7 +194,7 @@ PAGE = """<!DOCTYPE html>
 <body>
 <div id="loginScreen" style="position:fixed; inset:0; background:var(--bg); display:flex; align-items:center; justify-content:center; z-index:100;">
   <div style="width:min(360px,92vw); background:var(--panel); border:1px solid var(--border); border-radius:14px; padding:28px; display:grid; gap:14px; text-align:center; box-shadow:0 12px 32px var(--shadow);">
-    <div style="font-size:20px; font-weight:700;">错误后端管理</div>
+    <div style="font-size:20px; font-weight:700;">aiplugin4 后端管理</div>
     <div style="color:var(--muted); font-size:13px;">请输入 WebUI token（登录后记住一年）</div>
     <input id="loginToken" type="password" spellcheck="false" autocomplete="off" placeholder="访问 token"
            style="width:100%; padding:10px 12px; border:1px solid var(--border); border-radius:9px; background:var(--panel-2); color:var(--text); font-size:14px; outline:none;"
@@ -206,9 +205,9 @@ PAGE = """<!DOCTYPE html>
 </div>
 <div class="wrap">
   <header>
-    <img class="logo" src="/icon-256.png" alt="错误后端">
+    <img class="logo" src="/icon-256.png" alt="aiplugin4">
     <div>
-      <h1>错误后端管理</h1>
+      <h1>aiplugin4 后端管理</h1>
       <div class="sub">launcher WebUI</div>
     </div>
     <div class="header-right">
@@ -491,35 +490,14 @@ async function refresh(){
 function renderInstallAll(list){
   const area = document.getElementById('installAllArea');
   if (!area) return;
-  const missing = list.filter(b => !b.deps_ready && !b.running).length;
+  const missing = list.filter(b => !b.installed).length;
   if (allInstalling){
     area.innerHTML = `<button class="primary loading" disabled><span class="spin"></span>安装中 ${allDone}/${allTargets.length}</button>`;
   } else if (missing > 0){
-    area.innerHTML = `<button class="primary" onclick="setupAll()">安装全部依赖 (${missing})</button>`;
+    area.innerHTML = `<button class="primary" onclick="installAllNow()">安装全部 (${missing})</button>`;
   } else {
     area.innerHTML = '';
   }
-}
-async function setupNow(name){
-  installing.add(name);
-  refresh();
-  showInstallLog(name);
-  try {
-    await api('/api/setup/' + name, 'POST');
-    await pollInstall(name);
-  } catch(e){}
-  installing.delete(name);
-  refresh();
-}
-async function delDeps(name){
-  deleting.add(name);
-  refresh();
-  try {
-    await api('/api/deps-delete/' + name, 'POST');
-    toast('已删除依赖：' + name);
-  } catch(e){}
-  deleting.delete(name);
-  refresh();
 }
 async function pollInstall(name){
   while (true){
@@ -586,7 +564,7 @@ async function installNow(name){
 async function allAct(act){
   const j = await api('/api/' + act + '-all', 'POST');
   if ((act === 'start' || act === 'restart') && j.started && j.started.length === 0 && j.skipped && j.skipped.length){
-    showAlert('后端依赖均未安装，已全部跳过。\\n可先点右上角「安装全部依赖」，装完后再启动。');
+    showAlert('后端均未安装，已全部跳过。\\n可先点右上角「安装全部」，装完后再启动。');
   } else {
     toast(act==='start' ? '已启动全部' : act==='restart' ? '已重启全部' : '已停止全部');
   }
@@ -644,23 +622,23 @@ function fmtChangelog(text){
   return html;
 }
 function closeAlert(){ document.getElementById('alertModal').classList.remove('open'); }
-async function setupAll(){
+async function installAllNow(){
   const list = await api('/api/backends');
-  allTargets = list.backends.filter(b => !b.deps_ready && !b.running).map(b => b.name);
+  allTargets = list.backends.filter(b => !b.installed).map(b => b.name);
   allDone = 0;
   if (!allTargets.length) return;
   allInstalling = true;
-  showInstallLog('全部依赖');
+  showInstallLog('全部');
   refresh();
   try {
     for (const name of allTargets){
-      document.getElementById('logTitle').textContent = '安装全部依赖 (' + allDone + '/' + allTargets.length + ')：' + name;
+      document.getElementById('logTitle').textContent = '安装全部 (' + allDone + '/' + allTargets.length + ')：' + name;
       document.getElementById('logBody').textContent = '(等待安装日志...)';
-      await api('/api/setup/' + name, 'POST');
+      await api('/api/install/' + name, 'POST');
       await pollInstall(name);
       allDone++;
     }
-    toast('全部依赖安装完成');
+    toast('全部安装完成');
   } catch(e){}
   allInstalling = false;
   refresh();
@@ -716,7 +694,7 @@ async function saveConfig(){
 }
 function showInstallLog(name){
   current = name; currentType = 'setup';
-  document.getElementById('logTitle').textContent = '安装依赖：' + name;
+  document.getElementById('logTitle').textContent = '操作：' + name;
   document.getElementById('logBody').textContent = '(等待安装日志...)';
   document.getElementById('modal').classList.add('open');
 }
@@ -1173,17 +1151,6 @@ def run_webui(backends, config, supervisor: Supervisor, host: str = None, port: 
                     backend = by_name.get(name)
                     if not backend:
                         self._err(f"未知后端: {name}", 404)
-                        return
-                    if action == "setup":
-                        start_setup(name)
-                        self._json({"ok": True, "message": "setup started"})
-                        return
-                    if action == "deps-delete":
-                        if supervisor.is_running(name):
-                            supervisor.stop([backend])
-                            time.sleep(1)
-                        remove_backend_deps(backend)
-                        self._json({"ok": True, "message": "deps removed"})
                         return
                     if action == "start":
                         if name in supervisor.state.get("stopped", []):

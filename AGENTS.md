@@ -76,7 +76,6 @@ Git tag `v*` 触发 `.github/workflows/release.yml`：tag 去掉 `v` 写进 VERS
 - `POST /api/webui-restart`：重启 WebUI（响应先返回，随后由独立进程执行 `launcher.py webui-restart`，用于重新加载后端清单）
 - `GET|POST /api/config/<name>`：查询/保存 {port, token, host}
 - `POST /api/port/<name>`、`/api/port/<name>/reset`：旧版端口接口（写同一份配置，保留兼容）
-- `POST /api/setup/<name>`、`/api/deps-delete/<name>`、`GET /api/setup-log/<name>`：依赖安装/删除/日志轮询
 - `POST /api/start-all` / `stop-all` / `restart-all` / `start/<name>` / `stop/<name>`
 - `POST /api/update`：更新，返回 `{ok, updated, changelog, output}`
 - `GET /api/logs/<name>`：后端日志（末 300 行）
