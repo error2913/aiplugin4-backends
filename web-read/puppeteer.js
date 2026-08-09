@@ -1,5 +1,7 @@
 const express = require('express');
 const puppeteer = require('puppeteer');
+const path = require('path');
+const fs = require('fs');
 
 const app = express();
 const port = Number(process.env.AIPLUGIN4_BACKEND_PORT || 46799);
@@ -13,6 +15,32 @@ if (token) {
     res.status(401).json({ error: 'unauthorized' });
   });
 }
+
+// 内置字体兜底：服务器缺 CJK 字体时，无头浏览器会把中文/曲库特殊符号渲染成 □。
+// ScreenCJK.ttf 是用 fontTools 按「曲库全部曲名 + 控制器界面文本」裁剪的子集
+// （约 330KB）。启动时把字体装进用户字体目录（Linux ~/.fonts）+ fc-cache，
+// Chromium 通过 fontconfig 对缺失字形自然回退，无需改页面 CSS。
+function installBundledFont() {
+  if (process.platform === 'win32') return; // Windows 自带中文字体，无需安装
+  const fontPath = path.join(__dirname, 'fonts', 'ScreenCJK.ttf');
+  if (!fs.existsSync(fontPath)) return;
+  const home = process.env.HOME || process.env.XDG_CONFIG_HOME || '';
+  if (!home) return;
+  try {
+    const dir = path.join(home, '.fonts');
+    fs.mkdirSync(dir, { recursive: true });
+    fs.copyFileSync(fontPath, path.join(dir, 'ScreenCJK.ttf'));
+    try {
+      require('child_process').execSync('fc-cache -f >/dev/null 2>&1 || true');
+    } catch (e) {
+      // fc-cache 不存在时忽略，fontconfig 会在下次使用时自动扫描
+    }
+    console.log('[web-read] 内置字体已安装到 ' + dir);
+  } catch (e) {
+    console.error('[web-read] 安装内置字体失败:', e);
+  }
+}
+installBundledFont();
 
 app.use(express.json());
 
@@ -68,7 +96,7 @@ app.post('/screenshot', async (req, res) => {
   try {
     browser = await puppeteer.launch({
       headless: true,
-      args: ['--no-sandbox', '--disable-setuid-sandbox']
+      args: ['--no-sandbox', '--disable-setuid-sandbox', '--allow-file-access-from-files']
     });
 
     const page = await browser.newPage();
