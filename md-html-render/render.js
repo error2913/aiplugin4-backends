@@ -4,6 +4,9 @@ const { marked } = require('marked');
 const crypto = require('crypto');
 const path = require('path');
 const fs = require('fs').promises;
+const { McpServer } = require('@modelcontextprotocol/sdk/server/mcp.js');
+const { StreamableHTTPServerTransport } = require('@modelcontextprotocol/sdk/server/streamableHttp.js');
+const { z } = require('zod');
 
 const app = express();
 const port = Number(process.env.AIPLUGIN4_BACKEND_PORT || 37632);
@@ -17,6 +20,26 @@ if (token) {
     res.status(401).json({ status: 'error', message: 'unauthorized' });
   });
 }
+
+// MCP streamable-http 端点：必须先于 express.json() 注册，让 transport 自行解析原始 body
+const mcpTransports = new Map();
+app.post('/mcp', async (req, res) => {
+    const sessionId = req.headers['mcp-session-id'];
+    let transport = sessionId ? mcpTransports.get(sessionId) : undefined;
+    if (!transport) {
+        transport = new StreamableHTTPServerTransport({
+            sessionIdGenerator: () => crypto.randomUUID(),
+            onsessioninitialized: (sid) => mcpTransports.set(sid, transport)
+        });
+        await createMcpServer().connect(transport);
+    }
+    try {
+        await transport.handleRequest(req, res);
+    } catch (e) {
+        console.error('[md-html-render] MCP 请求处理失败:', e);
+        if (!res.headersSent) res.status(500).json({ error: 'MCP request failed' });
+    }
+});
 
 // 配置 marked 选项
 marked.setOptions({
@@ -481,6 +504,51 @@ app.delete('/images/:imageId', async (req, res) => {
 app.get('/health', (req, res) => {
     res.json({ status: 'ok' });
 });
+
+// ---- MCP server（streamable-http，挂 /mcp；每会话一个 server 实例）----
+function createMcpServer() {
+    const server = new McpServer({ name: 'md-html-render', version: '1.0.0' });
+
+    server.tool(
+        'render_markdown',
+        {
+            markdown: z.string().describe('要渲染的 Markdown 内容'),
+            theme: z.enum(['light', 'dark', 'gradient']).optional().describe('主题，默认 light'),
+            width: z.number().optional().describe('图片宽度，默认 1200'),
+            quality: z.number().optional().describe('图片质量，默认 90'),
+            hasImages: z.boolean().optional().describe('内容是否包含图片 URL')
+        },
+        async ({ markdown, theme = 'light', width = 1200, quality = 90, hasImages = false }) => {
+            try {
+                const result = await renderToImage(markdown, { contentType: 'markdown', theme, width, quality, hasImages });
+                return { content: [{ type: 'text', text: result.base64 || '' }] };
+            } catch (e) {
+                return { content: [{ type: 'text', text: `Markdown 渲染失败: ${e.message || String(e)}` }], isError: true };
+            }
+        }
+    );
+
+    server.tool(
+        'render_html',
+        {
+            html: z.string().describe('要渲染的 HTML 内容'),
+            theme: z.enum(['light', 'dark', 'gradient']).optional().describe('主题，默认 light'),
+            width: z.number().optional().describe('图片宽度，默认 1200'),
+            quality: z.number().optional().describe('图片质量，默认 90'),
+            hasImages: z.boolean().optional().describe('内容是否包含图片 URL')
+        },
+        async ({ html, theme = 'light', width = 1200, quality = 90, hasImages = false }) => {
+            try {
+                const result = await renderToImage(html, { contentType: 'html', theme, width, quality, hasImages });
+                return { content: [{ type: 'text', text: result.base64 || '' }] };
+            } catch (e) {
+                return { content: [{ type: 'text', text: `HTML 渲染失败: ${e.message || String(e)}` }], isError: true };
+            }
+        }
+    );
+
+    return server;
+}
 
 app.listen(port, host, () => {
     console.log(`Content renderer service running on http://localhost:${port}`);
