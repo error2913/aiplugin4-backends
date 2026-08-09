@@ -39,6 +39,8 @@ RUNTIME_FILE = ".runtime.json"
 WEBUI_PID_FILE = os.path.join(ROOT_DIR, "logs", "webui.pid")
 VENV_DIR_NAME = ".venv"
 DEPS_MARKER = ".deps_ready"
+# 旧版后端曾位于仓库顶层目录（新模型为 backends/ 商店 + installed/ 运行副本）
+LEGACY_BACKEND_DIRS = ["image-url-to-base64", "mcp-files-exec", "md-html-render", "stream-output", "usage-chart", "web-read"]
 
 # 打包时排除的目录/文件
 EXCLUDE_DIRS = {"logs", "node_modules", "__pycache__", ".venv", "venv", "dist", ".git", "lang-data", "cache", "backends"}
@@ -1441,6 +1443,39 @@ def ensure_cli_installed() -> None:
         print(f"[launcher] aibackend 自动安装失败（可手动执行 python install_cli.py）: {e}", file=sys.stderr)
 
 
+def cleanup_legacy_backend_dirs() -> None:
+    """升级清理：旧版后端目录在仓库顶层，git 只搬被跟踪文件，node_modules/.venv/缓存等未跟踪残留会留在原地。
+    仅当目录已完全不被 git 跟踪时，用 git clean 删掉整目录（含忽略文件），避免升级后残留占空间/干扰新模型。"""
+    if not shutil.which("git"):
+        return
+    for name in LEGACY_BACKEND_DIRS:
+        legacy = os.path.join(BACKENDS_DIR, name)
+        if not os.path.isdir(legacy):
+            continue
+        try:
+            out = subprocess.run(
+                ["git", "ls-files", name],
+                cwd=BACKENDS_DIR,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=30,
+                **_no_window_kwargs(),
+            )
+        except Exception:  # noqa: BLE001
+            continue
+        if (out.stdout or "").strip():
+            continue  # 目录仍被 git 跟踪（用户改过文件），不动
+        subprocess.run(
+            ["git", "clean", "-fdx", "--", name],
+            cwd=BACKENDS_DIR,
+            capture_output=True,
+            **_no_window_kwargs(),
+        )
+        print(f"[launcher] 已清理旧版顶层后端残留目录: {name}")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         prog="launcher",
@@ -1481,6 +1516,7 @@ def main() -> None:
     args = parser.parse_args()
 
     ensure_cli_installed()
+    cleanup_legacy_backend_dirs()
 
     config = load_config()
     backends = discover_backends()

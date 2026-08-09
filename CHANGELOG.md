@@ -19,6 +19,7 @@
 - 依赖精确同步：依赖清单变化自动重建 venv / `npm ci`（node 有 lockfile 时）
 - 自定义后端配置：`backend.json` 声明 `config` schema（label/type/default/env），WebUI 配置弹窗编辑并注入环境变量
 - WebUI 页面禁用缓存（no-store）、主题按钮移至右下角、修复 PAGE 内 JS 反斜杠转义
+- 升级自动清理：launcher 启动时删除旧版顶层后端残留目录（node_modules/.venv/缓存，仅限 git 已不跟踪的旧目录）
 
 ## 0.9.0 - 2026-08-07
 

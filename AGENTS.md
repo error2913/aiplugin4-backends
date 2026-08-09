@@ -47,7 +47,7 @@ aibackend help                         # 查看所有命令
 ## 关键流程
 
 ### 一键启动（`python launcher.py`）
-`ensure_cli_installed()`（自动安装/刷新 aibackend，幂等）→ `ensure_webui_deps()`（无 webui-requirements.txt 时为空操作）→ `start_webui_background()`：检测 pid 文件避免重复启动，pid 里记录的 host/port 与当前配置不一致时自动重启（自愈），启动崩溃打印最近日志；detach 子进程（Windows `DETACHED_PROCESS | CREATE_NO_WINDOW`，Linux `start_new_session`）；WebUI 默认监听 `0.0.0.0`，端口与访问 token 首次运行随机生成；自动开浏览器统一走 `_can_open_browser()`——Windows 直接开，Linux/macOS 需有 `DISPLAY`/`WAYLAND_DISPLAY` **且**显式设置 `BROWSER`，无头服务器只打印访问地址（不调用 xdg-open）。
+`ensure_cli_installed()`（自动安装/刷新 aibackend，幂等）→ `cleanup_legacy_backend_dirs()`（升级清理：git 已不跟踪的旧版顶层后端目录整目录删除，防残留）→ `ensure_webui_deps()`（无 webui-requirements.txt 时为空操作）→ `start_webui_background()`：检测 pid 文件避免重复启动，pid 里记录的 host/port 与当前配置不一致时自动重启（自愈），启动崩溃打印最近日志；detach 子进程（Windows `DETACHED_PROCESS | CREATE_NO_WINDOW`，Linux `start_new_session`）；WebUI 默认监听 `0.0.0.0`，端口与访问 token 首次运行随机生成；自动开浏览器统一走 `_can_open_browser()`——Windows 直接开，Linux/macOS 需有 `DISPLAY`/`WAYLAND_DISPLAY` **且**显式设置 `BROWSER`，无头服务器只打印访问地址（不调用 xdg-open）。
 
 ### 后端启动（`Supervisor.spawn`）
 安装后端（`install_backend`）：按注册表把商店 `backends/<name>` 的文件复制到运行目录 `installed/<name>`（商店缺失时按 `source` 从 raw URL 下载），再装依赖；失败自动清掉半成品。卸载（`remove_backend_dir`）只删 `installed/<name>`。依赖精确同步：`ensure_venv`/`ensure_node` 用依赖指纹（`deps_hash`/`node_deps_hash`）判断，清单变化即重建 venv / `npm ci`（node 有 lockfile 时）。启动时注入 `AIPLUGIN4_BACKEND_PORT / _HOST / _TOKEN` 与 `backend.json` `config` schema 声明的自定义 env → 子进程日志重定向到 `logs/<name>.log`，`CREATE_NO_WINDOW`。`_monitor` 线程负责异常退出后按退避时间自动拉起；手动停止写入 `stopped` 标记则不再拉起。
