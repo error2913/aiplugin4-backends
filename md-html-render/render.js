@@ -2,8 +2,6 @@ const express = require('express');
 const puppeteer = require('puppeteer');
 const { marked } = require('marked');
 const crypto = require('crypto');
-const path = require('path');
-const fs = require('fs').promises;
 const { McpServer } = require('@modelcontextprotocol/sdk/server/mcp.js');
 const { StreamableHTTPServerTransport } = require('@modelcontextprotocol/sdk/server/streamableHttp.js');
 const { z } = require('zod');
@@ -70,10 +68,6 @@ app.use((err, req, res, next) => {
     }
     next(err);
 });
-
-app.use('/images', express.static('generated_images'));
-
-const IMAGE_DIR = path.join(__dirname, 'generated_images');
 
 function generateImageId() {
     return crypto.randomBytes(16).toString('hex');
@@ -417,89 +411,6 @@ async function renderToImage(content, options = {}) {
         await browser.close();
     }
 }
-
-// 渲染 Markdown 
-app.post('/render/markdown', async (req, res) => {
-    try {
-        const { markdown, theme = 'light', width = 1200, quality = 90, hasImages = false } = req.body;
-        if (!markdown) {
-            return res.status(400).json({ status: 'error', message: 'Field "markdown" is required' });
-        }
-
-        const result = await renderToImage(markdown, {
-            contentType: 'markdown', 
-            theme,
-            width,
-            quality,
-            hasImages
-        });
-
-        res.json({
-            status: 'success',
-            imageId: result.imageId,
-            base64: result.base64,
-            contentType: 'markdown',
-            theme
-        });
-    } catch (error) {
-        console.error('Render markdown error:', error);
-        res.status(500).json({ status: 'error', message: error.message });
-    }
-});
-
-// 渲染 HTML
-app.post('/render/html', async (req, res) => {
-    try {
-        const { html, width = 1200, quality = 90, hasImages = false } = req.body;
-        if (!html) {
-            return res.status(400).json({ status: 'error', message: 'Field "html" is required' });
-        }
-
-        const result = await renderToImage(html, {
-            contentType: 'html', 
-            width,
-            quality,
-            hasImages
-        });
-
-        res.json({
-            status: 'success',
-            imageId: result.imageId,
-            base64: result.base64,
-            contentType: 'html'
-        });
-    } catch (error) {
-        console.error('Render html error:', error);
-        res.status(500).json({ status: 'error', message: error.message });
-    }
-});
-
-app.delete('/images/:imageId', async (req, res) => {
-    try {
-        const { imageId } = req.params;
-        const safeImageId = path.basename(imageId);
-        if (safeImageId !== imageId) {
-             return res.status(400).json({ status: 'error', message: 'Invalid image ID' });
-        }
-        
-        const filePath = path.join(IMAGE_DIR, `${safeImageId}.png`);
-
-        await fs.unlink(filePath);
-
-        res.json({
-            status: 'success',
-            message: 'Image deleted successfully'
-        });
-    } catch (error) {
-        if (error.code === 'ENOENT') {
-            return res.status(404).json({ status: 'error', message: 'Image not found' });
-        }
-        res.status(500).json({
-            status: 'error',
-            message: error.message
-        });
-    }
-});
 
 app.get('/health', (req, res) => {
     res.json({ status: 'ok' });

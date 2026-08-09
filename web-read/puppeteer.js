@@ -150,42 +150,6 @@ function createMcpServer() {
   return server;
 }
 
-app.post('/scrape', async (req, res) => {
-  const { url } = req.body;
-
-  if (!url) {
-    return res.status(400).json({ error: 'URL is required' });
-  }
-
-  try {
-    const data = await scrapePage(url);
-    res.json(data);
-  } catch (error) {
-    console.error('Error:', error);
-    res.status(500).json({ error: 'An error occurred while scraping the page' });
-  }
-});
-
-// 网页截图：用 Puppeteer 无头浏览器对任意 URL 截图，返回 PNG base64。
-// body: { url, width?, height?, fullPage?, delay?, waitUntil? }
-// 控制器页面使用 WebSocket + 每秒轮询 /api/tick，waitUntil 默认 domcontentloaded
-// （networkidle2 会因轮询永不空闲），再用 delay 等前端完成渲染。
-app.post('/screenshot', async (req, res) => {
-  const { url, width = 1680, height = 1000, fullPage = false, delay = 3000, waitUntil = 'domcontentloaded' } = req.body || {};
-
-  if (!url) {
-    return res.status(400).json({ status: 'error', message: 'URL is required' });
-  }
-
-  try {
-    const shot = await screenshotPage({ url, width, height, fullPage, delay, waitUntil });
-    res.json({ status: 'success', format: 'png', ...shot });
-  } catch (error) {
-    console.error('Screenshot error:', error);
-    res.status(500).json({ status: 'error', message: (error && error.message) ? error.message : String(error) });
-  }
-});
-
 // 启动服务器
 app.listen(port, host, () => {
   console.log(`Server is running on http://localhost:${port}`);

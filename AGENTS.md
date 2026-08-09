@@ -53,7 +53,7 @@ aibackend help                         # 查看所有命令
 ### 后端 token/监听 IP
 后端读取 `AIPLUGIN4_BACKEND_HOST`（默认 `0.0.0.0`）与 `AIPLUGIN4_BACKEND_TOKEN`（默认空）。token 非空时校验请求头 `Authorization: Bearer <token>` 或 `X-Token: <token>`，否则 401。六个后端均已实现（Flask/FastAPI 中间件、express 中间件、mcp-files-exec 的 ASGI 包装）。
 
-`web-read` 与 `md-html-render` 同时提供 **MCP（Streamable HTTP，挂 `/mcp`，每会话一个 McpServer 实例）** 与 REST 兼容路由：MCP 工具为 `scrape_url` / `screenshot_url`（web-read）、`render_markdown` / `render_html`（md-html-render，返回 PNG base64 文本）；token 中间件对 `/mcp` 同样生效。注意 `/mcp` 必须在 `express.json()` 之前注册，让 transport 自行解析原始 body。
+`web-read` 与 `md-html-render` 仅提供 **MCP（Streamable HTTP，挂 `/mcp`，每会话一个 McpServer 实例）**，已移除 REST 路由：工具为 `scrape_url` / `screenshot_url`（web-read）、`render_markdown` / `render_html`（md-html-render，返回 PNG base64 文本）；token 中间件对 `/mcp` 同样生效。注意 `/mcp` 必须在 `express.json()` 之前注册，让 transport 自行解析原始 body。
 
 ### 更新（`aibackend update` / WebUI「⬆ 更新」）
 `launcher.update_project()`：记录旧 HEAD → `git pull --ff-only` → HEAD 未变则 `updated=False`（前端弹「没有可以更新的」）；有更新则用 `_update_changelog()` 收集 CHANGELOG.md 里「旧 HEAD 没有且高于当前 VERSION」的版本段落，取不到则退回 `git log`。

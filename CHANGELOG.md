@@ -13,7 +13,7 @@
 - WebUI 右上角新增「🔄 重启 WebUI」按钮与 `webui-restart` 命令：重启后重新加载后端清单，新增/修改后端或代码更新后无需手动重启
 - 修复「⬆ 更新」按钮未携带 WebUI token 导致 401 的问题，改用统一带 token 的请求
 - WebUI：「⬆ 更新」点击后转圈、更新成功 2 秒后自动重启 WebUI；后端卡片按依赖是否就绪排序；新增「🙈 隐藏未装依赖」开关（状态本地记住）
-- web-read 与 md-html-render 接入 MCP（Streamable HTTP，挂 `/mcp`）：工具 `scrape_url`/`screenshot_url`、`render_markdown`/`render_html`；原 REST 路由保留兼容
+- web-read 与 md-html-render 改为仅 MCP 服务（Streamable HTTP，挂 `/mcp`）：工具 `scrape_url`/`screenshot_url`、`render_markdown`/`render_html`；REST 路由已移除
 
 ## 0.9.0 - 2026-08-07
 

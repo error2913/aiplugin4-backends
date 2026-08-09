@@ -105,8 +105,6 @@ python launcher.py service-uninstall    # 停止并移除服务
 
 - 默认端口 46799（Node / Express）
 - MCP（Streamable HTTP）：`http://127.0.0.1:46799/mcp`，工具 `scrape_url`（抓取文本）、`screenshot_url`（网页截图返回 PNG base64）
-- 接口：`POST /scrape`，body `{url}`，返回 `{title, content, links}`
-  - `POST /screenshot`：body `{url, width?, height?, fullPage?, delay?}`，返回 `{status, base64, ...}`
 - 依赖：`express`、`puppeteer`（需要 Chromium，Linux 下 launcher 自动检测并补齐系统库）
 
 ### md-html-render — Markdown / HTML 渲染为图片
@@ -115,10 +113,6 @@ python launcher.py service-uninstall    # 停止并移除服务
 
 - 默认端口 37632（Node / Express）
 - MCP（Streamable HTTP）：`http://127.0.0.1:37632/mcp`，工具 `render_markdown` / `render_html`（返回 PNG base64）
-- 接口：
-  - `POST /render/markdown`：body `{markdown, theme?, width?, quality?, hasImages?}`，返回 `{imageId, base64, ...}`
-  - `POST /render/html`：body `{html, theme?, width?, quality?, hasImages?}`，返回同结构
-  - `GET /images/<imageId>.png`：取图；`DELETE /images/<imageId>`：删图；`GET /health`：健康检查
 - 依赖：`express`、`puppeteer`、`marked`（需要 Chromium）
 
 ### mcp-files-exec — MCP 文件与命令执行
