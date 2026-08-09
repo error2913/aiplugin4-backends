@@ -53,6 +53,62 @@ app.post('/scrape', async (req, res) => {
   }
 });
 
+// 网页截图：用 Puppeteer 无头浏览器对任意 URL 截图，返回 PNG base64。
+// body: { url, width?, height?, fullPage?, delay?, waitUntil? }
+// 控制器页面使用 WebSocket + 每秒轮询 /api/tick，waitUntil 默认 domcontentloaded
+// （networkidle2 会因轮询永不空闲），再用 delay 等前端完成渲染。
+app.post('/screenshot', async (req, res) => {
+  const { url, width = 1680, height = 1000, fullPage = false, delay = 3000, waitUntil = 'domcontentloaded' } = req.body || {};
+
+  if (!url) {
+    return res.status(400).json({ status: 'error', message: 'URL is required' });
+  }
+
+  let browser;
+  try {
+    browser = await puppeteer.launch({
+      headless: true,
+      args: ['--no-sandbox', '--disable-setuid-sandbox']
+    });
+
+    const page = await browser.newPage();
+    await page.setViewport({
+      width: Number(width) || 1680,
+      height: Number(height) || 1000,
+      deviceScaleFactor: 1
+    });
+
+    await page.goto(url, { waitUntil: waitUntil, timeout: 60000 });
+
+    const waitMs = Number(delay) || 0;
+    if (waitMs > 0) {
+      await new Promise(r => setTimeout(r, waitMs));
+    }
+
+    const base64 = await page.screenshot({
+      type: 'png',
+      encoding: 'base64',
+      fullPage: !!fullPage
+    });
+
+    res.json({
+      status: 'success',
+      format: 'png',
+      base64,
+      width: Number(width) || 1680,
+      height: Number(height) || 1000,
+      fullPage: !!fullPage
+    });
+  } catch (error) {
+    console.error('Screenshot error:', error);
+    res.status(500).json({ status: 'error', message: (error && error.message) ? error.message : String(error) });
+  } finally {
+    if (browser) {
+      await browser.close();
+    }
+  }
+});
+
 // 启动服务器
 app.listen(port, host, () => {
   console.log(`Server is running on http://localhost:${port}`);
