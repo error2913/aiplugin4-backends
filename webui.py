@@ -204,8 +204,9 @@ PAGE = """<!DOCTYPE html>
     <div class="header-right">
       <button id="themeBtn" onclick="cycleTheme()">主题</button>
       <button onclick="openToken()">🔑 Token</button>
-      <button onclick="updateNow()">⬆ 更新</button>
+      <button id="updateBtn" onclick="updateNow()">⬆ 更新</button>
       <button onclick="restartWebUI()">🔄 重启 WebUI</button>
+      <button id="hideDepsBtn" onclick="toggleHideNoDeps()">🙈 隐藏未装依赖</button>
       <button onclick="refresh()">⟳ 刷新</button>
     </div>
   </header>
@@ -313,6 +314,8 @@ let allTargets = [];
 let allDone = 0;
 const TOKEN_TTL_MS = 365 * 24 * 60 * 60 * 1000;  // 登录后记住一年
 let loggedIn = false;
+let updating = false;
+let hideNoDeps = localStorage.getItem('hide_no_deps') === '1';
 function esc(s){ return (s||'').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
 function fmtUptime(s){
   if (s == null) return '—';
@@ -402,11 +405,14 @@ async function saveServerToken(){
   toast('WebUI token 已更新并立即生效');
   refresh();
 }
-async function restartWebUI(){
-  if (!confirm('确定重启 WebUI 吗？会短暂断开连接，约 2 秒后自动刷新。')) return;
+async function doRestartWebUI(){
   try { await api('/api/webui-restart', 'POST'); } catch(e){}
   toast('正在重启 WebUI，稍后自动刷新...');
   setTimeout(() => location.reload(), 2500);
+}
+async function restartWebUI(){
+  if (!confirm('确定重启 WebUI 吗？会短暂断开连接，约 2 秒后自动刷新。')) return;
+  await doRestartWebUI();
 }
 function applyTheme(){
   const t = localStorage.getItem('theme') || 'auto';
@@ -421,7 +427,9 @@ function cycleTheme(){
 }
 async function refresh(){
   const j = await api('/api/backends');
-  const list = j.backends;
+  let list = (j.backends || []).slice();
+  if (hideNoDeps) list = list.filter(b => b.deps_ready);
+  list.sort((a, b) => (a.deps_ready ? 0 : 1) - (b.deps_ready ? 0 : 1));  // 依赖已装的项目排前面
   document.getElementById('stTotal').textContent = list.length;
   document.getElementById('stRun').textContent = list.filter(b => b.running).length;
   document.getElementById('grid').innerHTML = list.length ? list.map(b => `
@@ -517,14 +525,34 @@ async function allAct(act){
   refresh();
 }
 async function updateNow(){
+  if (updating) return;
+  updating = true;
+  const btn = document.getElementById('updateBtn');
+  btn.innerHTML = '<span class="spin"></span>更新中';
+  btn.disabled = true;
   try {
     const j = await api('/api/update', 'POST');
     if (!j.ok){ showAlert('更新失败：\\n\\n' + (j.output || j.message || '')); return; }
     if (!j.updated){ showAlert('没有可以更新的'); return; }
-    showAlert('更新完成：\\n\\n' + (j.changelog || j.output || '已拉取更新'));
+    showAlert('更新完成：\\n\\n' + (j.changelog || j.output || '已拉取更新') + '\\n\\n2 秒后自动重启 WebUI');
+    setTimeout(doRestartWebUI, 2000);
   } catch(e){
     if (!(e && e.message === '需要 WebUI token')) showAlert('更新失败：' + e.message);
+  } finally {
+    updating = false;
+    btn.innerHTML = '⬆ 更新';
+    btn.disabled = false;
   }
+}
+function toggleHideNoDeps(){
+  hideNoDeps = !hideNoDeps;
+  localStorage.setItem('hide_no_deps', hideNoDeps ? '1' : '0');
+  updateHideDepsBtn();
+  refresh();
+}
+function updateHideDepsBtn(){
+  const btn = document.getElementById('hideDepsBtn');
+  if (btn) btn.textContent = hideNoDeps ? '🙈 显示全部' : '🙈 隐藏未装依赖';
 }
 function showAlert(msg){
   document.getElementById('alertBody').textContent = msg;
@@ -602,6 +630,7 @@ async function loadLog(){
 }
 document.addEventListener('keydown', e => { if (e.key === 'Escape'){ closeLog(); closeAlert(); closeConfig(); closeToken(); } });
 applyTheme();
+updateHideDepsBtn();
 setInterval(() => { if (loggedIn) refresh().catch(() => {}); }, 1000);
 (async () => {
   if (getStoredToken()) {

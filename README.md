@@ -144,6 +144,8 @@ assets/                WebUI 图标
 
 右上角「🔄 重启 WebUI」可让管理界面重新加载后端清单（新增/修改后端、代码更新后无需手动重启进程）；命令行等价 `launcher.py webui-restart` / `aibackend webui-restart`。
 
+「⬆ 更新」点击后按钮转圈，更新成功会在 2 秒后自动重启 WebUI 使新代码生效；后端卡片按「依赖已装 → 未装」排序，右上角「🙈 隐藏未装依赖」可只显示依赖就绪的后端。
+
 ## 命令行（aibackend）
 
 安装 `aibackend` 命令（写入用户 PATH，重新打开终端后即可在任意目录使用）：
