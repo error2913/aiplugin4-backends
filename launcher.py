@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-aiplugin4 后端管理入口（仅依赖 Python 标准库）。
+错误后端（aiplugin4-backends）管理入口（仅依赖 Python 标准库）。
 
 直接运行本脚本：自动检查/安装 WebUI 自身依赖，然后启动 Web 管理界面
 （默认监听 0.0.0.0，端口与访问 token 首次运行随机生成），后端安装、启停、
@@ -29,8 +29,11 @@ from dataclasses import dataclass
 
 BACKENDS_DIR = os.path.dirname(os.path.abspath(__file__))
 ROOT_DIR = BACKENDS_DIR  # launcher 位于仓库根目录
+PACKAGES_DIR = os.path.join(BACKENDS_DIR, "backends")  # 后端程序包目录（按需下载/卸载）
+INSTALLED_DIR = os.path.join(BACKENDS_DIR, "installed")  # 已安装后端运行目录（gitignore，卸载即删）
 CONFIG_FILE = os.path.join(BACKENDS_DIR, "launcher.json")
 MANIFEST_FILE = "backend.json"
+REGISTRY_FILE = "backends.json"  # 后端注册表（索引：名称/介绍/版本/下载源）
 DEFAULT_LOG_DIR = "logs"
 RUNTIME_FILE = ".runtime.json"
 WEBUI_PID_FILE = os.path.join(ROOT_DIR, "logs", "webui.pid")
@@ -38,7 +41,7 @@ VENV_DIR_NAME = ".venv"
 DEPS_MARKER = ".deps_ready"
 
 # 打包时排除的目录/文件
-EXCLUDE_DIRS = {"logs", "node_modules", "__pycache__", ".venv", "venv", "dist", ".git", "lang-data", "cache"}
+EXCLUDE_DIRS = {"logs", "node_modules", "__pycache__", ".venv", "venv", "dist", ".git", "lang-data", "cache", "backends"}
 EXCLUDE_SUFFIXES = (".pyc", ".pyo")
 EXCLUDE_FILES = {".runtime.json"}  # 本机运行态配置，不进发布包
 
@@ -51,6 +54,7 @@ class Backend:
     entry: str
     deps: str
     port: int
+    version: str
     dir: str
 
 
@@ -81,7 +85,7 @@ def save_runtime(runtime: dict) -> None:
 
 
 def backend_config(backend: Backend) -> dict:
-    """后端运行配置：端口/token/监听IP，优先 .runtime.json（端口兼容旧版 ports 字段）"""
+    """后端运行配置：端口/token/监听IP + 自定义配置项，优先 .runtime.json（端口兼容旧版 ports 字段）"""
     rt = load_runtime()
     cfg = rt.get("config", {}).get(backend.name) or {}
     port = cfg.get("port")
@@ -91,11 +95,12 @@ def backend_config(backend: Backend) -> dict:
         "port": int(port),
         "token": str(cfg.get("token") or ""),
         "host": str(cfg.get("host") or "0.0.0.0"),
+        "options": dict(cfg.get("options") or {}),
     }
 
 
-def save_backend_config(name: str, port=None, token=None, host=None) -> dict:
-    """保存后端运行配置到 .runtime.json（只更新传入字段），端口同步旧版 ports 字段"""
+def save_backend_config(name: str, port=None, token=None, host=None, options: dict = None) -> dict:
+    """保存后端运行配置到 .runtime.json（只更新传入字段），端口同步旧版 ports 字段；options 为自定义配置项"""
     rt = load_runtime()
     cfg = rt.setdefault("config", {}).setdefault(name, {})
     if port is not None:
@@ -105,8 +110,20 @@ def save_backend_config(name: str, port=None, token=None, host=None) -> dict:
         cfg["token"] = str(token)
     if host is not None:
         cfg["host"] = str(host) or "0.0.0.0"
+    if options is not None:
+        cfg["options"] = {str(k): str(v) for k, v in options.items() if v is not None and str(v) != ""}
     save_runtime(rt)
     return cfg
+
+
+def backend_custom_config(backend: Backend) -> dict:
+    """backend.json 声明的自定义配置 schema：{key: {label, type, default, env}}"""
+    try:
+        with open(os.path.join(backend.dir, MANIFEST_FILE), encoding="utf-8") as f:
+            data = json.load(f)
+        return dict(data.get("config") or {})
+    except (OSError, ValueError):
+        return {}
 
 
 def effective_port(backend: Backend) -> int:
@@ -121,6 +138,7 @@ def effective_webui_port() -> int:
     port = rt.get("webui", {}).get("port")
     if not port:
         reserved = {b.port for b in discover_backends()}
+        reserved |= {int(item.get("port", 0)) for item in load_registry() if item.get("port")}
         while True:
             port = 10000 + secrets.randbelow(55536)  # 10000-65535
             if port not in reserved:
@@ -247,8 +265,9 @@ def configure_webui_token(value=None) -> str:
 
 def discover_backends() -> list:
     backends = []
-    for entry in sorted(os.listdir(BACKENDS_DIR)):
-        manifest = os.path.join(BACKENDS_DIR, entry, MANIFEST_FILE)
+    os.makedirs(INSTALLED_DIR, exist_ok=True)
+    for entry in sorted(os.listdir(INSTALLED_DIR)):
+        manifest = os.path.join(INSTALLED_DIR, entry, MANIFEST_FILE)
         if not os.path.isfile(manifest):
             continue
         with open(manifest, encoding="utf-8") as f:
@@ -260,9 +279,20 @@ def discover_backends() -> list:
             entry=data.get("entry", ""),
             deps=data.get("deps", ""),
             port=int(data.get("port", 0)),
-            dir=os.path.join(BACKENDS_DIR, entry),
+            version=str(data.get("version", "") or ""),
+            dir=os.path.join(INSTALLED_DIR, entry),
         ))
     return backends
+
+
+def load_registry() -> list:
+    """读取根目录 backends.json 注册表（可下载后端索引）；文件缺失返回空列表"""
+    try:
+        with open(os.path.join(BACKENDS_DIR, REGISTRY_FILE), encoding="utf-8") as f:
+            data = json.load(f)
+        return list(data.get("backends", []))
+    except (OSError, ValueError):
+        return []
 
 
 def venv_python_path(backend_dir: str) -> str:
@@ -281,9 +311,11 @@ def deps_hash(backend: Backend) -> str:
 
 
 def ensure_venv(backend: Backend) -> str:
-    """为 python 后端创建/复用独立 venv 并按需安装依赖，返回 venv 内的 python 路径"""
+    """为 python 后端创建/复用独立 venv 并按需安装依赖，返回 venv 内的 python 路径；
+    依赖清单变化时重建整个 venv，保证依赖不多不少"""
     py = venv_python_path(backend.dir)
-    marker = os.path.join(backend.dir, VENV_DIR_NAME, DEPS_MARKER)
+    venv_dir = os.path.join(backend.dir, VENV_DIR_NAME)
+    marker = os.path.join(venv_dir, DEPS_MARKER)
     current = deps_hash(backend)
     if os.path.isfile(py):
         try:
@@ -292,35 +324,82 @@ def ensure_venv(backend: Backend) -> str:
                     return py
         except OSError:
             pass
-        print(f"[launcher] {backend.name} 依赖清单有变化，重新安装")
+        print(f"[launcher] {backend.name} 依赖清单有变化，重建虚拟环境（保证依赖不多不少）...")
+        remove_backend_deps(backend)
     else:
         print(f"[launcher] {backend.name} 首次运行，创建独立虚拟环境...")
-        subprocess.check_call([sys.executable, "-m", "venv", os.path.join(backend.dir, VENV_DIR_NAME)])
+    subprocess.check_call([sys.executable, "-m", "venv", venv_dir], **_no_window_kwargs())
     if not current:
         print(f"[launcher] 跳过 {backend.name}: 缺少 {backend.deps}")
     else:
-        subprocess.check_call([py, "-m", "pip", "install", "-r", os.path.join(backend.dir, backend.deps)])
+        for attempt in (1, 2):
+            try:
+                proc = subprocess.run(
+                    [py, "-m", "pip", "install", "-r", os.path.join(backend.dir, backend.deps)],
+                    capture_output=True,
+                    text=True,
+                    encoding="utf-8",
+                    errors="replace",
+                    timeout=600,
+                    **_no_window_kwargs(),
+                )
+                if proc.returncode != 0:
+                    print(f"[launcher] pip 失败输出:\n{(proc.stdout or '')[-2000:]}\n{(proc.stderr or '')[-2000:]}")
+                    raise subprocess.CalledProcessError(proc.returncode, proc.args)
+                break
+            except subprocess.CalledProcessError:
+                if attempt == 2:
+                    raise
+                print(f"[launcher] pip 安装失败（网络抖动？），2 秒后重试一次...")
+                time.sleep(2)
     with open(marker, "w", encoding="utf-8") as f:
         f.write(current)
     return py
 
 
+def node_deps_hash(backend: Backend) -> str:
+    """node 后端依赖指纹：package.json + package-lock.json 的 md5"""
+    h = hashlib.md5()
+    for name in ("package.json", "package-lock.json"):
+        try:
+            with open(os.path.join(backend.dir, name), "rb") as f:
+                h.update(f.read())
+        except OSError:
+            pass
+    return h.hexdigest()
+
+
 def ensure_node(backend: Backend) -> str:
-    """为 node 后端确保依赖就绪（node_modules 存在且安装标记齐全，否则 npm install）"""
+    """为 node 后端确保依赖就绪；依赖清单变化时删除 node_modules 重建（有 lockfile 用 npm ci，保证不多不少）"""
     node_modules = os.path.join(backend.dir, "node_modules")
     marker = os.path.join(node_modules, ".install_ok")
+    current = node_deps_hash(backend)
     if os.path.isfile(marker):
-        return "node"
+        try:
+            with open(marker, encoding="utf-8") as f:
+                if f.read().strip() == current:
+                    return "node"
+        except OSError:
+            pass
+    if os.path.isdir(node_modules):
+        root = os.path.realpath(backend.dir)
+        real = os.path.realpath(node_modules)
+        if os.path.commonpath([root, real]) == root:
+            print(f"[launcher] {backend.name} 依赖清单有变化，重建 node_modules...")
+            shutil.rmtree(real, ignore_errors=True)
     print(f"[launcher] {backend.name} 首次运行或依赖不完整，npm install...")
     npm = "npm.cmd" if os.name == "nt" else "npm"  # Windows 下 npm 是 .cmd 垫片
-    subprocess.check_call([npm, "install"], cwd=backend.dir)
+    if os.path.isfile(os.path.join(backend.dir, "package-lock.json")):
+        subprocess.check_call([npm, "ci"], cwd=backend.dir, **_no_window_kwargs())
+    else:
+        subprocess.check_call([npm, "install"], cwd=backend.dir, **_no_window_kwargs())
     with open(marker, "w", encoding="utf-8") as f:
-        f.write("ok")
+        f.write(current)
     return "node"
 
 
 def deps_ready(backend: Backend) -> bool:
-    """后端依赖是否已就绪：python 后端看 venv 解释器与 .deps_ready 标记，node 后端看 node_modules/.install_ok"""
+    """后端依赖是否已就绪：python 后端看 venv 解释器与 .deps_ready 标记，node 后端看 node_modules/.install_ok 指纹"""
     if backend.type == "python":
         py = venv_python_path(backend.dir)
         marker = os.path.join(backend.dir, VENV_DIR_NAME, DEPS_MARKER)
@@ -331,7 +410,14 @@ def deps_ready(backend: Backend) -> bool:
                 return f.read().strip() == deps_hash(backend)
         except OSError:
             return False
-    return os.path.isfile(os.path.join(backend.dir, "node_modules", ".install_ok"))
+    marker = os.path.join(backend.dir, "node_modules", ".install_ok")
+    if not os.path.isfile(marker):
+        return False
+    try:
+        with open(marker, encoding="utf-8") as f:
+            return f.read().strip() == node_deps_hash(backend)
+    except OSError:
+        return False
 
 
 def process_memory(pid):
@@ -494,6 +580,7 @@ def _chrome_executable(backend: Backend) -> str:
             capture_output=True,
             text=True,
             timeout=60,
+            **_no_window_kwargs(),
         )
         return (out.stdout or "").strip()
     except Exception:  # noqa: BLE001
@@ -503,7 +590,7 @@ def _chrome_executable(backend: Backend) -> str:
 def _missing_chromium_libs(chrome: str) -> list:
     """ldd 检查 Chromium 缺少哪些共享库（'not found' 行）"""
     try:
-        out = subprocess.run(["ldd", chrome], capture_output=True, text=True, timeout=60)
+        out = subprocess.run(["ldd", chrome], capture_output=True, text=True, timeout=60, **_no_window_kwargs())
     except Exception:  # noqa: BLE001
         return []
     missing = []
@@ -636,6 +723,11 @@ class Supervisor:
         env["AIPLUGIN4_BACKEND_PORT"] = str(cfg["port"])
         env["AIPLUGIN4_BACKEND_HOST"] = cfg["host"]
         env["AIPLUGIN4_BACKEND_TOKEN"] = cfg["token"]
+        # 自定义配置项注入（backend.json config 声明的 env）
+        for key, field in backend_custom_config(backend).items():
+            env_name = field.get("env")
+            if env_name:
+                env[env_name] = str(cfg["options"].get(key, field.get("default", "")) or "")
         kwargs = {}
         if os.name == "nt":
             kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW  # 无控制台父进程（webui/后台模式）下不弹黑框
@@ -744,6 +836,96 @@ def setup_backend(backend: Backend) -> None:
         ensure_node(backend)
 
 
+def registry_entry(name: str) -> dict:
+    for item in load_registry():
+        if item.get("name") == name:
+            return item
+    raise ValueError(f"注册表中不存在后端: {name}")
+
+
+def download_backend_files(entry: dict, backend_dir: str) -> None:
+    """按注册表从远端下载后端程序文件到 backends/<name>；远端不可用时回退到本地同目录文件"""
+    name = entry.get("name", "")
+    source = (entry.get("source") or "").rstrip("/") or (
+        f"https://raw.githubusercontent.com/error2913/aiplugin4-backends/main/backends/{name}"
+    )
+    files = entry.get("files") or []
+    os.makedirs(backend_dir, exist_ok=True)
+    for rel in files:
+        rel = rel.replace("\\", "/").lstrip("/")
+        if not rel or os.path.normpath(rel).startswith(".."):
+            continue
+        dest = os.path.join(backend_dir, *rel.split("/"))
+        os.makedirs(os.path.dirname(dest), exist_ok=True)
+        fetched = False
+        try:
+            import urllib.request
+
+            with urllib.request.urlopen(f"{source}/{rel}", timeout=60) as resp:
+                data = resp.read()
+            if data:
+                with open(dest, "wb") as f:
+                    f.write(data)
+                fetched = True
+        except Exception:  # noqa: BLE001
+            fetched = False
+        if not fetched and not os.path.isfile(dest):
+            raise RuntimeError(f"下载后端文件失败且本地无副本: {name}/{rel}")
+
+
+def install_backend(name: str) -> Backend:
+    """安装后端：从商店 backends/<name> 选择性复制到 installed/<name>（商店缺文件时从远端下载）→ 安装依赖；返回 Backend"""
+    entry = registry_entry(name)
+    backend_dir = os.path.join(INSTALLED_DIR, name)
+    source_dir = os.path.join(PACKAGES_DIR, name)
+    files = entry.get("files") or []
+    copied = 0
+    if os.path.isdir(source_dir):
+        for rel in files:
+            rel = rel.replace("\\", "/").lstrip("/")
+            if not rel or os.path.normpath(rel).startswith(".."):
+                continue
+            src = os.path.join(source_dir, *rel.split("/"))
+            dst = os.path.join(backend_dir, *rel.split("/"))
+            if os.path.isfile(src):
+                os.makedirs(os.path.dirname(dst), exist_ok=True)
+                shutil.copy2(src, dst)
+                copied += 1
+    if copied < len(files):
+        download_backend_files(entry, backend_dir)
+    manifest = os.path.join(backend_dir, MANIFEST_FILE)
+    if not os.path.isfile(manifest):
+        with open(manifest, "w", encoding="utf-8") as f:
+            json.dump(entry, f, ensure_ascii=False, indent=2)
+    backend = Backend(
+        name=entry.get("name", name),
+        description=entry.get("description", ""),
+        type=entry.get("type", "python"),
+        entry=entry.get("entry", ""),
+        deps=entry.get("deps", ""),
+        port=int(entry.get("port", 0)),
+        version=str(entry.get("version", "") or ""),
+        dir=backend_dir,
+    )
+    print(f"[launcher] 安装后端 {name}，安装依赖...")
+    try:
+        setup_backend(backend)
+    except Exception:
+        shutil.rmtree(backend_dir, ignore_errors=True)  # 安装失败：清掉半成品，回到未安装状态
+        raise
+    print(f"[launcher] 后端 {name} 安装完成")
+    return backend
+
+
+def remove_backend_dir(name: str) -> None:
+    """卸载：只删除 installed/<name>（程序 + 依赖），git 商店里的包不动"""
+    real = os.path.realpath(os.path.join(INSTALLED_DIR, name))
+    root = os.path.realpath(INSTALLED_DIR)
+    if os.path.commonpath([root, real]) != root or os.path.basename(real) != name:
+        raise ValueError(f"拒绝删除非已安装后端目录: {real}")
+    shutil.rmtree(real, ignore_errors=True)
+
+
 def read_version() -> str:
     # 读取仓库根目录的 VERSION 文件（发版时由 release 流程写入标签版本）
     version_file = os.path.join(ROOT_DIR, "VERSION")
@@ -763,7 +945,7 @@ def ensure_webui_deps() -> None:
     if not os.path.isfile(req):
         return
     print("[launcher] 安装 WebUI 依赖...")
-    subprocess.check_call([sys.executable, "-m", "pip", "install", "-r", req])
+    subprocess.check_call([sys.executable, "-m", "pip", "install", "-r", req], **_no_window_kwargs())
 
 
 def launch_webui(backends, config, supervisor, host: str = None, port: int = None, open_browser: bool = True) -> None:
@@ -1095,6 +1277,122 @@ def _update_changelog(old_head: str, new_head: str) -> str:
     return log or "已拉取更新"
 
 
+_UPDATE_CHECK_CACHE = {"ts": 0.0, "data": {}}
+_UPDATE_CHECK_RUNNING = False
+
+
+def _git_remote_branch() -> str:
+    """远端默认分支（origin/HEAD），取不到时回退 main"""
+    try:
+        out = subprocess.run(
+            ["git", "symbolic-ref", "--short", "refs/remotes/origin/HEAD"],
+            cwd=ROOT_DIR,
+            capture_output=True,
+            text=True,
+            timeout=15,
+            **_no_window_kwargs(),
+        )
+        ref = (out.stdout or "").strip()
+        if ref:
+            return ref.rsplit("/", 1)[-1]
+    except Exception:  # noqa: BLE001
+        pass
+    return "main"
+
+
+def _git_show(path: str) -> str:
+    branch = _git_remote_branch()
+    try:
+        out = subprocess.run(
+            ["git", "show", f"origin/{branch}:{path}"],
+            cwd=ROOT_DIR,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=15,
+            **_no_window_kwargs(),
+        )
+        return (out.stdout or "") if out.returncode == 0 else ""
+    except Exception:  # noqa: BLE001
+        return ""
+
+
+def refresh_update_check() -> dict:
+    """git fetch 后对比本地/远端后端版本与仓库提交，返回更新检查结果（网络失败返回空）"""
+    branch = _git_remote_branch()
+    try:
+        subprocess.run(
+            ["git", "fetch", "origin", branch, "--quiet"],
+            cwd=ROOT_DIR,
+            capture_output=True,
+            text=True,
+            timeout=60,
+            **_no_window_kwargs(),
+        )
+    except Exception:  # noqa: BLE001
+        return {}
+    result = {"repo_update": False, "backends": {}}
+    try:
+        head = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=ROOT_DIR,
+            capture_output=True,
+            text=True,
+            timeout=15,
+            **_no_window_kwargs(),
+        ).stdout.strip()
+        remote = subprocess.run(
+            ["git", "rev-parse", f"origin/{branch}"],
+            cwd=ROOT_DIR,
+            capture_output=True,
+            text=True,
+            timeout=15,
+            **_no_window_kwargs(),
+        ).stdout.strip()
+        result["repo_update"] = bool(head and remote and head != remote)
+    except Exception:  # noqa: BLE001
+        pass
+    for backend in discover_backends():
+        rel = os.path.relpath(os.path.join(backend.dir, MANIFEST_FILE), ROOT_DIR).replace(os.sep, "/")
+        remote_v = ""
+        try:
+            remote_text = _git_show(rel)
+            if remote_text:
+                remote_v = str(json.loads(remote_text).get("version", "") or "")
+        except (ValueError, TypeError):
+            remote_v = ""
+        result["backends"][backend.name] = {
+            "local": backend.version,
+            "remote": remote_v,
+            "available": bool(backend.version and remote_v and backend.version != remote_v),
+        }
+    return result
+
+
+def update_check(force: bool = False) -> dict:
+    """带缓存的更新检查：60 秒内复用结果；过期时后台刷新（force=True 同步刷新）"""
+    global _UPDATE_CHECK_RUNNING
+    now = time.time()
+    if force:
+        _UPDATE_CHECK_CACHE["data"] = refresh_update_check()
+        _UPDATE_CHECK_CACHE["ts"] = now
+        return _UPDATE_CHECK_CACHE["data"]
+    if now - _UPDATE_CHECK_CACHE["ts"] > 60 and not _UPDATE_CHECK_RUNNING:
+        _UPDATE_CHECK_RUNNING = True
+
+        def _worker():
+            global _UPDATE_CHECK_RUNNING
+            try:
+                _UPDATE_CHECK_CACHE["data"] = refresh_update_check()
+                _UPDATE_CHECK_CACHE["ts"] = time.time()
+            finally:
+                _UPDATE_CHECK_RUNNING = False
+
+        threading.Thread(target=_worker, daemon=True).start()
+    return _UPDATE_CHECK_CACHE["data"]
+
+
 def _package_files():
     """遍历要打包的文件，返回 (绝对路径, 包内相对路径) 列表"""
     for root, dirs, files in os.walk(BACKENDS_DIR):
@@ -1146,13 +1444,16 @@ def ensure_cli_installed() -> None:
 def main() -> None:
     parser = argparse.ArgumentParser(
         prog="launcher",
-        description="aiplugin4 后端管理：直接运行本脚本启动 WebUI",
+        description="错误后端（aiplugin4-backends）管理：直接运行本脚本启动 WebUI",
     )
     sub = parser.add_subparsers(dest="command")
     sub.add_parser("list", help="列出后端与启用/运行状态")
     setup_p = sub.add_parser("setup", help="安装依赖（幂等，python 后端装入独立 venv）")
     setup_p.add_argument("names", nargs="*")
     setup_p.add_argument("--all", action="store_true", help="安装全部后端")
+    install_b_p = sub.add_parser("install-backend", help="安装后端：下载程序文件并安装依赖")
+    install_b_p.add_argument("name")
+    sub.add_parser("uninstall-backend", help="卸载后端：停止并删除程序与依赖").add_argument("name")
     port_p = sub.add_parser("port", help="查看/修改后端端口（重启后端生效）")
     port_p.add_argument("name")
     port_p.add_argument("value", nargs="?", help="新端口(1-65535)，或 reset 恢复默认")
@@ -1213,6 +1514,22 @@ def main() -> None:
             return
         for backend in targets:
             setup_backend(backend)
+        return
+
+    if args.command == "install-backend":
+        try:
+            install_backend(args.name)
+        except Exception as e:  # noqa: BLE001
+            print(f"[launcher] 安装失败: {e}", file=sys.stderr)
+            sys.exit(1)
+        return
+
+    if args.command == "uninstall-backend":
+        backend = find([args.name])[0]
+        supervisor.stop([backend])
+        time.sleep(1)
+        remove_backend_dir(args.name)
+        print(f"[launcher] 已卸载后端: {args.name}")
         return
 
     if args.command == "port":

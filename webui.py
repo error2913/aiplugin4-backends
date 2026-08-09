@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-aiplugin4 后端管理 Web 界面（纯 Python 标准库，无第三方依赖）。
+错误后端（aiplugin4-backends）Web 管理界面（纯 Python 标准库，无第三方依赖）。
 
 由 launcher.py 直接启动：
   python launcher.py
@@ -25,20 +25,28 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from launcher import (
     _can_open_browser,
+    _no_window_kwargs,
     DEFAULT_LOG_DIR,
+    ROOT_DIR,
     Supervisor,
+    backend_custom_config,
     backend_config,
-    effective_webui_port,
     deps_ready,
+    discover_backends,
+    effective_webui_port,
     effective_webui_host,
     effective_webui_token,
+    load_registry,
     load_runtime,
     process_memory,
     remove_backend_deps,
+    remove_backend_dir,
     reset_webui_token,
     save_backend_config,
     save_runtime,
     save_webui_token,
+    setup_backend,
+    update_check,
     update_project,
 )
 
@@ -48,7 +56,7 @@ PAGE = """<!DOCTYPE html>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <link rel="icon" href="/icon-256.png" type="image/png">
-    <title>aiplugin4 后端管理</title>
+<title>错误后端管理</title>
 <style>
   :root {
     --bg: #eef1f6; --panel: #ffffff; --panel-2: #f4f6fa;
@@ -157,6 +165,8 @@ PAGE = """<!DOCTYPE html>
   button.loading { opacity: .8; cursor: progress; }
   .spin { display: inline-block; width: 11px; height: 11px; border: 2px solid currentColor; border-top-color: transparent; border-radius: 50%; margin-right: 6px; vertical-align: -1px; animation: rot .8s linear infinite; }
   @keyframes rot { to { transform: rotate(360deg); } }
+  #updateBtn { position: relative; }
+  .red-dot { position: absolute; top: 3px; right: 3px; width: 8px; height: 8px; border-radius: 50%; background: #ef4444; box-shadow: 0 0 6px rgba(239,68,68,.8); }
   .modal {
     position: fixed; inset: 0; background: rgba(5,8,12,.55); backdrop-filter: blur(4px);
     display: none; align-items: center; justify-content: center; z-index: 50; padding: 24px;
@@ -185,7 +195,7 @@ PAGE = """<!DOCTYPE html>
 <body>
 <div id="loginScreen" style="position:fixed; inset:0; background:var(--bg); display:flex; align-items:center; justify-content:center; z-index:100;">
   <div style="width:min(360px,92vw); background:var(--panel); border:1px solid var(--border); border-radius:14px; padding:28px; display:grid; gap:14px; text-align:center; box-shadow:0 12px 32px var(--shadow);">
-    <div style="font-size:20px; font-weight:700;">aiplugin4 后端管理</div>
+    <div style="font-size:20px; font-weight:700;">错误后端管理</div>
     <div style="color:var(--muted); font-size:13px;">请输入 WebUI token（登录后记住一年）</div>
     <input id="loginToken" type="password" spellcheck="false" autocomplete="off" placeholder="访问 token"
            style="width:100%; padding:10px 12px; border:1px solid var(--border); border-radius:9px; background:var(--panel-2); color:var(--text); font-size:14px; outline:none;"
@@ -196,17 +206,16 @@ PAGE = """<!DOCTYPE html>
 </div>
 <div class="wrap">
   <header>
-    <img class="logo" src="/icon-256.png" alt="aiplugin4">
+    <img class="logo" src="/icon-256.png" alt="错误后端">
     <div>
-      <h1>aiplugin4 后端管理</h1>
+      <h1>错误后端管理</h1>
       <div class="sub">launcher WebUI</div>
     </div>
     <div class="header-right">
-      <button id="themeBtn" onclick="cycleTheme()">主题</button>
       <button onclick="openToken()">🔑 Token</button>
-      <button id="updateBtn" onclick="updateNow()">⬆ 更新</button>
+      <button id="updateBtn" onclick="updateNow()">⬆ 更新<span id="updateDot" class="red-dot" style="display:none"></span></button>
       <button onclick="restartWebUI()">🔄 重启 WebUI</button>
-      <button id="hideDepsBtn" onclick="toggleHideNoDeps()">🙈 隐藏未装依赖</button>
+      <button id="hideDepsBtn" onclick="toggleHideNoDeps()">🙈 隐藏未装后端</button>
       <button onclick="refresh()">⟳ 刷新</button>
     </div>
   </header>
@@ -268,6 +277,7 @@ PAGE = """<!DOCTYPE html>
       <label class="cfg-label">监听 IP
         <input id="cfgHost" class="port" type="text" spellcheck="false" placeholder="0.0.0.0">
       </label>
+      <div id="cfgCustom" style="display:grid; gap:16px;"></div>
     </div>
     <div style="padding:12px 18px; text-align:right; border-top:1px solid var(--border); display:flex; gap:8px; justify-content:flex-end;">
       <button onclick="closeConfig()">取消</button>
@@ -302,7 +312,10 @@ PAGE = """<!DOCTYPE html>
   </div>
 </div>
 <div id="toast"></div>
-<footer>aiplugin4-backends · launcher.py webui</footer>
+<footer style="display:flex; align-items:center; justify-content:space-between;">
+  <span>aiplugin4-backends · launcher.py webui</span>
+  <button id="themeBtn" onclick="cycleTheme()" style="margin-left:10px;">主题</button>
+</footer>
 <script>
 let current = null;
 let currentType = 'backend';
@@ -427,9 +440,14 @@ function cycleTheme(){
 }
 async function refresh(){
   const j = await api('/api/backends');
+  const updMap = (j.updates && j.updates.backends) || {};
+  const updSet = new Set();
+  for (const k in updMap) if (updMap[k].available) updSet.add(k);
+  const dot = document.getElementById('updateDot');
+  if (dot) dot.style.display = (j.updates && j.updates.repo_update) ? 'inline-block' : 'none';
   let list = (j.backends || []).slice();
-  if (hideNoDeps) list = list.filter(b => b.deps_ready);
-  list.sort((a, b) => (a.deps_ready ? 0 : 1) - (b.deps_ready ? 0 : 1));  // 依赖已装的项目排前面
+  if (hideNoDeps) list = list.filter(b => b.installed);
+  list.sort((a, b) => (a.installed ? 0 : 1) - (b.installed ? 0 : 1));  // 已安装的项目排前面
   document.getElementById('stTotal').textContent = list.length;
   document.getElementById('stRun').textContent = list.filter(b => b.running).length;
   document.getElementById('grid').innerHTML = list.length ? list.map(b => `
@@ -437,32 +455,34 @@ async function refresh(){
       <div class="row1">
         <span class="name">${esc(b.name)}</span>
         <span class="badge ${b.type === 'python' ? 'py' : 'node'}">${esc(b.type).toUpperCase()}</span>
-        <span class="status ${b.running ? 'on' : 'off'}"><span class="dot ${b.running ? 'on' : ''}"></span>${b.running ? '运行中' : '已停止'}</span>
+        <span class="status ${b.running ? 'on' : 'off'}"><span class="dot ${b.running ? 'on' : ''}"></span>${!b.installed ? '未安装' : b.running ? '运行中' : '已停止'}</span>
       </div>
       <div class="desc">${esc(b.description)}</div>
       <div class="meta">
-        <button class="mini" onclick="openConfig('${b.name}')" title="端口 / token / 监听IP">⚙ 配置</button>
+        ${b.version ? `<span class="chip idle" title="版本号">v${esc(b.version)}</span>` : ''}
         ${b.token ? `<span class="chip token" title="访问 token">🔑 ${esc(b.token)}</span>` : ''}
         ${b.running && b.pid ? `<span class="chip idle">pid ${b.pid}</span>` : ''}
       </div>
       <div class="meta">
-        <span class="chip idle">⏱ ${b.running ? fmtUptime(b.uptime_secs) : '未运行'}</span>
-        <span class="chip idle">🔄 自动拉起 ${b.restarts} 次</span>
-        ${b.running && b.mem_mb != null ? `<span class="chip idle">💾 ${b.mem_mb}MB / ${b.mem_pct}%</span>` : ''}
+        ${b.installed ? `<span class="chip idle">⏱ ${b.running ? fmtUptime(b.uptime_secs) : '未运行'}</span>` : ''}
+        ${b.installed ? `<span class="chip idle">🔄 自动拉起 ${b.restarts} 次</span>` : ''}
+        ${b.installed && b.running && b.mem_mb != null ? `<span class="chip idle">💾 ${b.mem_mb}MB / ${b.mem_pct}%</span>` : ''}
       </div>
       <div class="ops">
-        ${installing.has(b.name)
-          ? `<button class="primary loading" disabled><span class="spin"></span>安装中</button>`
+        ${!b.installed
+          ? installing.has(b.name)
+            ? `<button class="primary loading" disabled><span class="spin"></span>安装中</button><button onclick="showInstallLog('${b.name}')">日志</button>`
+            : `<button class="primary" onclick="installNow('${b.name}')">安装</button>`
           : b.running
-            ? `<button class="danger" onclick="run('${b.name}','stop')">停止</button>`
-            : b.deps_ready
-              ? `<button class="primary" onclick="run('${b.name}','start')">启动</button>`
-              : `<button class="primary" onclick="setupNow('${b.name}')">安装依赖</button>`}
-        <button onclick="showLog('${b.name}')">日志</button>
-        ${b.deps_ready
+            ? `<button class="danger" onclick="run('${b.name}','stop')">停止</button><button onclick="restartBackend('${b.name}')">重启</button>`
+            : `<button class="primary" onclick="run('${b.name}','start')">启动</button>`}
+        ${b.installed ? `<button onclick="openConfig('${b.name}')">配置</button>` : ''}
+        ${b.installed && updSet.has(b.name) ? `<button class="primary" onclick="updateBackend('${b.name}')">⬆ 更新</button>` : ''}
+        ${b.installed ? `<button onclick="showLog('${b.name}')">日志</button>` : ''}
+        ${b.installed
           ? deleting.has(b.name)
-            ? `<button class="danger loading" disabled><span class="spin"></span>删除中</button>`
-            : `<button class="danger" onclick="delDeps('${b.name}')">删除依赖</button>`
+            ? `<button class="danger loading" disabled><span class="spin"></span>卸载中</button><button onclick="showInstallLog('${b.name}')">日志</button>`
+            : `<button class="danger" onclick="uninstallBackend('${b.name}')">卸载</button>`
           : ''}
       </div>
     </div>`).join('') : '<div class="empty">暂无已收录的后端 — 放入含 <code>backend.json</code> 的后端目录后会自动出现在这里</div>';
@@ -514,7 +534,55 @@ async function pollInstall(name){
     await new Promise(r => setTimeout(r, 1200));
   }
 }
-async function run(name, act){ await api('/api/' + act + '/' + name, 'POST'); toast(act==='start' ? '已启动：' + name : '已停止：' + name); refresh(); }
+async function run(name, act){
+  try {
+    await api('/api/' + act + '/' + name, 'POST');
+    toast(act==='start' ? '已启动：' + name : '已停止：' + name);
+  } catch(e){
+    if (!(e && e.message === '需要 WebUI token')) showAlert((act==='start' ? '启动' : '停止') + '失败：' + e.message);
+  }
+  refresh();
+}
+async function restartBackend(name){
+  await api('/api/restart/' + name, 'POST');
+  toast('已重启：' + name);
+  refresh();
+}
+async function updateBackend(name){
+  try {
+    const j = await api('/api/update-backend/' + name, 'POST');
+    toast(j.updated ? '已更新并重启：' + name : '没有可更新的：' + name);
+  } catch(e){
+    if (!(e && e.message === '需要 WebUI token')) showAlert('更新失败：' + e.message);
+  }
+  refresh();
+}
+async function uninstallBackend(name){
+  if (!confirm('确定卸载后端「' + name + '」吗？会停止进程并删除已安装的程序与依赖（git 商店里的包不受影响）。')) return;
+  deleting.add(name);
+  refresh();
+  showInstallLog(name);
+  try {
+    await api('/api/uninstall/' + name, 'POST');
+    await pollInstall(name);
+    toast('已卸载：' + name);
+  } catch(e){
+    if (!(e && e.message === '需要 WebUI token')) showAlert('卸载失败：' + e.message);
+  }
+  deleting.delete(name);
+  refresh();
+}
+async function installNow(name){
+  installing.add(name);
+  refresh();
+  showInstallLog(name);
+  try {
+    await api('/api/install/' + name, 'POST');
+    await pollInstall(name);
+  } catch(e){}
+  installing.delete(name);
+  refresh();
+}
 async function allAct(act){
   const j = await api('/api/' + act + '-all', 'POST');
   if ((act === 'start' || act === 'restart') && j.started && j.started.length === 0 && j.skipped && j.skipped.length){
@@ -534,7 +602,7 @@ async function updateNow(){
     const j = await api('/api/update', 'POST');
     if (!j.ok){ showAlert('更新失败：\\n\\n' + (j.output || j.message || '')); return; }
     if (!j.updated){ showAlert('没有可以更新的'); return; }
-    showAlert('更新完成：\\n\\n' + (j.changelog || j.output || '已拉取更新') + '\\n\\n2 秒后自动重启 WebUI');
+    showAlertHtml('更新完成：<br><br>' + fmtChangelog(j.changelog || j.output || '已拉取更新') + '<br><span style="color:var(--muted)">后端已一并重启，2 秒后自动重启 WebUI</span>');
     setTimeout(doRestartWebUI, 2000);
   } catch(e){
     if (!(e && e.message === '需要 WebUI token')) showAlert('更新失败：' + e.message);
@@ -552,11 +620,28 @@ function toggleHideNoDeps(){
 }
 function updateHideDepsBtn(){
   const btn = document.getElementById('hideDepsBtn');
-  if (btn) btn.textContent = hideNoDeps ? '🙈 显示全部' : '🙈 隐藏未装依赖';
+  if (btn) btn.textContent = hideNoDeps ? '🙈 显示全部' : '🙈 隐藏未装后端';
 }
 function showAlert(msg){
   document.getElementById('alertBody').textContent = msg;
   document.getElementById('alertModal').classList.add('open');
+}
+function showAlertHtml(html){
+  document.getElementById('alertBody').innerHTML = html;
+  document.getElementById('alertModal').classList.add('open');
+}
+function fmtChangelog(text){
+  const lines = (text || '').split('\\n');
+  let html = '';
+  for (const raw of lines){
+    const line = raw.trim();
+    if (!line) { html += '<br>'; continue; }
+    if (line.startsWith('## ')) html += '<b style="font-size:14px;color:var(--text)">' + esc(line.slice(3)) + '</b><br>';
+    else if (line.startsWith('### ')) html += '<b>' + esc(line.slice(4)) + '</b><br>';
+    else if (line.startsWith('- ')) html += '• ' + esc(line.slice(2)) + '<br>';
+    else html += esc(line) + '<br>';
+  }
+  return html;
 }
 function closeAlert(){ document.getElementById('alertModal').classList.remove('open'); }
 async function setupAll(){
@@ -587,6 +672,23 @@ async function openConfig(name){
   document.getElementById('cfgPort').value = j.port;
   document.getElementById('cfgToken').value = j.token || '';
   document.getElementById('cfgHost').value = j.host || '0.0.0.0';
+  const box = document.getElementById('cfgCustom');
+  box.innerHTML = '';
+  const schema = j.config_schema || {};
+  const opts = j.options || {};
+  for (const key in schema){
+    const f = schema[key];
+    const label = document.createElement('label');
+    label.className = 'cfg-label';
+    label.textContent = f.label || key;
+    const input = document.createElement('input');
+    input.className = 'port';
+    input.type = f.type === 'number' ? 'number' : 'text';
+    input.value = opts[key] != null ? opts[key] : (f.default || '');
+    input.dataset.cfgKey = key;
+    label.appendChild(input);
+    box.appendChild(label);
+  }
   document.getElementById('configModal').classList.add('open');
 }
 function closeConfig(){
@@ -603,7 +705,11 @@ async function saveConfig(){
   const token = document.getElementById('cfgToken').value.trim();
   const host = document.getElementById('cfgHost').value.trim() || '0.0.0.0';
   if (!port || port < 1 || port > 65535){ toast('端口必须是 1-65535'); return; }
-  await api('/api/config/' + cfgName, 'POST', JSON.stringify({port, token, host}));
+  const options = {};
+  document.querySelectorAll('#cfgCustom input[data-cfg-key]').forEach(inp => {
+    options[inp.dataset.cfgKey] = inp.value.trim();
+  });
+  await api('/api/config/' + cfgName, 'POST', JSON.stringify({port, token, host, options}));
   toast('配置已保存：' + cfgName + '（重启后端生效）');
   closeConfig();
   refresh();
@@ -653,8 +759,8 @@ def run_webui(backends, config, supervisor: Supervisor, host: str = None, port: 
     setup_state = {}  # name -> {"lines": [...], "running": bool, "failed": bool}
     setup_lock = threading.Lock()
 
-    def start_setup(name: str) -> None:
-        """后台执行 launcher.py setup <name>，日志实时追加到 setup_state；已在运行时直接复用"""
+    def start_setup(name: str, words: tuple = ("setup",)) -> None:
+        """后台执行 launcher.py <words> <name>（setup / install-backend），日志实时追加；已在运行时直接复用"""
         with setup_lock:
             if setup_state.get(name, {}).get("running"):
                 return
@@ -672,7 +778,7 @@ def run_webui(backends, config, supervisor: Supervisor, host: str = None, port: 
                 if os.name == "nt":
                     kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW  # 后台安装，不弹控制台黑框
                 proc = subprocess.Popen(
-                    [sys.executable, script, "setup", name],
+                    [sys.executable, script, *words, name],
                     cwd=os.path.dirname(script),
                     stdout=subprocess.PIPE,
                     stderr=subprocess.STDOUT,
@@ -704,6 +810,14 @@ def run_webui(backends, config, supervisor: Supervisor, host: str = None, port: 
                         st["failed"] = not ok
 
         threading.Thread(target=run_setup, daemon=True).start()
+
+    def start_install(name: str) -> None:
+        """后台安装后端：launcher.py install-backend <name>（下载程序 + 安装依赖）"""
+        start_setup(name, words=("install-backend",))
+
+    def start_uninstall(name: str) -> None:
+        """后台卸载后端：launcher.py uninstall-backend <name>（停进程 + 删 installed/<name>）"""
+        start_setup(name, words=("uninstall-backend",))
 
     def _restart_webui() -> None:
         """响应返回后延迟触发：由独立进程先停旧 WebUI 再启动新 WebUI（重新加载后端清单）"""
@@ -757,6 +871,9 @@ def run_webui(backends, config, supervisor: Supervisor, host: str = None, port: 
                 return {}
 
         def do_GET(self):
+            nonlocal backends, by_name
+            backends = discover_backends()
+            by_name = {b.name: b for b in backends}
             if self.path not in ("/", "/icon.png", "/icon-256.png") and not self._authorized():
                 self._err("unauthorized", 401)
                 return
@@ -764,6 +881,7 @@ def run_webui(backends, config, supervisor: Supervisor, host: str = None, port: 
                 body = PAGE.encode("utf-8")
                 self.send_response(200)
                 self.send_header("Content-Type", "text/html; charset=utf-8")
+                self.send_header("Cache-Control", "no-store")
                 self.send_header("Content-Length", str(len(body)))
                 self.end_headers()
                 self.wfile.write(body)
@@ -813,6 +931,7 @@ def run_webui(backends, config, supervisor: Supervisor, host: str = None, port: 
                         "name": b.name,
                         "description": b.description,
                         "type": b.type,
+                        "version": b.version,
                         "port": cfg["port"],
                         "host": cfg["host"],
                         "token": cfg["token"],
@@ -823,9 +942,33 @@ def run_webui(backends, config, supervisor: Supervisor, host: str = None, port: 
                         "mem_mb": mem_mb,
                         "mem_pct": mem_pct,
                         "deps_ready": deps_ready(b),
+                        "installed": deps_ready(b),  # 程序 + 依赖都就绪才算已安装
                         "pid": info.get("pid"),
                     })
-                self._json({"ok": True, "backends": rows})
+                installed_names = {b.name for b in backends}
+                for item in load_registry():
+                    name = item.get("name")
+                    if not name or name in installed_names:
+                        continue
+                    rows.append({
+                        "name": name,
+                        "description": item.get("description", ""),
+                        "type": item.get("type", "python"),
+                        "version": str(item.get("version", "") or ""),
+                        "port": int(item.get("port", 0)),
+                        "host": "",
+                        "token": "",
+                        "default_port": int(item.get("port", 0)),
+                        "running": False,
+                        "uptime_secs": None,
+                        "restarts": 0,
+                        "mem_mb": None,
+                        "mem_pct": None,
+                        "deps_ready": False,
+                        "installed": False,
+                        "pid": None,
+                    })
+                self._json({"ok": True, "backends": rows, "updates": update_check()})
                 return
             if self.path.startswith("/api/config/"):
                 name = self.path[len("/api/config/"):]
@@ -834,7 +977,19 @@ def run_webui(backends, config, supervisor: Supervisor, host: str = None, port: 
                     self._err(f"未知后端: {name}", 404)
                     return
                 cfg = backend_config(backend)
-                self._json({"ok": True, "port": cfg["port"], "token": cfg["token"], "host": cfg["host"], "default_port": backend.port})
+                schema = backend_custom_config(backend)
+                options = {}
+                for key, field in schema.items():
+                    options[key] = cfg["options"].get(key, field.get("default", ""))
+                self._json({
+                    "ok": True,
+                    "port": cfg["port"],
+                    "token": cfg["token"],
+                    "host": cfg["host"],
+                    "default_port": backend.port,
+                    "options": options,
+                    "config_schema": schema,
+                })
                 return
             if self.path.startswith("/api/setup-log/"):
                 name = self.path[len("/api/setup-log/"):]
@@ -856,6 +1011,9 @@ def run_webui(backends, config, supervisor: Supervisor, host: str = None, port: 
             self._err("not found", 404)
 
         def do_POST(self):
+            nonlocal backends, by_name
+            backends = discover_backends()
+            by_name = {b.name: b for b in backends}
             if not self._authorized():
                 self._err("unauthorized", 401)
                 return
@@ -914,6 +1072,21 @@ def run_webui(backends, config, supervisor: Supervisor, host: str = None, port: 
                 if path == "/api/update":
                     try:
                         res = update_project()
+                        if res["updated"]:
+                            # 更新成功：先停全部 → 同步依赖（清单变化会重建，保证不多不少）→ 再启动
+                            supervisor.stop(backends)
+                            time.sleep(0.5)
+                            for b in backends:
+                                try:
+                                    setup_backend(b)
+                                except Exception as e:  # noqa: BLE001
+                                    print(f"[webui] 后端 {b.name} 依赖同步失败，跳过启动: {e}")
+                            targets = [b for b in backends if deps_ready(b)]
+                            for name in targets:
+                                if name in supervisor.state.setdefault("stopped", []):
+                                    supervisor.state["stopped"].remove(name)
+                            supervisor._save_state()
+                            supervisor.start(targets)
                         self._json({
                             "ok": True,
                             "message": "updated" if res["updated"] else "no-update",
@@ -941,8 +1114,23 @@ def run_webui(backends, config, supervisor: Supervisor, host: str = None, port: 
                         return
                     token = str(body.get("token", "") or "")
                     host = str(body.get("host", "") or "0.0.0.0")
-                    cfg = save_backend_config(name, port=value, token=token, host=host)
-                    self._json({"ok": True, "port": cfg["port"], "token": cfg["token"], "host": cfg["host"]})
+                    options = {}
+                    raw_options = body.get("options") or {}
+                    for key, field in backend_custom_config(backend).items():
+                        if key not in raw_options:
+                            continue
+                        val = str(raw_options[key]).strip()
+                        if field.get("type") == "number" and val:
+                            try:
+                                int(val)
+                            except ValueError:
+                                self._err(f"配置项「{field.get('label', key)}」必须是数字", 400)
+                                return
+                        if not val:
+                            val = str(field.get("default", "") or "")
+                        options[key] = val
+                    cfg = save_backend_config(name, port=value, token=token, host=host, options=options)
+                    self._json({"ok": True, "port": cfg["port"], "token": cfg["token"], "host": cfg["host"], "options": options})
                     return
                 if path.startswith("/api/port/"):
                     rest = path[len("/api/port/"):]
@@ -978,6 +1166,10 @@ def run_webui(backends, config, supervisor: Supervisor, host: str = None, port: 
                 parts = path.strip("/").split("/")
                 if len(parts) == 3 and parts[0] == "api":
                     action, name = parts[1], parts[2]
+                    if action == "install":
+                        start_install(name)
+                        self._json({"ok": True, "message": "install started"})
+                        return
                     backend = by_name.get(name)
                     if not backend:
                         self._err(f"未知后端: {name}", 404)
@@ -1003,6 +1195,43 @@ def run_webui(backends, config, supervisor: Supervisor, host: str = None, port: 
                     if action == "stop":
                         supervisor.stop([backend])
                         self._json({"ok": True})
+                        return
+                    if action == "restart":
+                        supervisor.stop([backend])
+                        if name in supervisor.state.get("stopped", []):
+                            supervisor.state["stopped"].remove(name)
+                            supervisor._save_state()
+                        time.sleep(0.5)
+                        supervisor.start([backend])
+                        self._json({"ok": True, "message": "restarted"})
+                        return
+                    if action == "update-backend":
+                        try:
+                            res = update_project()
+                        except Exception as e:  # noqa: BLE001
+                            self._json({"ok": False, "message": str(e)})
+                            return
+                        if supervisor.is_running(name):
+                            supervisor.stop([backend])
+                        try:
+                            setup_backend(backend)  # 始终同步依赖，清单变化会重建环境
+                        except Exception as e:  # noqa: BLE001
+                            self._json({"ok": False, "message": f"依赖同步失败: {e}"})
+                            return
+                        if name in supervisor.state.get("stopped", []):
+                            supervisor.state["stopped"].remove(name)
+                            supervisor._save_state()
+                        supervisor.start([backend])
+                        self._json({
+                            "ok": True,
+                            "updated": res["updated"],
+                            "message": "updated" if res["updated"] else "no-update",
+                            "deps_ready": deps_ready(backend),
+                        })
+                        return
+                    if action == "uninstall":
+                        start_uninstall(name)
+                        self._json({"ok": True, "message": "uninstall started"})
                         return
                 self._err("not found", 404)
             except Exception as e:  # noqa: BLE001

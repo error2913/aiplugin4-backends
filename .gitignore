@@ -8,3 +8,4 @@ __pycache__/
 *.pyo
 temp_images/
 generated_images/
+installed/

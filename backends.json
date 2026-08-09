@@ -1,0 +1,70 @@
+{
+  "backends": [
+    {
+      "name": "image-url-to-base64",
+      "description": "图片 URL 转 base64（自动识别格式，静态 GIF 转 PNG）",
+      "type": "python",
+      "entry": "urltobase64.py",
+      "deps": "requirements.txt",
+      "port": 46678,
+      "version": "1.0.0",
+      "source": "https://raw.githubusercontent.com/error2913/aiplugin4-backends/main/backends/image-url-to-base64",
+      "files": ["backend.json", "requirements.txt", "urltobase64.py"]
+    },
+    {
+      "name": "mcp-files-exec",
+      "description": "MCP：AI 读写文件与执行受限命令（沙箱 + 命令拦截 + 审计日志）",
+      "type": "python",
+      "entry": "mcp_files_exec.py",
+      "deps": "requirements.txt",
+      "port": 3910,
+      "version": "1.0.0",
+      "source": "https://raw.githubusercontent.com/error2913/aiplugin4-backends/main/backends/mcp-files-exec",
+      "files": ["backend.json", "mcp_files_exec.py", "requirements.txt"]
+    },
+    {
+      "name": "md-html-render",
+      "description": "Markdown/HTML 渲染为图片（MCP，支持 LaTeX 与多主题）",
+      "type": "node",
+      "entry": "render.js",
+      "deps": "package.json",
+      "port": 37632,
+      "version": "1.0.0",
+      "source": "https://raw.githubusercontent.com/error2913/aiplugin4-backends/main/backends/md-html-render",
+      "files": ["backend.json", "package.json", "render.js"]
+    },
+    {
+      "name": "stream-output",
+      "description": "流式输出中转（SSE 分块/轮询）",
+      "type": "python",
+      "entry": "stream_backend.py",
+      "deps": "requirements.txt",
+      "port": 3010,
+      "version": "1.0.0",
+      "source": "https://raw.githubusercontent.com/error2913/aiplugin4-backends/main/backends/stream-output",
+      "files": ["backend.json", "requirements.txt", "stream_backend.py"]
+    },
+    {
+      "name": "usage-chart",
+      "description": "token 用量图表（年/月视图）",
+      "type": "python",
+      "entry": "usage_chart.py",
+      "deps": "requirements.txt",
+      "port": 3009,
+      "version": "1.0.0",
+      "source": "https://raw.githubusercontent.com/error2913/aiplugin4-backends/main/backends/usage-chart",
+      "files": ["backend.json", "requirements.txt", "usage_chart.py"]
+    },
+    {
+      "name": "web-read",
+      "description": "网页 URL 内容读取与截图（MCP）",
+      "type": "node",
+      "entry": "puppeteer.js",
+      "deps": "package.json",
+      "port": 46799,
+      "version": "1.0.0",
+      "source": "https://raw.githubusercontent.com/error2913/aiplugin4-backends/main/backends/web-read",
+      "files": ["backend.json", "package.json", "puppeteer.js", "fonts/ScreenCJK.ttf"]
+    }
+  ]
+}

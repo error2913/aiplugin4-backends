@@ -14,6 +14,11 @@
 - 修复「⬆ 更新」按钮未携带 WebUI token 导致 401 的问题，改用统一带 token 的请求
 - WebUI：「⬆ 更新」点击后转圈、更新成功 2 秒后自动重启 WebUI；后端卡片按依赖是否就绪排序；新增「🙈 隐藏未装依赖」开关（状态本地记住）
 - web-read 与 md-html-render 改为仅 MCP 服务（Streamable HTTP，挂 `/mcp`）：工具 `scrape_url`/`screenshot_url`、`render_markdown`/`render_html`；REST 路由已移除
+- 后端独立分发：商店 `backends/<名称>/` + 注册表 `backends.json` + 运行目录 `installed/`；安装=复制/下载程序+装依赖，卸载只删运行副本（`install-backend` / `uninstall-backend` 命令）
+- 后端卡片状态机（未安装/安装中/运行中/卸载中，异步转圈+日志）、版本号显示与后端更新检查、删除后端
+- 依赖精确同步：依赖清单变化自动重建 venv / `npm ci`（node 有 lockfile 时）
+- 自定义后端配置：`backend.json` 声明 `config` schema（label/type/default/env），WebUI 配置弹窗编辑并注入环境变量
+- WebUI 页面禁用缓存（no-store）、主题按钮移至右下角、修复 PAGE 内 JS 反斜杠转义
 
 ## 0.9.0 - 2026-08-07
 
