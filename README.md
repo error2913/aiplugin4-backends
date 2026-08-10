@@ -9,8 +9,7 @@ aiplugin4 的配套后端服务：流式输出、图片转 base64、用量图表
 - [快速开始](#快速开始)
 - [跨平台](#跨平台)
 - [Linux 系统服务](#linux-系统服务)
-- [后端列表](#后端列表)
-- [后端介绍](#后端介绍)
+- [后端文档](#后端文档)
 - [目录结构](#目录结构)
 - [管理方式](#管理方式)
 - [命令行（aibackend）](#命令行aibackend)
@@ -61,73 +60,9 @@ python launcher.py service-uninstall    # 停止并移除服务
 
 服务前台运行，日志通过 `journalctl -u aiplugin4-webui -f` 查看；安装服务前会自动停掉已有后台 WebUI 以释放端口。
 
-## 后端列表
+## 后端文档
 
-后端源码位于 `backends/<名称>/`（商店目录，随仓库分发，发布包不含），由根目录 `backends.json` 注册表索引（名称/版本/下载源）。在 WebUI 或命令行「安装」后，程序与依赖才会出现在 `installed/<名称>/` 运行目录（已 gitignore）。
-
-| 目录 | 服务 | 默认端口 | 类型 |
-| --- | --- | --- | --- |
-| `stream-output` | 流式输出中转（SSE 分块/轮询） | 3010 | Python |
-| `image-url-to-base64` | 图片 URL 转 base64 | 46678 | Python |
-| `usage-chart` | token 用量图表 | 3009 | Python |
-| `web-read` | 网页 URL 内容读取 | 46799 | Node |
-| `md-html-render` | Markdown/HTML 渲染为图片 | 37632 | Node |
-| `mcp-files-exec` | MCP：AI 读写文件与执行受限命令（沙箱 + 拦截） | 3910 | Python |
-
-## 后端介绍
-
-### stream-output — 流式输出中转
-
-代理 OpenAI 兼容接口，把流式输出按符号/长度切成片段，前端可实时轮询出打字机效果，结束后返回用量统计。
-
-- 默认端口 3010（Python / FastAPI），接口：
-  - `POST /start`：body `{url, api_key, body_obj}`（`body_obj` 为 chat.completions 参数），返回任务 `{id}`
-  - `GET /poll?id=<id>`：轮询已生成的分块
-  - `GET /end?id=<id>`：结束任务，返回片段与 usage
-- 依赖：`fastapi`、`openai`、`tiktoken`、`uvicorn`
-
-### image-url-to-base64 — 图片 URL 转 base64
-
-下载图片并转成 base64，自动识别格式（jpg / png / gif / webp），静态 GIF 自动转成 PNG。
-
-- 默认端口 46678（Python / Flask）
-- 接口：`POST /image-to-base64`，body `{url}`，返回 `{base64, format}`
-- 依赖：`flask`、`Pillow`、`imageio`、`requests`
-
-### usage-chart — token 用量图表
-
-按月/年聚合数据生成图表图片，返回临时图片 URL（约 120 秒后自动清理）。
-
-- 默认端口 3009（Python / FastAPI）
-- 接口：`POST /chart`，body `{chart_type, data}`，`chart_type` 支持 `year` / `month`，返回 `{image_url}`（图片在 `/temp_images/<file>.png`）
-- 依赖：`fastapi`、`matplotlib`、`python-dateutil`、`uvicorn`
-
-### web-read — 网页读取
-
-用 Puppeteer 无头浏览器抓取网页，返回标题、正文与页面链接。
-
-- 默认端口 46799（Node / Express）
-- MCP（Streamable HTTP）：`http://127.0.0.1:46799/mcp`，工具 `scrape_url`（抓取文本）、`screenshot_url`（网页截图返回 PNG base64）
-- 依赖：`express`、`puppeteer`（需要 Chromium，Linux 下 launcher 自动检测并补齐系统库）
-
-### md-html-render — Markdown / HTML 渲染为图片
-
-把 Markdown 或 HTML 渲染成图片，支持 LaTeX 公式、浅色/深色/渐变主题与宽度/质量参数。
-
-- 默认端口 37632（Node / Express）
-- MCP（Streamable HTTP）：`http://127.0.0.1:37632/mcp`，工具 `render_markdown` / `render_html`（返回 PNG base64）
-- 依赖：`express`、`puppeteer`、`marked`（需要 Chromium）
-
-### mcp-files-exec — MCP 文件与命令执行
-
-AI 通过 MCP 协议读写文件、执行受限命令：路径沙箱（realpath 防逃逸）、危险命令拦截、可选命令白名单、审计日志、超时强杀进程树。
-
-- 默认端口 3910（Python / FastMCP），传输 streamable-http；加 `--stdio` 切换为 stdio 传输
-- Tools：`read_file`、`write_file`（支持追加）、`run_command`
-- 环境变量：`MCP_SANDBOX_ROOTS`（沙箱根目录）、`MCP_ALLOWED_COMMANDS`（命令白名单）、`MCP_MAX_FILE_BYTES` / `MCP_MAX_OUTPUT_BYTES`（读写/输出上限）、`MCP_DEFAULT_TIMEOUT`（命令超时）、`MCP_LOG_FILE`（审计日志）
-- 依赖：`mcp`、`uvicorn`
-
-> 所有后端统一支持：卡片「⚙ 配置」可改端口、token 与监听 IP；设置 token 后请求需带 `Authorization: Bearer <token>` 或 `X-Token: <token>`，监听 IP 默认 `0.0.0.0`。
+后端清单、各后端的接口与依赖、MCP 安全模型详见 [docs/后端.md](docs/后端.md)。
 
 ## 目录结构
 
@@ -190,27 +125,3 @@ aibackend service-uninstall                 # [Linux] 停止并移除 systemd �
 ```
 
 命令行与 WebUI 共用同一套后端进程与状态（`logs/state.json`），可以混用。
-
-## MCP 文件与命令后端（mcp-files-exec）
-
-给 AI 提供 MCP 工具：读写文件、列目录、删除文件、执行受限命令。默认 `streamable-http` 传输（端口 3910），也可 `--stdio` 本地模式（供 MCP 客户端直接拉起）。
-
-工具：`read_file` / `list_dir` / `write_file` / `delete_file` / `run_command`。
-
-安全设计：
-
-- 路径沙箱：所有文件操作必须落在 `MCP_SANDBOX_ROOTS` 目录内（realpath 校验，防符号链接逃逸）
-- 命令拦截：默认按危险规则拦截（rm -rf 根目录、sudo、关机、格式化、管道下载执行、fork 炸弹等）；设置 `MCP_ALLOWED_COMMANDS` 后进入白名单模式，只放行指定前缀
-- 执行隔离：命令限定在沙箱工作目录内，超时强制终止进程树，输出截断
-- 审计日志：每次调用（含被拦截的命令）记录到 `logs/mcp-files-exec.log`
-
-环境变量：
-
-| 变量 | 说明 | 默认 |
-| --- | --- | --- |
-| `MCP_SANDBOX_ROOTS` | 允许的沙箱根目录，`os.pathsep` 分隔 | 进程当前目录 |
-| `MCP_ALLOWED_COMMANDS` | 命令白名单前缀，`os.pathsep` 分隔 | 未启用（危险规则拦截） |
-| `MCP_MAX_FILE_BYTES` | 单文件读写上限 | 1048576 |
-| `MCP_MAX_OUTPUT_BYTES` | 命令输出上限 | 1048576 |
-| `MCP_DEFAULT_TIMEOUT` | 命令默认超时（秒） | 30 |
-| `MCP_LOG_FILE` | 审计日志路径 | `logs/mcp-files-exec.log` |
