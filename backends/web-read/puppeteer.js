@@ -7,6 +7,22 @@ const { McpServer } = require('@modelcontextprotocol/sdk/server/mcp.js');
 const { StreamableHTTPServerTransport } = require('@modelcontextprotocol/sdk/server/streamableHttp.js');
 const { z } = require('zod');
 
+// 兼容 Node <19：MCP SDK（webStandardStreamableHttp.js）内部直接调用全局
+// crypto.randomUUID()，旧版 Node 没有全局 crypto，会导致 /mcp 返回
+// HTTP 400 "Parse error: crypto is not defined"。用 Node 内置的 crypto.webcrypto
+// 补齐全局对象（Node 15+ 自带 webcrypto）。
+if (typeof globalThis.crypto === 'undefined' || typeof globalThis.crypto.randomUUID !== 'function') {
+  const webcrypto = crypto.webcrypto || crypto;
+  try {
+    Object.defineProperty(globalThis, 'crypto', { value: webcrypto, configurable: true });
+  } catch (e) {
+    globalThis.crypto = webcrypto;
+  }
+  if (typeof globalThis.crypto.randomUUID !== 'function' && typeof crypto.randomUUID === 'function') {
+    globalThis.crypto.randomUUID = crypto.randomUUID;
+  }
+}
+
 const app = express();
 const port = Number(process.env.AIPLUGIN4_BACKEND_PORT || 46799);
 const host = process.env.AIPLUGIN4_BACKEND_HOST || '0.0.0.0';
