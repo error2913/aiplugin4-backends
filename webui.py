@@ -579,7 +579,12 @@ async function allAct(act){
   if ((act === 'start' || act === 'restart') && j.started && j.started.length === 0 && j.skipped && j.skipped.length){
     showAlert('后端均未安装，已全部跳过。\\n可先点右上角「安装全部」，装完后再启动。');
   } else {
-    toast(act==='start' ? '已启动全部' : act==='restart' ? '已重启全部' : '已停止全部');
+    const label = act==='start' ? '已启动全部' : act==='restart' ? '已重启全部' : '已停止全部';
+    if ((act === 'start' || act === 'restart') && j.failed && j.failed.length){
+      toast(`${label}，${j.failed.length} 个端口被占用未启动：${j.failed.join('、')}`, 6000);
+    } else {
+      toast(label);
+    }
   }
   refresh();
 }
