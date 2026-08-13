@@ -322,6 +322,7 @@ let currentType = 'backend';
 let cfgName = null;
 const installing = new Set();
 const deleting = new Set();
+const updatingBackends = new Set();
 let allInstalling = false;
 let allTargets = [];
 let allDone = 0;
@@ -477,7 +478,11 @@ async function refresh(){
             ? `<button class="danger" onclick="run('${b.name}','stop')">停止</button><button onclick="restartBackend('${b.name}')">重启</button>`
             : `<button class="primary" onclick="run('${b.name}','start')">启动</button>`}
         ${b.installed ? `<button onclick="openConfig('${b.name}')">配置</button>` : ''}
-        ${b.installed && updSet.has(b.name) ? `<button class="primary" onclick="updateBackend('${b.name}')">⬆ 更新</button>` : ''}
+        ${b.installed && updSet.has(b.name)
+          ? updatingBackends.has(b.name)
+            ? `<button class="primary loading" disabled><span class="spin"></span>更新中</button>`
+            : `<button class="primary" onclick="updateBackend('${b.name}')">⬆ 更新</button>`
+          : ''}
         ${b.installed ? `<button onclick="showLog('${b.name}')">日志</button>` : ''}
         ${b.installed
           ? deleting.has(b.name)
@@ -532,12 +537,15 @@ async function restartBackend(name){
   refresh();
 }
 async function updateBackend(name){
+  updatingBackends.add(name);
+  refresh();
   try {
     const j = await api('/api/update-backend/' + name, 'POST');
     toast(j.updated ? '已更新并重启：' + name : '没有可更新的：' + name);
   } catch(e){
     if (!(e && e.message === '需要 WebUI token')) showAlert('更新失败：' + e.message);
   }
+  updatingBackends.delete(name);
   refresh();
 }
 async function uninstallBackend(name){
