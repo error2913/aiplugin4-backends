@@ -1,0 +1,9 @@
+{
+  "name": "mcp-files-exec",
+  "description": "MCP 后端：AI 读写文件与执行受限命令（路径沙箱 + 命令拦截 + 审计）",
+  "type": "python",
+  "entry": "mcp_files_exec.py",
+  "deps": "requirements.txt",
+  "port": 3910,
+  "version": "1.0.0"
+}

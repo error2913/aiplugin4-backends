@@ -1,0 +1,16 @@
+{
+  "name": "aiplugin4-backend-web-read",
+  "version": "1.0.0",
+  "private": true,
+  "description": "aiplugin4 后端：网页 URL 内容读取",
+  "main": "puppeteer.js",
+  "scripts": {
+    "start": "node puppeteer.js"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.30.0",
+    "express": "^4.19.2",
+    "puppeteer": "^22.15.0",
+    "zod": "^3.25.0"
+  }
+}
