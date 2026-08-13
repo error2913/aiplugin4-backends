@@ -18,6 +18,7 @@ import secrets
 import shlex
 import shutil
 import signal
+import socket
 import subprocess
 import sys
 import tarfile
@@ -375,6 +376,20 @@ def node_deps_hash(backend: Backend) -> str:
     return h.hexdigest()
 
 
+def port_in_use(port: int, host: str = "0.0.0.0") -> bool:
+    """端口是否已有进程在监听（用于启动前检测未记录的残留进程）"""
+    if not port:
+        return False
+    probe = host or "127.0.0.1"
+    if probe in ("0.0.0.0", "::"):
+        probe = "127.0.0.1"
+    try:
+        with socket.create_connection((probe, int(port)), timeout=0.5):
+            return True
+    except OSError:
+        return False
+
+
 def ensure_node(backend: Backend) -> str:
     """为 node 后端确保依赖就绪；依赖清单变化时删除 node_modules 重建（有 lockfile 用 npm ci，保证不多不少）"""
     node_modules = os.path.join(backend.dir, "node_modules")
@@ -399,8 +414,10 @@ def ensure_node(backend: Backend) -> str:
         subprocess.check_call([npm, "ci"], cwd=backend.dir, **_no_window_kwargs())
     else:
         subprocess.check_call([npm, "install"], cwd=backend.dir, **_no_window_kwargs())
+    # npm install 可能生成/更新 package-lock.json，指纹以安装后的实际文件为准；
+    # 否则 deps_ready 每次都会发现漂移，导致“装好了却仍显示未安装”
     with open(marker, "w", encoding="utf-8") as f:
-        f.write(current)
+        f.write(node_deps_hash(backend))
     return "node"
 
 
@@ -667,8 +684,24 @@ class Supervisor:
             return {}
 
     def _save_state(self) -> None:
+        data = json.dumps(self.state, ensure_ascii=False, indent=2)
+        tmp = self.state_file + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            f.write(data)
+        # 原子替换，避免崩溃留下半写文件；WebUI 刷新会短暂持有读句柄，
+        # Windows 下 replace 可能被占用文件拒绝，重试几次后兜底直接覆盖写
+        for _ in range(20):
+            try:
+                os.replace(tmp, self.state_file)
+                return
+            except OSError:
+                time.sleep(0.05)
         with open(self.state_file, "w", encoding="utf-8") as f:
-            json.dump(self.state, f, ensure_ascii=False, indent=2)
+            f.write(data)
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
 
     def _reload_state(self) -> None:
         """读写前重载 state 文件，避免覆盖其他进程（stop/status）写入的内容"""
@@ -716,8 +749,15 @@ class Supervisor:
     def spawn(self, backend: Backend) -> bool:
         self._reload_state()
         if self.is_running(backend.name):
-            return False
+            return True
         cfg = backend_config(backend)
+        # 端口已被监听但 supervisor 无记录：旧会话/升级残留的孤儿进程，跳过启动并明确提示
+        if port_in_use(cfg["port"], cfg["host"]):
+            print(
+                f"[launcher] {backend.name} 端口 {cfg['port']} 已被未记录的进程占用，跳过启动"
+                "（可能是旧会话残留，请先结束占用该端口的进程再重试）"
+            )
+            return False
         log_path = os.path.join(self.log_dir, f"{backend.name}.log")
         log_file = open(log_path, "a", encoding="utf-8")
         log_file.write(f"\n===== {time.strftime('%Y-%m-%d %H:%M:%S')} 启动 {backend.name} (host {cfg['host']}, port {cfg['port']}) =====\n")
@@ -790,11 +830,15 @@ class Supervisor:
                 return
             self.spawn(backend)
 
-    def start(self, backends: list) -> None:
+    def start(self, backends: list) -> list:
+        """启动后端（已在运行视为成功）；返回因端口被未记录进程占用而启动失败的名称列表"""
+        failed = []
         for backend in backends:
             self.stop_flags[backend.name] = threading.Event()
-            self.spawn(backend)
+            if not self.spawn(backend):
+                failed.append(backend.name)
             threading.Thread(target=self._monitor, args=(backend,), daemon=True).start()
+        return failed
 
     def stop(self, backends: list) -> None:
         for backend in backends:
@@ -1740,7 +1784,9 @@ def main() -> None:
             if backend.name in supervisor.state.setdefault("stopped", []):
                 supervisor.state["stopped"].remove(backend.name)  # 手动启动清除停止标记
         supervisor._save_state()
-        supervisor.start(targets)
+        failed = supervisor.start(targets)
+        if failed:
+            print(f"[launcher] 端口被占用，跳过: {', '.join(failed)}（请先结束占用进程）")
         print("后端已启动，按 Ctrl+C 停止全部")
         try:
             while True:
