@@ -4,5 +4,6 @@
   "type": "node",
   "entry": "puppeteer.js",
   "deps": "package.json",
-  "port": 46799
+  "port": 46799,
+  "version": "1.0.0"
 }

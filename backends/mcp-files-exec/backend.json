@@ -4,5 +4,6 @@
   "type": "python",
   "entry": "mcp_files_exec.py",
   "deps": "requirements.txt",
-  "port": 3910
+  "port": 3910,
+  "version": "1.0.0"
 }

@@ -4,6 +4,7 @@
 
 ## Unreleased
 
+- 更新改为下载 GitHub release 直接覆盖，不再依赖 git（本地文件有改动也不会阻塞更新）；每个后端在 release 中有独立包并各自版本控制，后端卡片「⬆ 更新」只下载对应后端包覆盖商店并重装
 - 无图形环境（无头服务器）不再尝试自动打开浏览器，只打印访问地址；Linux/macOS 仅在检测到 `DISPLAY` / `WAYLAND_DISPLAY` 时自动开浏览器
 - WebUI 默认监听 `0.0.0.0`，端口与访问 token 首次运行随机生成；新增登录页（记住一年），API 需带 token
 - 新增 `webui-host` / `webui-token` 命令（launcher 与 aibackend），修改后自动重启 WebUI

@@ -46,6 +46,7 @@ from launcher import (
     save_webui_token,
     setup_backend,
     update_check,
+    update_backend,
     update_project,
 )
 
@@ -1174,26 +1175,21 @@ def run_webui(backends, config, supervisor: Supervisor, host: str = None, port: 
                         return
                     if action == "update-backend":
                         try:
-                            res = update_project()
+                            if supervisor.is_running(name):
+                                supervisor.stop([backend])
+                            new_backend = update_backend(name)  # 下载该后端独立包 → 覆盖商店 → 重装程序 + 同步依赖
+                            if name in supervisor.state.get("stopped", []):
+                                supervisor.state["stopped"].remove(name)
+                                supervisor._save_state()
+                            supervisor.start([new_backend])
                         except Exception as e:  # noqa: BLE001
                             self._json({"ok": False, "message": str(e)})
                             return
-                        if supervisor.is_running(name):
-                            supervisor.stop([backend])
-                        try:
-                            setup_backend(backend)  # 始终同步依赖，清单变化会重建环境
-                        except Exception as e:  # noqa: BLE001
-                            self._json({"ok": False, "message": f"依赖同步失败: {e}"})
-                            return
-                        if name in supervisor.state.get("stopped", []):
-                            supervisor.state["stopped"].remove(name)
-                            supervisor._save_state()
-                        supervisor.start([backend])
                         self._json({
                             "ok": True,
-                            "updated": res["updated"],
-                            "message": "updated" if res["updated"] else "no-update",
-                            "deps_ready": deps_ready(backend),
+                            "updated": True,
+                            "message": "updated",
+                            "deps_ready": deps_ready(new_backend),
                         })
                         return
                     if action == "uninstall":

@@ -4,5 +4,6 @@
   "type": "node",
   "entry": "render.js",
   "deps": "package.json",
-  "port": 37632
+  "port": 37632,
+  "version": "1.0.0"
 }

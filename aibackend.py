@@ -18,7 +18,7 @@
   aibackend monitor                    实时监控面板
   aibackend install-backend <后端名>    安装后端（下载程序 + 安装依赖）
   aibackend uninstall-backend <后端名>  卸载后端（停止并删除程序与依赖）
-  aibackend update                     从 Git 拉取项目更新
+  aibackend update                     从 GitHub 更新到最新版
   aibackend webui                      后台启动 Web 管理界面（不占终端）
   aibackend webui-stop                 停止后台 WebUI
   aibackend webui-restart              重启后台 WebUI（重新加载后端清单）
@@ -70,7 +70,7 @@ COMMANDS = [
     ("monitor", "实时监控面板"),
     ("install-backend", "安装后端（下载程序 + 安装依赖）"),
     ("uninstall-backend", "卸载后端（停止并删除程序与依赖）"),
-    ("update", "从 Git 拉取项目更新"),
+    ("update", "从 GitHub 更新到最新版"),
     ("webui", "后台启动 Web 管理界面（不占终端）"),
     ("webui-stop", "停止后台 WebUI"),
     ("webui-restart", "重启后台 WebUI（先停止再启动，重新加载后端清单）"),
@@ -560,7 +560,7 @@ def build_parser():
     install_b_p.add_argument("name")
     sub.add_parser("uninstall-backend", help="卸载后端（停止并删除程序与依赖）").add_argument("name")
 
-    sub.add_parser("update", help="从 Git 拉取项目更新")
+    sub.add_parser("update", help="从 GitHub 更新到最新版")
 
     webui_p = sub.add_parser("webui", help="启动 Web 管理界面")
     webui_p.add_argument("--host", default=None)

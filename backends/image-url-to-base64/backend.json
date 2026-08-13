@@ -4,5 +4,6 @@
   "type": "python",
   "entry": "urltobase64.py",
   "deps": "requirements.txt",
-  "port": 46678
+  "port": 46678,
+  "version": "1.0.0"
 }

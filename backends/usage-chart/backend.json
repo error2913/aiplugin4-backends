@@ -4,5 +4,6 @@
   "type": "python",
   "entry": "usage_chart.py",
   "deps": "requirements.txt",
-  "port": 3009
+  "port": 3009,
+  "version": "1.0.0"
 }

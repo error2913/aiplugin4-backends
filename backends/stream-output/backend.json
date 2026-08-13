@@ -4,5 +4,6 @@
   "type": "python",
   "entry": "stream_backend.py",
   "deps": "requirements.txt",
-  "port": 3010
+  "port": 3010,
+  "version": "1.0.0"
 }

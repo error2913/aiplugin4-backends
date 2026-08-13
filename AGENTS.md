@@ -58,13 +58,13 @@ aibackend help                         # 查看所有命令
 `web-read` 与 `md-html-render` 仅提供 **MCP（Streamable HTTP，挂 `/mcp`，每会话一个 McpServer 实例）**，已移除 REST 路由：工具为 `scrape_url` / `screenshot_url`（web-read）、`render_markdown` / `render_html`（md-html-render，返回 PNG base64 文本）；token 中间件对 `/mcp` 同样生效。注意 `/mcp` 必须在 `express.json()` 之前注册，让 transport 自行解析原始 body。
 
 ### 更新（`aibackend update` / WebUI「⬆ 更新」）
-`launcher.update_project()`：记录旧 HEAD → `git pull --ff-only` → HEAD 未变则 `updated=False`（前端弹「没有可以更新的」）；有更新则用 `_update_changelog()` 收集 CHANGELOG.md 里「旧 HEAD 没有且高于当前 VERSION」的版本段落，取不到则退回 `git log`。
+更新不依赖 git：`launcher.update_project()` 查询 GitHub 最新 release（`_latest_release()`），tag 高于本地 `read_version()` 才下载本体包 `aiplugin4-backends-<版本>.zip` 解压覆盖仓库根目录（`_extract_update_zip()` 跳过 `installed/`、`logs/`、`backends/`、`dist/`、`.git/`、`.runtime.json`）；无新版本返回 `updated=False`（前端弹「没有可以更新的」）。后端各自有独立包（`aiplugin4-backends-<后端名>-<版本>.zip`），`launcher.update_backend(name)` 按注册表版本找对应资产下载解压覆盖商店 `backends/<名称>/`，再走 `install_backend()` 重装到 `installed/` 并同步依赖；资产缺失时回退按 `source` raw URL 逐文件下载。更新检查 `refresh_update_check()` 对比 release tag 与远端 `backends.json` 注册表版本（`_remote_registry()`）。
 
 ### Linux systemd 服务
 `python launcher.py service-install`（或 `aibackend service-install`）：停止旧后台 WebUI → 生成 unit（前台跑 `launcher.py webui --no-browser`，`Restart=always`）→ `systemctl enable --now`。非 root 自动加 sudo；无 systemctl（SysV/Upstart/OpenRC）时明确报错退出。
 
 ### 发布
-Git tag `v*` 触发 `.github/workflows/release.yml`：tag 去掉 `v` 写进 VERSION → `launcher.py package` 生成 `dist/aiplugin4-backends-<version>.zip/.tar.gz` → 从 CHANGELOG.md 按版本号提取段落作为 release 描述。发版前记得把 CHANGELOG 的 `Unreleased` 改成版本号并补日期。
+Git tag `v*` 触发 `.github/workflows/release.yml`：tag 去掉 `v` 写进 VERSION → `launcher.py package` 生成本体包 `dist/aiplugin4-backends-<version>.zip/.tar.gz`，并给每个后端按 `backends.json` 注册表版本生成独立包 `dist/aiplugin4-backends-<后端名>-<版本>.zip/.tar.gz` → 全部 `dist/*` 上传为 release 资产 → 从 CHANGELOG.md 按版本号提取段落作为 release 描述。发版前记得把 CHANGELOG 的 `Unreleased` 改成版本号并补日期。
 
 ## WebUI API
 
@@ -72,7 +72,7 @@ Git tag `v*` 触发 `.github/workflows/release.yml`：tag 去掉 `v` 写进 VERS
 
 - `GET /api/backends`：卡片数据（已安装项 + 注册表未安装项，含 `version` / `installed` / `running` / `uptime_secs` / `restarts` / `mem_*` / `deps_ready` / `options`）
 - `POST /api/install/<name>`、`POST /api/uninstall/<name>`、`GET /api/setup-log/<name>`：商店安装/卸载/日志轮询（异步）
-- `POST /api/backend-update/<name>`：按注册表更新后端程序与依赖
+- `POST /api/update-backend/<name>`：下载该后端独立 release 包覆盖商店并重装程序与依赖
 - `POST /api/webui-restart`：重启 WebUI（响应先返回，随后由独立进程执行 `launcher.py webui-restart`，用于重新加载后端清单）
 - `GET|POST /api/config/<name>`：查询/保存 {port, token, host}
 - `POST /api/port/<name>`、`/api/port/<name>/reset`：旧版端口接口（写同一份配置，保留兼容）
@@ -85,7 +85,7 @@ Git tag `v*` 触发 `.github/workflows/release.yml`：tag 去掉 `v` 写进 VERS
 - WebUI 必须保持纯标准库（不引入 webui-requirements.txt）；后端依赖只在各自 venv/node_modules 按需安装，不要手动装。
 - 新增后端 = 新建目录 + `backend.json`（含默认端口）+ 入口脚本读取 `AIPLUGIN4_BACKEND_PORT`；如需 token/监听 IP 支持，按上面六后端的模式接入 `AIPLUGIN4_BACKEND_TOKEN/_HOST`。
 - 新增后端要走「商店 + 注册表」：源码放 `backends/<名称>/`，并在 `backends.json` 注册（`files` 列出所有需要分发的文件、`version`、`source` raw URL）；未注册的后端不会被 WebUI/CLI 发现与安装。
-- 确保不弹黑框：任何在 WebUI/后台（无控制台）进程里执行的子进程调用，Windows 下必须带 `CREATE_NO_WINDOW`——统一用 `launcher._no_window_kwargs()` 注入，新增 git 命令一律走该辅助函数；改完用 `rg -n "subprocess"` 排查所有调用点，逐处确认。
+- 确保不弹黑框：任何在 WebUI/后台（无控制台）进程里执行的子进程调用，Windows 下必须带 `CREATE_NO_WINDOW`——统一用 `launcher._no_window_kwargs()` 注入，新增子进程调用一律走该辅助函数；改完用 `rg -n "subprocess"` 排查所有调用点，逐处确认。更新已改为纯 HTTP 下载，不执行 git。
 - 日志统一 UTF-8：子进程环境加 `PYTHONIOENCODING=utf-8`、`PYTHONUTF8=1`（同 `Supervisor.spawn` 的写法）。
 - 运行时配置读写只通过 `launcher.backend_config()` / `save_backend_config()`，不要直接改 `.runtime.json` 结构。
 - 新增「重启 WebUI」入口时三处同步：WebUI 页面按钮（`POST /api/webui-restart`）+ `launcher.py webui-restart` + `aibackend.py webui-restart`。
@@ -97,5 +97,5 @@ Git tag `v*` 触发 `.github/workflows/release.yml`：tag 去掉 `v` 写进 VERS
 
 - 后端起不来：看 `logs/<name>.log`；依赖没装完看 WebUI 安装日志（`/api/setup-log/<name>`）。
 - 端口被占/生效的是旧值：`.runtime.json` 里 `config/<name>.port` 覆盖默认端口，改完需重启后端。
-- WebUI 黑框：后台场景子进程缺 `CREATE_NO_WINDOW`；点击更新弹黑框是 `update_project()` 的 `git pull` 缺该标志。
+- WebUI 黑框：后台场景子进程缺 `CREATE_NO_WINDOW`。更新是纯 HTTP 下载（不跑 git），不应有黑框；若出现说明新增了子进程调用且漏了该标志。
 - aibackend 命令失效：重新跑 `python install_cli.py`（改 shim 生成逻辑后必须重装）。

@@ -29,7 +29,7 @@ git clone https://github.com/error2913/aiplugin4-backends.git && cd aiplugin4-ba
 - 有后端未安装时，右上角出现「安装全部」，可批量安装（复制/下载程序 + 装依赖）
 - 「启动全部」只启动依赖已就绪的后端；若全部依赖未安装会弹出提示
 - 「重启全部」先停止全部，再启动依赖已就绪的后端
-- 右上角「⬆ 更新」从 Git 拉取项目更新（手动，非自动）
+- 右上角「⬆ 更新」更新本体（检测到新版 release 才更新，直接下载压缩包覆盖，不依赖 git）；每个后端在 release 中有独立包、各自版本控制，卡片出现「⬆ 更新」时只更新该后端
 - 卡片显示版本、运行时长、自动拉起次数与内存占用；「卸载」可删除运行副本恢复未安装状态
 - 卡片「⚙ 配置」弹窗可修改端口、访问 token 与监听 IP（默认 `0.0.0.0`），支持一键随机生成 token；token 默认留空 = 不鉴权
 - 后端进程异常退出会自动拉起
@@ -87,9 +87,9 @@ installed/<名称>/      已安装后端运行副本（程序 + 依赖，gitigno
 
 ## 更新
 
-- **框架更新**：WebUI 右上角「⬆ 更新」或 `aibackend update`（基于 git pull，需 git clone 安装；下载 release 包运行则重新下载新版覆盖）。
-- **后端更新**：注册表版本高于已安装版本时，卡片出现「⬆ 更新」按钮，点击重新拉取程序并重装依赖；或 `uninstall-backend` 后重新 `install-backend`。
-- **升级残留**：旧版（后端位于仓库顶层）升级到商店模型后，顶层目录里的 `node_modules/`、`.venv/`、缓存等未跟踪残留会自动清理——launcher 启动时检测到「git 已不再跟踪」的旧后端目录会整目录删除，商店 `backends/` 与运行配置不受影响。
+- **本体更新**：WebUI 右上角「⬆ 更新」或 `aibackend update`。检测 GitHub 最新 release（`aiplugin4-backends-<版本>.zip`），比本地版本新就下载并直接覆盖仓库文件，不依赖 git——本地文件有改动也不会阻塞更新；更新成功后自动重启 WebUI 使新代码生效。
+- **后端更新**：每个后端在 release 里有独立包（`aiplugin4-backends-<后端名>-<版本>.zip`），版本各自独立记录在 `backends.json`。注册表版本高于本地版本时，卡片出现「⬆ 更新」按钮，点击只下载对应后端独立包覆盖商店并重装依赖，不影响其他后端；或 `uninstall-backend` 后重新 `install-backend`。
+- **升级残留**：旧版（后端位于仓库顶层）升级到商店模型后，顶层目录里的 `node_modules/`、`.venv/`、缓存等未跟踪残留会自动清理——仅 git 部署时 launcher 启动会检测并整目录删除「git 已不再跟踪」的旧后端目录，商店 `backends/`、`installed/`、`logs/` 与运行配置不受影响。
 
 ## 命令行（aibackend）
 
@@ -112,7 +112,7 @@ aibackend info stream-output                # 进程详情（pid/时长/内存/�
 aibackend monitor                           # 实时监控面板
 aibackend install-backend web-read          # 安装后端（复制/下载程序 + 安装依赖）
 aibackend uninstall-backend web-read        # 卸载后端（停止并删除运行副本）
-aibackend update                            # 从 Git 拉取项目更新（手动）
+aibackend update                            # 从 GitHub 更新到最新版（手动，不依赖 git）
 aibackend webui                             # 后台启动 Web 管理界面（不占终端）
 aibackend webui-stop                        # 停止后台 WebUI
 aibackend webui-restart                     # 重启后台 WebUI（重新加载后端清单）

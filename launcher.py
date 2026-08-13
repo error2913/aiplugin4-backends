@@ -21,6 +21,7 @@ import signal
 import subprocess
 import sys
 import tarfile
+import tempfile
 import threading
 import time
 import webbrowser
@@ -34,6 +35,9 @@ INSTALLED_DIR = os.path.join(BACKENDS_DIR, "installed")  # 已安装后端运行
 CONFIG_FILE = os.path.join(BACKENDS_DIR, "launcher.json")
 MANIFEST_FILE = "backend.json"
 REGISTRY_FILE = "backends.json"  # 后端注册表（索引：名称/介绍/版本/下载源）
+GITHUB_REPO = "error2913/aiplugin4-backends"  # 上游仓库（更新源）
+RAW_BASE = f"https://raw.githubusercontent.com/{GITHUB_REPO}/main"
+RELEASE_API = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
 DEFAULT_LOG_DIR = "logs"
 RUNTIME_FILE = ".runtime.json"
 WEBUI_PID_FILE = os.path.join(ROOT_DIR, "logs", "webui.pid")
@@ -849,7 +853,7 @@ def download_backend_files(entry: dict, backend_dir: str) -> None:
     """按注册表从远端下载后端程序文件到 backends/<name>；远端不可用时回退到本地同目录文件"""
     name = entry.get("name", "")
     source = (entry.get("source") or "").rstrip("/") or (
-        f"https://raw.githubusercontent.com/error2913/aiplugin4-backends/main/backends/{name}"
+        f"{RAW_BASE}/backends/{name}"
     )
     files = entry.get("files") or []
     os.makedirs(backend_dir, exist_ok=True)
@@ -877,7 +881,29 @@ def download_backend_files(entry: dict, backend_dir: str) -> None:
 
 def install_backend(name: str) -> Backend:
     """安装后端：从商店 backends/<name> 选择性复制到 installed/<name>（商店缺文件时从远端下载）→ 安装依赖；返回 Backend"""
-    entry = registry_entry(name)
+    entry = None
+    registry_entry_data = None
+    try:
+        registry_entry_data = registry_entry(name)
+    except ValueError:
+        pass
+    shop_manifest = os.path.join(PACKAGES_DIR, name, MANIFEST_FILE)
+    if os.path.isfile(shop_manifest):
+        # 优先用商店里后端的自带清单（可能是独立包更新后的最新文件清单）
+        try:
+            with open(shop_manifest, encoding="utf-8") as f:
+                candidate = json.load(f)
+            if candidate.get("name"):
+                entry = candidate
+        except (OSError, ValueError):
+            pass
+    if entry is None:
+        entry = dict(registry_entry_data or {})
+    if registry_entry_data:
+        # 注册表作为兜底元数据（商店清单可能缺 version/source 等字段）
+        for k in ("version", "description", "source", "files"):
+            if not entry.get(k) and registry_entry_data.get(k):
+                entry = {**entry, k: registry_entry_data[k]}
     backend_dir = os.path.join(INSTALLED_DIR, name)
     source_dir = os.path.join(PACKAGES_DIR, name)
     files = entry.get("files") or []
@@ -895,10 +921,9 @@ def install_backend(name: str) -> Backend:
                 copied += 1
     if copied < len(files):
         download_backend_files(entry, backend_dir)
-    manifest = os.path.join(backend_dir, MANIFEST_FILE)
-    if not os.path.isfile(manifest):
-        with open(manifest, "w", encoding="utf-8") as f:
-            json.dump(entry, f, ensure_ascii=False, indent=2)
+    # 始终用合并后的元数据写回清单（商店/远端清单可能缺 version 等字段）
+    with open(os.path.join(backend_dir, MANIFEST_FILE), "w", encoding="utf-8") as f:
+        json.dump(entry, f, ensure_ascii=False, indent=2)
     backend = Backend(
         name=entry.get("name", name),
         description=entry.get("description", ""),
@@ -917,6 +942,47 @@ def install_backend(name: str) -> Backend:
         raise
     print(f"[launcher] 后端 {name} 安装完成")
     return backend
+
+
+def update_backend(name: str, timeout: int = 120) -> Backend:
+    """更新单个后端：优先从 GitHub 最新 release 下载该后端独立包覆盖商店文件，
+    独立包缺失/下载失败时回退按注册表从远端下载程序文件；然后重装到 installed/ 并同步依赖。返回新 Backend"""
+    entry = _remote_registry().get(name) or registry_entry(name)
+    backend_v = str(entry.get("version", "") or "")
+    asset_name = f"aiplugin4-backends-{name}-{backend_v}.zip" if backend_v else ""
+    tmp_path = ""
+    try:
+        if asset_name:
+            zip_url = _release_asset(asset_name)
+            if zip_url:
+                fd, tmp_path = tempfile.mkstemp(prefix="aib4-backend-", suffix=".zip")
+                os.close(fd)
+                with _http_open(zip_url, timeout=timeout) as resp, open(tmp_path, "wb") as f:
+                    shutil.copyfileobj(resp, f, 1024 * 1024)
+                _extract_zip_into_root(tmp_path)  # 只含 backends/<name>/，落回商店目录
+                print(f"[launcher] 后端 {name} 已从 release 更新到 v{backend_v}")
+            else:
+                print(f"[launcher] release 中未找到 {asset_name}，改为远端文件下载")
+        else:
+            print(f"[launcher] 注册表无版本信息，按远端文件下载更新 {name}")
+    except Exception as e:  # noqa: BLE001
+        print(f"[launcher] 后端 {name} release 包更新失败，回退远端文件下载: {e}")
+    finally:
+        if tmp_path and os.path.isfile(tmp_path):
+            try:
+                os.remove(tmp_path)
+            except OSError:
+                pass
+    # 商店缺文件时按注册表补全（release 包缺失或首次出现的新后端）
+    files = entry.get("files") or []
+    missing = [
+        rel
+        for rel in files
+        if not os.path.isfile(os.path.join(PACKAGES_DIR, name, *rel.replace("\\", "/").lstrip("/").split("/")))
+    ]
+    if missing:
+        download_backend_files(entry, os.path.join(PACKAGES_DIR, name))
+    return install_backend(name)
 
 
 def remove_backend_dir(name: str) -> None:
@@ -1170,21 +1236,79 @@ def _no_window_kwargs() -> dict:
     return {}
 
 
-def _git_head() -> str:
+def _http_open(url: str, timeout: int = 60, method: str = None):
+    """带 UA 的 urllib 请求（GitHub API / raw 均需要 User-Agent）"""
+    import urllib.request
+
+    req = urllib.request.Request(url, headers={"User-Agent": "aiplugin4-backends-updater/1.0"}, method=method)
+    return urllib.request.urlopen(req, timeout=timeout)
+
+
+def _latest_release() -> dict:
+    """查询 GitHub 最新 release（含 tag 与 zip 资产）；API 失败时兜底解析 latest 重定向"""
     try:
-        out = subprocess.run(
-            ["git", "rev-parse", "HEAD"],
-            cwd=ROOT_DIR,
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            timeout=30,
-            **_no_window_kwargs(),
-        )
-        return (out.stdout or "").strip()
+        with _http_open(RELEASE_API) as resp:
+            return json.loads(resp.read().decode("utf-8"))
     except Exception:  # noqa: BLE001
-        return ""
+        with _http_open(f"https://github.com/{GITHUB_REPO}/releases/latest", timeout=30, method="HEAD") as resp:
+            final = resp.geturl()
+        tag = final.rstrip("/").rsplit("/", 1)[-1].lstrip("v")
+        return {
+            "tag_name": tag,
+            "assets": [{
+                "name": f"aiplugin4-backends-{tag}.zip",
+                "browser_download_url": f"https://github.com/{GITHUB_REPO}/releases/download/v{tag}/aiplugin4-backends-{tag}.zip",
+            }],
+        }
+
+
+def _extract_zip_into_root(zip_path: str, skip_prefixes: tuple = (), skip_files: tuple = ()) -> None:
+    """把 zip 解压覆盖到仓库根目录（带 zip 路径穿越防护）；skip_prefixes/skip_files 命中则跳过"""
+    root = os.path.realpath(ROOT_DIR)
+    with zipfile.ZipFile(zip_path) as zf:
+        for member in zf.infolist():
+            rel = member.filename.replace("\\", "/").lstrip("/")
+            if not rel or rel.endswith("/"):
+                continue
+            if rel in skip_files or any(rel.startswith(p) for p in skip_prefixes):
+                continue
+            dest = os.path.realpath(os.path.join(root, *rel.split("/")))
+            if dest != root and not dest.startswith(root + os.sep):
+                continue  # 防 zip 路径穿越
+            os.makedirs(os.path.dirname(dest), exist_ok=True)
+            with zf.open(member) as src, open(dest, "wb") as out:
+                shutil.copyfileobj(src, out)
+
+
+def _extract_update_zip(zip_path: str) -> None:
+    """本体发布包解压覆盖到仓库根目录；跳过运行时/本地目录（installed、logs、backends、dist、.git、.runtime.json）"""
+    _extract_zip_into_root(
+        zip_path,
+        skip_prefixes=("installed/", "logs/", "backends/", "dist/", ".git/"),
+        skip_files=(RUNTIME_FILE,),
+    )
+
+
+def _remote_registry() -> dict:
+    """拉取远端 backends.json 注册表（{名称: 条目}）；失败返回空 dict"""
+    try:
+        with _http_open(f"{RAW_BASE}/backends.json") as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+        return {item.get("name"): item for item in (data or {}).get("backends", [])}
+    except Exception:  # noqa: BLE001
+        return {}
+
+
+def _release_asset(asset_name: str) -> str:
+    """在 GitHub 最新 release 中查找指定资产名，返回下载地址（不存在返回空字符串）"""
+    try:
+        release = _latest_release()
+        for asset in release.get("assets") or []:
+            if str(asset.get("name", "")) == asset_name:
+                return str(asset.get("browser_download_url") or "")
+    except Exception:  # noqa: BLE001
+        pass
+    return ""
 
 
 def _changelog_versions(text: str) -> dict:
@@ -1203,171 +1327,87 @@ def _version_key(version: str) -> tuple:
 
 
 def update_project(timeout: int = 120) -> dict:
-    """git pull 更新项目（手动触发）；返回 {"updated": bool, "changelog": str, "output": str}；失败抛异常"""
-    old_head = _git_head()
+    """下载最新 release 压缩包直接覆盖更新（不依赖 git，本地文件有改动也不会阻塞）；
+    返回 {"updated": bool, "changelog": str, "output": str}；失败抛异常"""
+    old_version = read_version()
+    release = _latest_release()
+    tag = str(release.get("tag_name", "")).lstrip("v")
+    if not tag or _version_key(tag) <= _version_key(old_version):
+        return {"updated": False, "changelog": "", "output": "Already up to date."}
+    zip_url = ""
+    for asset in release.get("assets") or []:
+        if str(asset.get("name", "")).endswith(".zip"):
+            zip_url = asset.get("browser_download_url") or ""
+            break
+    if not zip_url:
+        raise RuntimeError(f"最新版本 {tag} 未找到 zip 安装包，请稍后重试")
+    tmp_path = ""
     try:
-        proc = subprocess.run(
-            ["git", "pull", "--ff-only"],
-            cwd=ROOT_DIR,
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            timeout=timeout,
-            **_no_window_kwargs(),
-        )
-    except FileNotFoundError:
-        raise RuntimeError("未找到 git 命令，请先安装 Git")
-    except subprocess.TimeoutExpired:
-        raise RuntimeError(f"git pull 超时（>{timeout}s）")
-    output = ((proc.stdout or "") + (proc.stderr or "")).strip()
-    if proc.returncode != 0:
-        raise RuntimeError(f"git pull 失败（exit {proc.returncode}）:\n{output}")
-    new_head = _git_head()
-    if not new_head or new_head == old_head:
-        return {"updated": False, "changelog": "", "output": output or "Already up to date."}
-    return {"updated": True, "changelog": _update_changelog(old_head, new_head), "output": output}
+        fd, tmp_path = tempfile.mkstemp(prefix="aib4-update-", suffix=".zip")
+        os.close(fd)
+        with _http_open(zip_url, timeout=timeout) as resp, open(tmp_path, "wb") as f:
+            shutil.copyfileobj(resp, f, 1024 * 1024)
+        _extract_update_zip(tmp_path)
+    except Exception as e:  # noqa: BLE001
+        raise RuntimeError(f"下载/解压更新包失败: {e}")
+    finally:
+        if tmp_path and os.path.isfile(tmp_path):
+            try:
+                os.remove(tmp_path)
+            except OSError:
+                pass
+    changelog = _update_changelog(old_version)
+    return {"updated": True, "changelog": changelog, "output": f"已更新到 {tag}"}
 
 
-def _update_changelog(old_head: str, new_head: str) -> str:
-    """有新提交时，收集 CHANGELOG.md 中新增且高于当前 VERSION 的版本段落；没有则退回 git log"""
+def _update_changelog(old_version: str) -> str:
+    """收集新版 CHANGELOG.md 中高于旧版本的段落（按版本号从新到旧）"""
     try:
-        old_text = subprocess.run(
-            ["git", "show", f"{old_head}:CHANGELOG.md"],
-            cwd=ROOT_DIR,
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            timeout=30,
-            **_no_window_kwargs(),
-        ).stdout
-        old_versions = set(_changelog_versions(old_text))
-        new_file = os.path.join(ROOT_DIR, "CHANGELOG.md")
-        try:
-            with open(new_file, encoding="utf-8") as f:
-                new_text = f.read()
-        except OSError:
-            new_text = ""
-        current = _version_key(read_version())
-        sections = []
-        for version, body in _changelog_versions(new_text).items():
-            if version not in old_versions and _version_key(version) > current:
-                body_lines = body.splitlines()
-                date_part = ""
-                if body_lines and body_lines[0].lstrip().startswith("-"):
-                    date_part = body_lines[0].strip()[1:].strip()
-                    body = "\n".join(body_lines[1:]).strip()
-                head = f"## {version}" + (f" - {date_part}" if date_part else "")
-                section = head + (f"\n\n{body}" if body else "")
-                sections.append((_version_key(version), section))
-        if sections:
-            sections.sort(key=lambda item: item[0], reverse=True)
-            return "\n\n".join(body for _, body in sections)
-    except Exception:  # noqa: BLE001
-        pass
-    log = subprocess.run(
-        ["git", "log", "--oneline", "--no-decorate", f"{old_head}..{new_head}"],
-        cwd=ROOT_DIR,
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-        timeout=30,
-        **_no_window_kwargs(),
-    ).stdout.strip()
-    return log or "已拉取更新"
+        with open(os.path.join(ROOT_DIR, "CHANGELOG.md"), encoding="utf-8") as f:
+            text = f.read()
+    except OSError:
+        return ""
+    sections = []
+    for version, body in _changelog_versions(text).items():
+        if _version_key(version) <= _version_key(old_version):
+            continue
+        body_lines = body.splitlines()
+        date_part = ""
+        if body_lines and body_lines[0].lstrip().startswith("-"):
+            date_part = body_lines[0].strip()[1:].strip()
+            body = "\n".join(body_lines[1:]).strip()
+        head = f"## {version}" + (f" - {date_part}" if date_part else "")
+        sections.append((_version_key(version), head + (f"\n\n{body}" if body else "")))
+    sections.sort(key=lambda item: item[0], reverse=True)
+    return "\n\n".join(body for _, body in sections)
 
 
 _UPDATE_CHECK_CACHE = {"ts": 0.0, "data": {}}
 _UPDATE_CHECK_RUNNING = False
 
 
-def _git_remote_branch() -> str:
-    """远端默认分支（origin/HEAD），取不到时回退 main"""
-    try:
-        out = subprocess.run(
-            ["git", "symbolic-ref", "--short", "refs/remotes/origin/HEAD"],
-            cwd=ROOT_DIR,
-            capture_output=True,
-            text=True,
-            timeout=15,
-            **_no_window_kwargs(),
-        )
-        ref = (out.stdout or "").strip()
-        if ref:
-            return ref.rsplit("/", 1)[-1]
-    except Exception:  # noqa: BLE001
-        pass
-    return "main"
-
-
-def _git_show(path: str) -> str:
-    branch = _git_remote_branch()
-    try:
-        out = subprocess.run(
-            ["git", "show", f"origin/{branch}:{path}"],
-            cwd=ROOT_DIR,
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            timeout=15,
-            **_no_window_kwargs(),
-        )
-        return (out.stdout or "") if out.returncode == 0 else ""
-    except Exception:  # noqa: BLE001
-        return ""
-
-
 def refresh_update_check() -> dict:
-    """git fetch 后对比本地/远端后端版本与仓库提交，返回更新检查结果（网络失败返回空）"""
-    branch = _git_remote_branch()
+    """对比 GitHub 最新 release 与本地版本，返回更新检查结果（网络失败返回空）"""
     try:
-        subprocess.run(
-            ["git", "fetch", "origin", branch, "--quiet"],
-            cwd=ROOT_DIR,
-            capture_output=True,
-            text=True,
-            timeout=60,
-            **_no_window_kwargs(),
-        )
+        release = _latest_release()
     except Exception:  # noqa: BLE001
         return {}
-    result = {"repo_update": False, "backends": {}}
-    try:
-        head = subprocess.run(
-            ["git", "rev-parse", "HEAD"],
-            cwd=ROOT_DIR,
-            capture_output=True,
-            text=True,
-            timeout=15,
-            **_no_window_kwargs(),
-        ).stdout.strip()
-        remote = subprocess.run(
-            ["git", "rev-parse", f"origin/{branch}"],
-            cwd=ROOT_DIR,
-            capture_output=True,
-            text=True,
-            timeout=15,
-            **_no_window_kwargs(),
-        ).stdout.strip()
-        result["repo_update"] = bool(head and remote and head != remote)
-    except Exception:  # noqa: BLE001
-        pass
+    tag = str(release.get("tag_name", "")).lstrip("v")
+    result = {
+        "repo_update": bool(tag and _version_key(tag) > _version_key(read_version())),
+        "backends": {},
+    }
+    remote_registry = _remote_registry()
     for backend in discover_backends():
-        rel = os.path.relpath(os.path.join(backend.dir, MANIFEST_FILE), ROOT_DIR).replace(os.sep, "/")
-        remote_v = ""
-        try:
-            remote_text = _git_show(rel)
-            if remote_text:
-                remote_v = str(json.loads(remote_text).get("version", "") or "")
-        except (ValueError, TypeError):
-            remote_v = ""
+        remote_v = str((remote_registry.get(backend.name) or {}).get("version", "") or "")
         result["backends"][backend.name] = {
             "local": backend.version,
             "remote": remote_v,
-            "available": bool(backend.version and remote_v and backend.version != remote_v),
+            "available": bool(
+                backend.version
+                and remote_v
+                and _version_key(remote_v) > _version_key(backend.version)
+            ),
         }
     return result
 
@@ -1409,22 +1449,63 @@ def _package_files():
             yield path, arcname
 
 
-def package_backends() -> list:
-    version = read_version()
-    out_dir = os.path.join(ROOT_DIR, "dist")
-    os.makedirs(out_dir, exist_ok=True)
-    zip_out = os.path.join(out_dir, f"aiplugin4-backends-{version}.zip")
-    tar_out = os.path.join(out_dir, f"aiplugin4-backends-{version}.tar.gz")
-    files = list(_package_files())
+def _package_files_under(prefix: str):
+    """只打包指定前缀目录下的文件（用于每个后端的独立包，绕过对 backends/ 的整体排除）"""
+    base = os.path.join(BACKENDS_DIR, prefix.rstrip("/"))
+    if not os.path.isdir(base):
+        return
+    for root, dirs, files in os.walk(base):
+        dirs[:] = [d for d in dirs if d not in EXCLUDE_DIRS]
+        for name in files:
+            if name.endswith(EXCLUDE_SUFFIXES) or name in EXCLUDE_FILES:
+                continue
+            path = os.path.join(root, name)
+            arcname = os.path.relpath(path, ROOT_DIR).replace(os.sep, "/")
+            yield path, arcname
+
+
+def _write_archives(zip_out: str, tar_out: str, files: list) -> None:
+    """把 (绝对路径, 包内相对路径) 列表同时写成 zip 与 tar.gz"""
     with zipfile.ZipFile(zip_out, "w", zipfile.ZIP_DEFLATED) as zf:
         for path, arcname in files:
             zf.write(path, arcname)
     with tarfile.open(tar_out, "w:gz") as tf:
         for path, arcname in files:
             tf.add(path, arcname)
-    print(f"[launcher] 已打包: {zip_out}")
-    print(f"[launcher] 已打包: {tar_out}")
-    return [zip_out, tar_out]
+
+
+def package_backends() -> list:
+    """打包本体（全部仓库文件）与每个后端独立包（backends/<名称>/，版本取各自 backend.json），返回产物列表"""
+    version = read_version()
+    out_dir = os.path.join(ROOT_DIR, "dist")
+    os.makedirs(out_dir, exist_ok=True)
+    files = list(_package_files())
+    artifacts = []
+
+    zip_out = os.path.join(out_dir, f"aiplugin4-backends-{version}.zip")
+    tar_out = os.path.join(out_dir, f"aiplugin4-backends-{version}.tar.gz")
+    _write_archives(zip_out, tar_out, files)
+    print(f"[launcher] 已打包本体: {zip_out}")
+    print(f"[launcher] 已打包本体: {tar_out}")
+    artifacts.extend([zip_out, tar_out])
+
+    for entry in load_registry():
+        name = entry.get("name", "")
+        if not name:
+            continue
+        bv = str(entry.get("version", "") or version)
+        pfx = f"backends/{name}/"
+        pkg_files = list(_package_files_under(pfx))
+        if not pkg_files:
+            print(f"[launcher] 跳过后端 {name}（商店目录为空）")
+            continue
+        zip_out = os.path.join(out_dir, f"aiplugin4-backends-{name}-{bv}.zip")
+        tar_out = os.path.join(out_dir, f"aiplugin4-backends-{name}-{bv}.tar.gz")
+        _write_archives(zip_out, tar_out, pkg_files)
+        print(f"[launcher] 已打包后端 {name} v{bv}: {zip_out}")
+        print(f"[launcher] 已打包后端 {name} v{bv}: {tar_out}")
+        artifacts.extend([zip_out, tar_out])
+    return artifacts
 
 
 def ensure_cli_installed() -> None:
@@ -1446,7 +1527,7 @@ def ensure_cli_installed() -> None:
 def cleanup_legacy_backend_dirs() -> None:
     """升级清理：旧版后端目录在仓库顶层，git 只搬被跟踪文件，node_modules/.venv/缓存等未跟踪残留会留在原地。
     仅当目录已完全不被 git 跟踪时，用 git clean 删掉整目录（含忽略文件），避免升级后残留占空间/干扰新模型。"""
-    if not shutil.which("git"):
+    if not shutil.which("git") or not os.path.isdir(os.path.join(BACKENDS_DIR, ".git")):
         return
     for name in LEGACY_BACKEND_DIRS:
         legacy = os.path.join(BACKENDS_DIR, name)
