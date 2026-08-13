@@ -32,6 +32,7 @@ aibackend help                         # 查看所有命令
 | `backends.json` | 后端注册表：`name` / `type` / `entry` / `deps` / `port` / `version` / `source`（raw URL）/ `files` / 可选 `config` schema |
 | `backends/<名称>/` | 后端程序缓存（源码在独立 `shop` 分支，release 打包用；运行时更新/下载解压到这里，gitignore） |
 | `installed/<名称>/` | 已安装后端运行副本（程序 + 依赖，gitignore，卸载即删） |
+| `data/<名称>/` | 后端数据目录（如 mcp-files-exec 沙箱工作路径；gitignore，打包/更新/卸载都不动） |
 | `CHANGELOG.md` | 更新日志：`## <版本号>` 段落，release 与更新弹窗都从这里取 |
 | `VERSION` | 当前版本号（release 时由 tag 写入） |
 | `launcher.json` | 全局配置：`auto_restart`、`restart_backoff_seconds`、`log_dir` |
@@ -40,6 +41,7 @@ aibackend help                         # 查看所有命令
 ## 数据与状态文件（logs/ 与根目录，均 gitignore）
 
 - `.runtime.json`：每后端运行时配置 `config/<name> = {port, token, host}`；`ports` 为旧版字段（读兼容、写同步）；`webui` 段含 `port`（首次随机生成五位数）/`host`（默认 `0.0.0.0`）/`token`（首次自动生成）。读写统一走 `launcher.backend_config()` / `save_backend_config()` / `configure_webui_port()` / `configure_webui_host()` / `configure_webui_token()`。
+- `data/<名称>/`：后端运行时数据（`launcher.backend_custom_config()` 对 `config` schema 的 `default` 展开 `{REPO_ROOT}` 模板；`create_dir: true` 的字段启动注入前自动 `os.makedirs`）。
 - `logs/state.json`：Supervisor 进程状态（`pid`、`started_at`、`restarts`、`stopped` 标记）。
 - `logs/webui.pid`：后台 WebUI 进程号，格式 `pid host port`（自愈用）。
 - `logs/<backend>.log`：各后端日志；`logs/webui.log`：WebUI 日志。
@@ -50,7 +52,7 @@ aibackend help                         # 查看所有命令
 `ensure_cli_installed()`（自动安装/刷新 aibackend，幂等）→ `cleanup_legacy_backend_dirs()`（升级清理：git 已不跟踪的旧版顶层后端目录整目录删除，防残留）→ `ensure_webui_deps()`（无 webui-requirements.txt 时为空操作）→ `start_webui_background()`：检测 pid 文件避免重复启动，pid 里记录的 host/port 与当前配置不一致时自动重启（自愈），启动崩溃打印最近日志；detach 子进程（Windows `DETACHED_PROCESS | CREATE_NO_WINDOW`，Linux `start_new_session`）；WebUI 默认监听 `0.0.0.0`，端口与访问 token 首次运行随机生成；自动开浏览器统一走 `_can_open_browser()`——Windows 直接开，Linux/macOS 需有 `DISPLAY`/`WAYLAND_DISPLAY` **且**显式设置 `BROWSER`，无头服务器只打印访问地址（不调用 xdg-open）。
 
 ### 后端启动（`Supervisor.spawn`）
-安装后端（`install_backend`）：缓存 `backends/<name>` 与注册表版本一致时直接复制到运行目录 `installed/<name>`；否则优先按注册表版本从 release 独立包（`aiplugin4-backends-<名称>-<版本>.zip`）下载解压（`_download_backend_package`），失败回退缓存/按 `source` 从 `shop` 分支 raw URL 逐文件下载，再装依赖；失败自动清掉半成品。卸载（`remove_backend_dir`）只删 `installed/<name>`。依赖精确同步：`ensure_venv`/`ensure_node` 用依赖指纹（`deps_hash`/`node_deps_hash`）判断，清单变化即重建 venv / `npm ci`（node 有 lockfile 时）。启动时注入 `AIPLUGIN4_BACKEND_PORT / _HOST / _TOKEN` 与 `backend.json` `config` schema 声明的自定义 env → 子进程日志重定向到 `logs/<name>.log`，`CREATE_NO_WINDOW`。`_monitor` 线程负责异常退出后按退避时间自动拉起；手动停止写入 `stopped` 标记则不再拉起。
+安装后端（`install_backend`）：缓存 `backends/<name>` 与注册表版本一致时直接复制到运行目录 `installed/<name>`；否则优先按注册表版本从 release 独立包（`aiplugin4-backends-<名称>-<版本>.zip`）下载解压（`_download_backend_package`），失败回退缓存/按 `source` 从 `shop` 分支 raw URL 逐文件下载，再装依赖；失败自动清掉半成品。卸载（`remove_backend_dir`）只删 `installed/<name>`。依赖精确同步：`ensure_venv`/`ensure_node` 用依赖指纹（`deps_hash`/`node_deps_hash`）判断，清单变化即重建 venv / `npm ci`（node 有 lockfile 时）。启动时注入 `AIPLUGIN4_BACKEND_PORT / _HOST / _TOKEN` 与 `backend.json` `config` schema 声明的自定义 env（`default` 与用户值先经 `_expand_config_value` 展开 `{REPO_ROOT}`，`create_dir: true` 的字段先创建目录）→ 子进程日志重定向到 `logs/<name>.log`，`CREATE_NO_WINDOW`。`_monitor` 线程负责异常退出后按退避时间自动拉起；手动停止写入 `stopped` 标记则不再拉起。
 
 ### 后端 token/监听 IP
 后端读取 `AIPLUGIN4_BACKEND_HOST`（默认 `0.0.0.0`）与 `AIPLUGIN4_BACKEND_TOKEN`（默认空）。token 非空时校验请求头 `Authorization: Bearer <token>` 或 `X-Token: <token>`，否则 401。六个后端均已实现（Flask/FastAPI 中间件、express 中间件、mcp-files-exec 的 ASGI 包装）。

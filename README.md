@@ -73,11 +73,14 @@ assets/                WebUI 图标
 backends.json          后端注册表（名称/类型/端口/版本/下载源/文件清单）
 backends/<名称>/       后端程序缓存（点安装/更新时下载解压到这里，gitignore，源码在独立 shop 分支）
 installed/<名称>/      已安装后端运行副本（程序 + 依赖，gitignore，卸载即删）
+data/<名称>/           后端数据目录（如 mcp-files-exec 的沙箱工作路径，gitignore，更新/卸载不删除）
 ```
 
 ## 管理方式
 
 管理全部通过 WebUI 完成：后端启停、依赖安装/删除、配置修改、运行日志都在页面里操作。端口/token/监听 IP 写入 `.runtime.json`（已 gitignore），启动时通过环境变量传给后端：`AIPLUGIN4_BACKEND_PORT`、`AIPLUGIN4_BACKEND_TOKEN`（非空时后端校验 `Authorization: Bearer <token>` 或 `X-Token: <token>`）、`AIPLUGIN4_BACKEND_HOST`。
+
+后端专属配置（如 mcp-files-exec 的沙箱工作路径）在卡片「⚙ 配置」弹窗中修改；数据默认放仓库根 `data/<名称>/`，更新与卸载不会删除。
 
 命令行安装/卸载后端：`python launcher.py install-backend <名称>` / `uninstall-backend <名称>`（aibackend 同样支持）；安装按注册表版本从 release 下载独立包（失败自动回退缓存/远端文件）再装依赖，卸载停止进程并删除 `installed/<名称>`。
 

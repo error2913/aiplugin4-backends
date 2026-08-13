@@ -2,6 +2,12 @@
 
 标题格式为 `## <版本号>`，release 工作流按标签版本号读取对应段落作为发布说明；日常更新以「Unreleased」汇总，发版前改成版本号并补日期。
 
+## 0.10.1 - 2026-08-14
+
+- mcp-files-exec 默认沙箱工作路径改到仓库根 `data/mcp-files-exec`，审计日志改到 `logs/mcp-files-exec.log`，不再落在程序目录 `installed/` 内——后端更新/重装/卸载都不会动数据
+- 自定义配置支持 `{REPO_ROOT}` 模板与 `create_dir` 标记：默认路径按仓库根展开并自动创建目录；WebUI「⚙ 配置」可修改沙箱路径（`MCP_SANDBOX_ROOTS`，分号分隔多个）
+- 打包与本体更新跳过 `data/`，用户数据不会被发布包覆盖
+
 ## 0.10.0 - 2026-08-14
 
 - 后端程序不再随仓库分发：主分支只保留框架与注册表信息（`backends.json`），一条指令安装（git clone + `python launcher.py`）只装框架，不含后端程序

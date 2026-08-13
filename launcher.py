@@ -49,7 +49,7 @@ DEPS_MARKER = ".deps_ready"
 LEGACY_BACKEND_DIRS = ["image-url-to-base64", "mcp-files-exec", "md-html-render", "stream-output", "usage-chart", "web-read"]
 
 # 打包时排除的目录/文件
-EXCLUDE_DIRS = {"logs", "node_modules", "__pycache__", ".venv", "venv", "dist", ".git", "lang-data", "cache", "backends"}
+EXCLUDE_DIRS = {"logs", "node_modules", "__pycache__", ".venv", "venv", "dist", ".git", "lang-data", "cache", "backends", "data"}
 EXCLUDE_SUFFIXES = (".pyc", ".pyo")
 EXCLUDE_FILES = {".runtime.json"}  # 本机运行态配置，不进发布包
 
@@ -124,12 +124,22 @@ def save_backend_config(name: str, port=None, token=None, host=None, options: di
     return cfg
 
 
+def _expand_config_value(value) -> str:
+    """展开自定义配置值中的 {REPO_ROOT} 模板为仓库根目录"""
+    return str(value or "").replace("{REPO_ROOT}", ROOT_DIR)
+
+
 def backend_custom_config(backend: Backend) -> dict:
-    """backend.json 声明的自定义配置 schema：{key: {label, type, default, env}}"""
+    """backend.json 声明的自定义配置 schema：{key: {label, type, default, env}}；
+    default 支持 {REPO_ROOT} 模板（展开为仓库根目录）"""
     try:
         with open(os.path.join(backend.dir, MANIFEST_FILE), encoding="utf-8") as f:
             data = json.load(f)
-        return dict(data.get("config") or {})
+        schema = dict(data.get("config") or {})
+        for field in schema.values():
+            if isinstance(field, dict) and field.get("default") is not None:
+                field["default"] = _expand_config_value(field["default"])
+        return schema
     except (OSError, ValueError):
         return {}
 
@@ -770,11 +780,17 @@ class Supervisor:
         env["AIPLUGIN4_BACKEND_PORT"] = str(cfg["port"])
         env["AIPLUGIN4_BACKEND_HOST"] = cfg["host"]
         env["AIPLUGIN4_BACKEND_TOKEN"] = cfg["token"]
-        # 自定义配置项注入（backend.json config 声明的 env）
+        # 自定义配置项注入（backend.json config 声明的 env；{REPO_ROOT} 模板展开为仓库根）
         for key, field in backend_custom_config(backend).items():
             env_name = field.get("env")
             if env_name:
-                env[env_name] = str(cfg["options"].get(key, field.get("default", "")) or "")
+                value = _expand_config_value(cfg["options"].get(key, field.get("default", "")))
+                env[env_name] = value
+                if field.get("create_dir"):
+                    for part in value.split(os.pathsep):
+                        part = part.strip()
+                        if part:
+                            os.makedirs(part, exist_ok=True)
         kwargs = {}
         if os.name == "nt":
             kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW  # 无控制台父进程（webui/后台模式）下不弹黑框
@@ -1406,10 +1422,10 @@ def _extract_zip_into_root(zip_path: str, skip_prefixes: tuple = (), skip_files:
 
 
 def _extract_update_zip(zip_path: str) -> None:
-    """本体发布包解压覆盖到仓库根目录；跳过运行时/本地目录（installed、logs、backends、dist、.git、.runtime.json）"""
+    """本体发布包解压覆盖到仓库根目录；跳过运行时/本地目录（installed、logs、backends、data、dist、.git、.runtime.json）"""
     _extract_zip_into_root(
         zip_path,
-        skip_prefixes=("installed/", "logs/", "backends/", "dist/", ".git/"),
+        skip_prefixes=("installed/", "logs/", "backends/", "dist/", ".git/", "data/"),
         skip_files=(RUNTIME_FILE,),
     )
 
