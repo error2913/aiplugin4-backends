@@ -16,6 +16,15 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      - name: Checkout backend shop sources
+        uses: actions/checkout@v4
+        with:
+          ref: shop
+          path: shop-src
+
+      - name: Stage backend sources
+        run: cp -r shop-src/backends backends
+
       - name: Set version from tag
         shell: bash
         run: echo "${GITHUB_REF_NAME#v}" > VERSION

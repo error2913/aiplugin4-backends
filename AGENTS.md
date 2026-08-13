@@ -30,7 +30,7 @@ aibackend help                         # 查看所有命令
 | `aibackend.py` | 命令行工具（复用 launcher 逻辑），彩色 help |
 | `install_cli.py` | 安装 `aibackend` 到 PATH（Windows `.aibackend\bin\aibackend.cmd` / Linux shell 脚本）；launcher 启动时自动调用 `install()` 幂等刷新 |
 | `backends.json` | 后端注册表：`name` / `type` / `entry` / `deps` / `port` / `version` / `source`（raw URL）/ `files` / 可选 `config` schema |
-| `backends/<名称>/` | 后端商店源码（`backend.json` + 服务代码，随仓库分发，发布包不含） |
+| `backends/<名称>/` | 后端程序缓存（源码在独立 `shop` 分支，release 打包用；运行时更新/下载解压到这里，gitignore） |
 | `installed/<名称>/` | 已安装后端运行副本（程序 + 依赖，gitignore，卸载即删） |
 | `CHANGELOG.md` | 更新日志：`## <版本号>` 段落，release 与更新弹窗都从这里取 |
 | `VERSION` | 当前版本号（release 时由 tag 写入） |
@@ -50,7 +50,7 @@ aibackend help                         # 查看所有命令
 `ensure_cli_installed()`（自动安装/刷新 aibackend，幂等）→ `cleanup_legacy_backend_dirs()`（升级清理：git 已不跟踪的旧版顶层后端目录整目录删除，防残留）→ `ensure_webui_deps()`（无 webui-requirements.txt 时为空操作）→ `start_webui_background()`：检测 pid 文件避免重复启动，pid 里记录的 host/port 与当前配置不一致时自动重启（自愈），启动崩溃打印最近日志；detach 子进程（Windows `DETACHED_PROCESS | CREATE_NO_WINDOW`，Linux `start_new_session`）；WebUI 默认监听 `0.0.0.0`，端口与访问 token 首次运行随机生成；自动开浏览器统一走 `_can_open_browser()`——Windows 直接开，Linux/macOS 需有 `DISPLAY`/`WAYLAND_DISPLAY` **且**显式设置 `BROWSER`，无头服务器只打印访问地址（不调用 xdg-open）。
 
 ### 后端启动（`Supervisor.spawn`）
-安装后端（`install_backend`）：按注册表把商店 `backends/<name>` 的文件复制到运行目录 `installed/<name>`（商店缺失时按 `source` 从 raw URL 下载），再装依赖；失败自动清掉半成品。卸载（`remove_backend_dir`）只删 `installed/<name>`。依赖精确同步：`ensure_venv`/`ensure_node` 用依赖指纹（`deps_hash`/`node_deps_hash`）判断，清单变化即重建 venv / `npm ci`（node 有 lockfile 时）。启动时注入 `AIPLUGIN4_BACKEND_PORT / _HOST / _TOKEN` 与 `backend.json` `config` schema 声明的自定义 env → 子进程日志重定向到 `logs/<name>.log`，`CREATE_NO_WINDOW`。`_monitor` 线程负责异常退出后按退避时间自动拉起；手动停止写入 `stopped` 标记则不再拉起。
+安装后端（`install_backend`）：缓存 `backends/<name>` 与注册表版本一致时直接复制到运行目录 `installed/<name>`；否则优先按注册表版本从 release 独立包（`aiplugin4-backends-<名称>-<版本>.zip`）下载解压（`_download_backend_package`），失败回退缓存/按 `source` 从 `shop` 分支 raw URL 逐文件下载，再装依赖；失败自动清掉半成品。卸载（`remove_backend_dir`）只删 `installed/<name>`。依赖精确同步：`ensure_venv`/`ensure_node` 用依赖指纹（`deps_hash`/`node_deps_hash`）判断，清单变化即重建 venv / `npm ci`（node 有 lockfile 时）。启动时注入 `AIPLUGIN4_BACKEND_PORT / _HOST / _TOKEN` 与 `backend.json` `config` schema 声明的自定义 env → 子进程日志重定向到 `logs/<name>.log`，`CREATE_NO_WINDOW`。`_monitor` 线程负责异常退出后按退避时间自动拉起；手动停止写入 `stopped` 标记则不再拉起。
 
 ### 后端 token/监听 IP
 后端读取 `AIPLUGIN4_BACKEND_HOST`（默认 `0.0.0.0`）与 `AIPLUGIN4_BACKEND_TOKEN`（默认空）。token 非空时校验请求头 `Authorization: Bearer <token>` 或 `X-Token: <token>`，否则 401。六个后端均已实现（Flask/FastAPI 中间件、express 中间件、mcp-files-exec 的 ASGI 包装）。
@@ -58,13 +58,13 @@ aibackend help                         # 查看所有命令
 `web-read` 与 `md-html-render` 仅提供 **MCP（Streamable HTTP，挂 `/mcp`，每会话一个 McpServer 实例）**，已移除 REST 路由：工具为 `scrape_url` / `screenshot_url`（web-read）、`render_markdown` / `render_html`（md-html-render，返回 PNG base64 文本）；token 中间件对 `/mcp` 同样生效。注意 `/mcp` 必须在 `express.json()` 之前注册，让 transport 自行解析原始 body。
 
 ### 更新（`aibackend update` / WebUI「⬆ 更新」）
-更新不依赖 git：`launcher.update_project()` 查询 GitHub 最新 release（`_latest_release()`），tag 高于本地 `read_version()` 才下载本体包 `aiplugin4-backends-<版本>.zip` 解压覆盖仓库根目录（`_extract_update_zip()` 跳过 `installed/`、`logs/`、`backends/`、`dist/`、`.git/`、`.runtime.json`）；无新版本返回 `updated=False`（前端弹「没有可以更新的」）。后端各自有独立包（`aiplugin4-backends-<后端名>-<版本>.zip`），`launcher.update_backend(name)` 按注册表版本找对应资产下载解压覆盖商店 `backends/<名称>/`，再走 `install_backend()` 重装到 `installed/` 并同步依赖；资产缺失时回退按 `source` raw URL 逐文件下载。更新检查 `refresh_update_check()` 对比 release tag 与远端 `backends.json` 注册表版本（`_remote_registry()`）。
+更新不依赖 git：`launcher.update_project()` 查询 GitHub 最新 release（`_latest_release()`），tag 高于本地 `read_version()` 才下载本体包 `aiplugin4-backends-<版本>.zip` 解压覆盖仓库根目录（`_extract_update_zip()` 跳过 `installed/`、`logs/`、`backends/`、`dist/`、`.git/`、`.runtime.json`）；无新版本返回 `updated=False`（前端弹「没有可以更新的」）。后端各自有独立包（`aiplugin4-backends-<后端名>-<版本>.zip`），`launcher.update_backend(name)` 按注册表版本找对应资产下载解压覆盖缓存 `backends/<名称>/`，再走 `install_backend()` 重装到 `installed/` 并同步依赖；资产缺失时回退按 `source` raw URL 逐文件下载。更新检查 `refresh_update_check()` 对比 release tag 与远端 `backends.json` 注册表版本（`_remote_registry()`）。
 
 ### Linux systemd 服务
 `python launcher.py service-install`（或 `aibackend service-install`）：停止旧后台 WebUI → 生成 unit（前台跑 `launcher.py webui --no-browser`，`Restart=always`）→ `systemctl enable --now`。非 root 自动加 sudo；无 systemctl（SysV/Upstart/OpenRC）时明确报错退出。
 
 ### 发布
-Git tag `v*` 触发 `.github/workflows/release.yml`：tag 去掉 `v` 写进 VERSION → `launcher.py package` 生成本体包 `dist/aiplugin4-backends-<version>.zip/.tar.gz`，并给每个后端按 `backends.json` 注册表版本生成独立包 `dist/aiplugin4-backends-<后端名>-<版本>.zip/.tar.gz` → 全部 `dist/*` 上传为 release 资产 → 从 CHANGELOG.md 按版本号提取段落作为 release 描述。发版前记得把 CHANGELOG 的 `Unreleased` 改成版本号并补日期。
+Git tag `v*` 触发 `.github/workflows/release.yml`：先 checkout `shop` 分支把 `backends/` 源码暂存进工作区（主分支已不含后端程序）→ tag 去掉 `v` 写进 VERSION → `launcher.py package` 生成本体包 `dist/aiplugin4-backends-<version>.zip/.tar.gz`，并给每个后端按 `backends.json` 注册表版本生成独立包 `dist/aiplugin4-backends-<后端名>-<版本>.zip/.tar.gz` → 全部 `dist/*` 上传为 release 资产 → 从 CHANGELOG.md 按版本号提取段落作为 release 描述。发版前记得：后端源码改动提交到 `shop` 分支、注册表版本等元数据同步到 main 的 `backends.json`、CHANGELOG 写版本段落。
 
 ## WebUI API
 
@@ -84,7 +84,7 @@ Git tag `v*` 触发 `.github/workflows/release.yml`：tag 去掉 `v` 写进 VERS
 
 - WebUI 必须保持纯标准库（不引入 webui-requirements.txt）；后端依赖只在各自 venv/node_modules 按需安装，不要手动装。
 - 新增后端 = 新建目录 + `backend.json`（含默认端口）+ 入口脚本读取 `AIPLUGIN4_BACKEND_PORT`；如需 token/监听 IP 支持，按上面六后端的模式接入 `AIPLUGIN4_BACKEND_TOKEN/_HOST`。
-- 新增后端要走「商店 + 注册表」：源码放 `backends/<名称>/`，并在 `backends.json` 注册（`files` 列出所有需要分发的文件、`version`、`source` raw URL）；未注册的后端不会被 WebUI/CLI 发现与安装。
+- 新增后端要走「shop 分支源码 + main 注册表」：源码提交到 `shop` 分支的 `backends/<名称>/`，并在 main 的 `backends.json` 注册（`files` 列出所有需要分发的文件、`version`、`source` 指向 `shop` 分支 raw URL）；未注册的后端不会被 WebUI/CLI 发现与安装。
 - 确保不弹黑框：任何在 WebUI/后台（无控制台）进程里执行的子进程调用，Windows 下必须带 `CREATE_NO_WINDOW`——统一用 `launcher._no_window_kwargs()` 注入，新增子进程调用一律走该辅助函数；改完用 `rg -n "subprocess"` 排查所有调用点，逐处确认。更新已改为纯 HTTP 下载，不执行 git。
 - 日志统一 UTF-8：子进程环境加 `PYTHONIOENCODING=utf-8`、`PYTHONUTF8=1`（同 `Supervisor.spawn` 的写法）。
 - 运行时配置读写只通过 `launcher.backend_config()` / `save_backend_config()`，不要直接改 `.runtime.json` 结构。

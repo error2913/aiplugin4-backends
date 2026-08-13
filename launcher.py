@@ -38,6 +38,7 @@ MANIFEST_FILE = "backend.json"
 REGISTRY_FILE = "backends.json"  # 后端注册表（索引：名称/介绍/版本/下载源）
 GITHUB_REPO = "error2913/aiplugin4-backends"  # 上游仓库（更新源）
 RAW_BASE = f"https://raw.githubusercontent.com/{GITHUB_REPO}/main"
+RAW_SHOP_BASE = f"https://raw.githubusercontent.com/{GITHUB_REPO}/shop"  # 后端源码分支（安装/更新回退下载源）
 RELEASE_API = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
 DEFAULT_LOG_DIR = "logs"
 RUNTIME_FILE = ".runtime.json"
@@ -897,7 +898,7 @@ def download_backend_files(entry: dict, backend_dir: str) -> None:
     """按注册表从远端下载后端程序文件到 backends/<name>；远端不可用时回退到本地同目录文件"""
     name = entry.get("name", "")
     source = (entry.get("source") or "").rstrip("/") or (
-        f"{RAW_BASE}/backends/{name}"
+        f"{RAW_SHOP_BASE}/backends/{name}"
     )
     files = entry.get("files") or []
     os.makedirs(backend_dir, exist_ok=True)
@@ -923,8 +924,53 @@ def download_backend_files(entry: dict, backend_dir: str) -> None:
             raise RuntimeError(f"下载后端文件失败且本地无副本: {name}/{rel}")
 
 
+def _extract_backend_package(zip_path: str, dest_dir: str) -> None:
+    """把后端独立包（zip 内路径为 backends/<name>/...）解压到 dest_dir（installed/<name>）"""
+    base = os.path.realpath(dest_dir)
+    with zipfile.ZipFile(zip_path) as zf:
+        for member in zf.infolist():
+            rel = member.filename.replace("\\", "/").lstrip("/")
+            parts = rel.split("/")
+            if len(parts) >= 3 and parts[0] == "backends":
+                rel = "/".join(parts[2:])
+            if not rel or rel.endswith("/") or os.path.normpath(rel).startswith(".."):
+                continue
+            dest = os.path.realpath(os.path.join(base, *rel.split("/")))
+            if dest != base and not dest.startswith(base + os.sep):
+                continue  # 防 zip 路径穿越
+            os.makedirs(os.path.dirname(dest), exist_ok=True)
+            with zf.open(member) as src, open(dest, "wb") as out:
+                shutil.copyfileobj(src, out)
+
+
+def _download_backend_package(entry: dict, dest_dir: str, timeout: int = 120) -> None:
+    """按注册表版本从 GitHub 最新 release 下载后端独立包并解压到 dest_dir"""
+    name = entry.get("name", "")
+    version = str(entry.get("version", "") or "")
+    if not name or not version:
+        raise RuntimeError("注册表缺少名称/版本，无法按独立包下载")
+    asset = f"aiplugin4-backends-{name}-{version}.zip"
+    url = _release_asset(asset)
+    if not url:
+        raise RuntimeError(f"release 中未找到 {asset}")
+    tmp_path = ""
+    try:
+        fd, tmp_path = tempfile.mkstemp(prefix="aib4-install-", suffix=".zip")
+        os.close(fd)
+        with _http_open(url, timeout=timeout) as resp, open(tmp_path, "wb") as f:
+            shutil.copyfileobj(resp, f, 1024 * 1024)
+        _extract_backend_package(tmp_path, dest_dir)
+    finally:
+        if tmp_path and os.path.isfile(tmp_path):
+            try:
+                os.remove(tmp_path)
+            except OSError:
+                pass
+
+
 def install_backend(name: str) -> Backend:
-    """安装后端：从商店 backends/<name> 选择性复制到 installed/<name>（商店缺文件时从远端下载）→ 安装依赖；返回 Backend"""
+    """安装后端：优先按注册表版本从 release 独立包下载程序到 installed/<name>
+    （缓存版本一致时直接复制；独立包失败时回退缓存/远端文件），然后安装依赖；返回 Backend"""
     entry = None
     registry_entry_data = None
     try:
@@ -933,7 +979,7 @@ def install_backend(name: str) -> Backend:
         pass
     shop_manifest = os.path.join(PACKAGES_DIR, name, MANIFEST_FILE)
     if os.path.isfile(shop_manifest):
-        # 优先用商店里后端的自带清单（可能是独立包更新后的最新文件清单）
+        # 优先用缓存里后端的自带清单（可能是独立包更新后的最新文件清单）
         try:
             with open(shop_manifest, encoding="utf-8") as f:
                 candidate = json.load(f)
@@ -944,15 +990,19 @@ def install_backend(name: str) -> Backend:
     if entry is None:
         entry = dict(registry_entry_data or {})
     if registry_entry_data:
-        # 注册表作为兜底元数据（商店清单可能缺 version/source 等字段）
+        # 注册表作为兜底元数据（缓存清单可能缺 version/source 等字段）
         for k in ("version", "description", "source", "files"):
             if not entry.get(k) and registry_entry_data.get(k):
                 entry = {**entry, k: registry_entry_data[k]}
     backend_dir = os.path.join(INSTALLED_DIR, name)
     source_dir = os.path.join(PACKAGES_DIR, name)
     files = entry.get("files") or []
-    copied = 0
-    if os.path.isdir(source_dir):
+    registry_version = str((registry_entry_data or {}).get("version", "") or "")
+
+    def _copy_from_cache() -> int:
+        copied = 0
+        if not os.path.isdir(source_dir):
+            return 0
         for rel in files:
             rel = rel.replace("\\", "/").lstrip("/")
             if not rel or os.path.normpath(rel).startswith(".."):
@@ -963,9 +1013,40 @@ def install_backend(name: str) -> Backend:
                 os.makedirs(os.path.dirname(dst), exist_ok=True)
                 shutil.copy2(src, dst)
                 copied += 1
+        return copied
+
+    copied = 0
+    # 缓存与注册表版本一致时直接复制（更新流程会先把新版解压进缓存），否则按 release 独立包下载
+    cache_version = ""
+    if os.path.isfile(shop_manifest):
+        try:
+            with open(shop_manifest, encoding="utf-8") as f:
+                cache_version = str((json.load(f) or {}).get("version", "") or "")
+        except (OSError, ValueError):
+            pass
+    if cache_version and (not registry_version or cache_version == registry_version):
+        copied = _copy_from_cache()
     if copied < len(files):
-        download_backend_files(entry, backend_dir)
-    # 始终用合并后的元数据写回清单（商店/远端清单可能缺 version 等字段）
+        try:
+            os.makedirs(backend_dir, exist_ok=True)
+            _download_backend_package(entry, backend_dir)
+            missing = [
+                rel
+                for rel in files
+                if not os.path.isfile(
+                    os.path.join(backend_dir, *rel.replace("\\", "/").lstrip("/").split("/"))
+                )
+            ]
+            if missing:
+                raise RuntimeError(f"独立包缺少文件: {', '.join(missing)}")
+            copied = len(files)
+        except Exception as e:  # noqa: BLE001
+            print(f"[launcher] {name} 独立包下载失败，回退缓存/远端文件: {e}")
+            copied = _copy_from_cache()
+            if copied < len(files):
+                download_backend_files(entry, backend_dir)
+                copied = len(files)
+    # 始终用合并后的元数据写回清单（缓存/远端清单可能缺 version 等字段）
     with open(os.path.join(backend_dir, MANIFEST_FILE), "w", encoding="utf-8") as f:
         json.dump(entry, f, ensure_ascii=False, indent=2)
     backend = Backend(

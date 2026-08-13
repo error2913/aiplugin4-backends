@@ -2,6 +2,13 @@
 
 标题格式为 `## <版本号>`，release 工作流按标签版本号读取对应段落作为发布说明；日常更新以「Unreleased」汇总，发版前改成版本号并补日期。
 
+## 0.10.0 - 2026-08-14
+
+- 后端程序不再随仓库分发：主分支只保留框架与注册表信息（`backends.json`），一条指令安装（git clone + `python launcher.py`）只装框架，不含后端程序
+- 后端源码移到独立 `shop` 分支（供 release 打包与下载回退），release 工作流新增从该分支暂存源码的步骤
+- 点「安装」才下载程序：按注册表版本从 GitHub release 下载对应后端独立包（`aiplugin4-backends-<名称>-<版本>.zip`）解压到 `installed/`，失败自动回退缓存/远端文件
+- `backends.json` 的 `source` 回退源与 `download_backend_files` 默认源改指向 `shop` 分支
+
 ## 0.9.2 - 2026-08-14
 
 - 修复 Node 后端安装后指纹漂移：安装完成后重算依赖指纹并写 `.install_ok`，不再出现「装完仍显示安装按钮」或漏记进程的问题

@@ -541,7 +541,7 @@ async function updateBackend(name){
   refresh();
 }
 async function uninstallBackend(name){
-  if (!confirm('确定卸载后端「' + name + '」吗？会停止进程并删除已安装的程序与依赖（git 商店里的包不受影响）。')) return;
+  if (!confirm('确定卸载后端「' + name + '」吗？会停止进程并删除 installed/ 下的程序与依赖（下载缓存不受影响）。')) return;
   deleting.add(name);
   refresh();
   showInstallLog(name);

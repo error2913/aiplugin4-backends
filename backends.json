@@ -8,7 +8,7 @@
       "deps": "requirements.txt",
       "port": 46678,
       "version": "1.0.0",
-      "source": "https://raw.githubusercontent.com/error2913/aiplugin4-backends/main/backends/image-url-to-base64",
+      "source": "https://raw.githubusercontent.com/error2913/aiplugin4-backends/shop/backends/image-url-to-base64",
       "files": ["backend.json", "requirements.txt", "urltobase64.py"]
     },
     {
@@ -19,7 +19,7 @@
       "deps": "requirements.txt",
       "port": 3910,
       "version": "1.0.0",
-      "source": "https://raw.githubusercontent.com/error2913/aiplugin4-backends/main/backends/mcp-files-exec",
+      "source": "https://raw.githubusercontent.com/error2913/aiplugin4-backends/shop/backends/mcp-files-exec",
       "files": ["backend.json", "mcp_files_exec.py", "requirements.txt"]
     },
     {
@@ -30,7 +30,7 @@
       "deps": "package.json",
       "port": 37632,
       "version": "1.0.0",
-      "source": "https://raw.githubusercontent.com/error2913/aiplugin4-backends/main/backends/md-html-render",
+      "source": "https://raw.githubusercontent.com/error2913/aiplugin4-backends/shop/backends/md-html-render",
       "files": ["backend.json", "package.json", "render.js"]
     },
     {
@@ -41,7 +41,7 @@
       "deps": "requirements.txt",
       "port": 3010,
       "version": "1.0.0",
-      "source": "https://raw.githubusercontent.com/error2913/aiplugin4-backends/main/backends/stream-output",
+      "source": "https://raw.githubusercontent.com/error2913/aiplugin4-backends/shop/backends/stream-output",
       "files": ["backend.json", "requirements.txt", "stream_backend.py"]
     },
     {
@@ -52,7 +52,7 @@
       "deps": "requirements.txt",
       "port": 3009,
       "version": "1.0.0",
-      "source": "https://raw.githubusercontent.com/error2913/aiplugin4-backends/main/backends/usage-chart",
+      "source": "https://raw.githubusercontent.com/error2913/aiplugin4-backends/shop/backends/usage-chart",
       "files": ["backend.json", "requirements.txt", "usage_chart.py"]
     },
     {
@@ -63,7 +63,7 @@
       "deps": "package.json",
       "port": 46799,
       "version": "1.0.0",
-      "source": "https://raw.githubusercontent.com/error2913/aiplugin4-backends/main/backends/web-read",
+      "source": "https://raw.githubusercontent.com/error2913/aiplugin4-backends/shop/backends/web-read",
       "files": ["backend.json", "package.json", "puppeteer.js", "fonts/ScreenCJK.ttf"]
     }
   ]

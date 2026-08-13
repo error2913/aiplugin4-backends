@@ -24,7 +24,7 @@ git clone https://github.com/error2913/aiplugin4-backends.git && cd aiplugin4-ba
 
 首次运行即自动安装所需依赖、自动安装 `aibackend` 命令行并**在后台启动**管理界面（不占用终端、无控制台窗口，launcher 启动完成后立即退出）。WebUI 默认监听 `0.0.0.0`（全部网卡），端口与访问 token 首次运行随机生成并保持稳定，打开页面后输入 token 登录（记住一年）。自动开浏览器只在有图形环境时进行（Windows 直接开；Linux/macOS 需检测到 `DISPLAY` / `WAYLAND_DISPLAY` 且显式设置 `BROWSER`），无头服务器只打印访问地址。停止后台 WebUI：`python launcher.py webui-stop` 或 `aibackend webui-stop`。所有管理都在页面里完成：
 
-- 后端以「商店」形式随仓库分发（`backends/<名称>/`，注册表 `backends.json`）：未安装时卡片显示「安装」，点击后复制/下载程序文件到运行目录 `installed/` 并安装依赖（弹窗实时日志、按钮转圈），装完变「启动」；「卸载」只删运行副本，商店源文件不动
+- 一条指令只安装框架与后端注册表信息（`backends.json`），**不含后端程序**；每个后端在 release 中有独立包、各自版本控制，未安装时卡片显示「安装」，点击才按版本从 GitHub release 下载程序到运行目录 `installed/` 并安装依赖（弹窗实时日志、按钮转圈），装完变「启动」；「卸载」只删运行副本，下载缓存不动
 - 依赖精确同步：依赖清单（`requirements.txt` / `package.json`）变化后自动重建 venv / `npm ci`，保证依赖不多不少
 - 有后端未安装时，右上角出现「安装全部」，可批量安装（复制/下载程序 + 装依赖）
 - 「启动全部」只启动依赖已就绪的后端；若全部依赖未安装会弹出提示
@@ -71,7 +71,7 @@ launcher.py            入口：安装 WebUI 依赖并启动管理界面
 webui.py               Web 管理界面（纯 Python 标准库）
 assets/                WebUI 图标
 backends.json          后端注册表（名称/类型/端口/版本/下载源/文件清单）
-backends/<名称>/       后端商店源码（backend.json + 服务代码，随仓库分发）
+backends/<名称>/       后端程序缓存（点安装/更新时下载解压到这里，gitignore，源码在独立 shop 分支）
 installed/<名称>/      已安装后端运行副本（程序 + 依赖，gitignore，卸载即删）
 ```
 
@@ -79,7 +79,7 @@ installed/<名称>/      已安装后端运行副本（程序 + 依赖，gitigno
 
 管理全部通过 WebUI 完成：后端启停、依赖安装/删除、配置修改、运行日志都在页面里操作。端口/token/监听 IP 写入 `.runtime.json`（已 gitignore），启动时通过环境变量传给后端：`AIPLUGIN4_BACKEND_PORT`、`AIPLUGIN4_BACKEND_TOKEN`（非空时后端校验 `Authorization: Bearer <token>` 或 `X-Token: <token>`）、`AIPLUGIN4_BACKEND_HOST`。
 
-命令行安装/卸载后端：`python launcher.py install-backend <名称>` / `uninstall-backend <名称>`（aibackend 同样支持）；安装会先复制商店文件（商店缺失时按注册表从远端下载）再装依赖，卸载停止进程并删除 `installed/<名称>`。
+命令行安装/卸载后端：`python launcher.py install-backend <名称>` / `uninstall-backend <名称>`（aibackend 同样支持）；安装按注册表版本从 release 下载独立包（失败自动回退缓存/远端文件）再装依赖，卸载停止进程并删除 `installed/<名称>`。
 
 右上角「🔄 重启 WebUI」可让管理界面重新加载后端清单（新增/修改后端、代码更新后无需手动重启进程）；命令行等价 `launcher.py webui-restart` / `aibackend webui-restart`。
 
@@ -88,7 +88,7 @@ installed/<名称>/      已安装后端运行副本（程序 + 依赖，gitigno
 ## 更新
 
 - **本体更新**：WebUI 右上角「⬆ 更新」或 `aibackend update`。检测 GitHub 最新 release（`aiplugin4-backends-<版本>.zip`），比本地版本新就下载并直接覆盖仓库文件，不依赖 git——本地文件有改动也不会阻塞更新；更新成功后自动重启 WebUI 使新代码生效。
-- **后端更新**：每个后端在 release 里有独立包（`aiplugin4-backends-<后端名>-<版本>.zip`），版本各自独立记录在 `backends.json`。注册表版本高于本地版本时，卡片出现「⬆ 更新」按钮，点击只下载对应后端独立包覆盖商店并重装依赖，不影响其他后端；或 `uninstall-backend` 后重新 `install-backend`。
+- **后端更新**：每个后端在 release 里有独立包（`aiplugin4-backends-<后端名>-<版本>.zip`），版本各自独立记录在 `backends.json`。注册表版本高于本地版本时，卡片出现「⬆ 更新」按钮，点击只下载对应后端独立包并重装程序与依赖，不影响其他后端；或 `uninstall-backend` 后重新 `install-backend`。
 - **升级残留**：旧版（后端位于仓库顶层）升级到商店模型后，顶层目录里的 `node_modules/`、`.venv/`、缓存等未跟踪残留会自动清理——仅 git 部署时 launcher 启动会检测并整目录删除「git 已不再跟踪」的旧后端目录，商店 `backends/`、`installed/`、`logs/` 与运行配置不受影响。
 
 ## 命令行（aibackend）
