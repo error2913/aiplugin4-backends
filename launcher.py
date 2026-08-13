@@ -1062,7 +1062,20 @@ def install_backend(name: str) -> Backend:
             if copied < len(files):
                 download_backend_files(entry, backend_dir)
                 copied = len(files)
-    # 始终用合并后的元数据写回清单（缓存/远端清单可能缺 version 等字段）
+    # 始终用合并后的元数据写回清单：以程序包自带清单为准（含 config schema），注册表字段作兜底
+    installed_manifest = os.path.join(backend_dir, MANIFEST_FILE)
+    if os.path.isfile(installed_manifest):
+        try:
+            with open(installed_manifest, encoding="utf-8") as f:
+                pkg_meta = json.load(f)
+            if isinstance(pkg_meta, dict) and pkg_meta.get("name"):
+                entry = {**entry, **{k: v for k, v in pkg_meta.items() if v not in (None, "", [])}}
+        except (OSError, ValueError):
+            pass
+    if registry_entry_data:
+        for k in ("version", "description", "source", "files"):
+            if not entry.get(k) and registry_entry_data.get(k):
+                entry = {**entry, k: registry_entry_data[k]}
     with open(os.path.join(backend_dir, MANIFEST_FILE), "w", encoding="utf-8") as f:
         json.dump(entry, f, ensure_ascii=False, indent=2)
     backend = Backend(

@@ -2,6 +2,10 @@
 
 标题格式为 `## <版本号>`，release 工作流按标签版本号读取对应段落作为发布说明；日常更新以「Unreleased」汇总，发版前改成版本号并补日期。
 
+## 0.10.2 - 2026-08-14
+
+- 修复全新安装时 `installed/<名称>/backend.json` 的 `config` schema 丢失（注册表条目覆盖了程序包自带清单），导致 mcp-files-exec 默认沙箱路径不生效；现在写回清单以程序包为准、注册表字段兜底
+
 ## 0.10.1 - 2026-08-14
 
 - mcp-files-exec 默认沙箱工作路径改到仓库根 `data/mcp-files-exec`，审计日志改到 `logs/mcp-files-exec.log`，不再落在程序目录 `installed/` 内——后端更新/重装/卸载都不会动数据
