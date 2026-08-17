@@ -1,9 +1,9 @@
 {
   "name": "ob11-core-bridge",
-  "description": "SealDice 核心反向 WS /core、OB11 协议端 /onebot 与 MCP /mcp 的透明中转；支持注入假消息执行核心/扩展指令",
+  "description": "SealDice 核心正向 WS /core、OB11 协议端 /onebot 与 MCP /mcp 的透明中转；支持注入假消息执行核心/扩展指令",
   "type": "node",
   "entry": "bridge.js",
   "deps": "package.json",
   "port": 46880,
-  "version": "1.0.0"
+  "version": "1.0.1"
 }

@@ -13,12 +13,10 @@ const CORE_PATH = process.env.AIPLUGIN4_BRIDGE_CORE_PATH || '/core';
 const CORE_PATHS = new Set((process.env.AIPLUGIN4_BRIDGE_CORE_PATHS || `${CORE_PATH},${CORE_PATH.replace(/\/$/, '')}/ws`)
   .split(',').map(value => value.trim()).filter(Boolean));
 const ONEBOT_PATH = process.env.AIPLUGIN4_BRIDGE_ONEBOT_PATH || '/onebot';
-const CONTROL_PATH = process.env.AIPLUGIN4_BRIDGE_CONTROL_PATH || '/control';
 const MCP_PATH = process.env.AIPLUGIN4_BRIDGE_MCP_PATH || '/mcp';
 const BRIDGE_TOKEN = process.env.AIPLUGIN4_BRIDGE_TOKEN || '';
 const CORE_TOKEN = process.env.AIPLUGIN4_BRIDGE_CORE_TOKEN ?? BRIDGE_TOKEN;
 const PROTOCOL_TOKEN = process.env.AIPLUGIN4_BRIDGE_PROTOCOL_TOKEN ?? BRIDGE_TOKEN;
-const CORE_URL = process.env.AIPLUGIN4_BRIDGE_CORE_URL || '';
 const DEFAULT_TIMEOUT_MS = 10000;
 const DEFAULT_SETTLE_MS = 400;
 const MAX_MESSAGES = 50;
@@ -82,9 +80,8 @@ function nowSafeId() {
 }
 
 class Invocation {
-  constructor(bridge, controlWs, request) {
+  constructor(bridge, request) {
     this.bridge = bridge;
-    this.controlWs = controlWs;
     this.id = String(request.id || `invoke_${crypto.randomUUID()}`);
     this.target = request.target || {};
     this.lane = laneKey(this.target);
@@ -118,10 +115,6 @@ class Invocation {
   acceptMessage(message, meta) {
     if (this.completed || this.messages.length >= this.maxMessages) return false;
     this.messages.push({ ...message, ...meta });
-    jsonSend(this.controlWs, {
-      type: 'command.message', id: this.id, message: this.messages[this.messages.length - 1],
-      forwarded: meta.forwarded === true, intercepted: meta.intercepted === true
-    });
     if (this.messages.length >= this.maxMessages) this.finish('max_messages');
     else {
       if (this.settleTimer) clearTimeout(this.settleTimer);
@@ -182,7 +175,7 @@ function mcpResult(result) {
 }
 
 function createMcpServer(bridge) {
-  const server = new McpServer({ name: 'ob11-core-bridge', version: '1.0.0' });
+  const server = new McpServer({ name: 'ob11-core-bridge', version: '1.0.1' });
   const input = {
     target: MCP_TARGET_SCHEMA.describe('注入假消息的目标群/私聊'),
     actor: MCP_ACTOR_SCHEMA.describe('假消息发送者'),
@@ -192,7 +185,7 @@ function createMcpServer(bridge) {
   };
   const call = (kind) => async (request) => {
     try {
-      const result = await bridge.invoke(null, { ...request, id: `${kind}_${crypto.randomUUID()}` });
+      const result = await bridge.queueInvoke({ ...request, id: `${kind}_${crypto.randomUUID()}` });
       return mcpResult(result);
     } catch (error) {
       return mcpResult({ ok: false, error: error instanceof Error ? error.message : String(error), messages: [] });
@@ -210,20 +203,14 @@ class Bridge {
     this.wss = new WebSocketServer({ noServer: true });
     this.coreClients = new Set();
     this.protocolClients = new Set();
-    this.controlClients = new Set();
     this.invocations = new Map();
     this.lanes = new Map();
     this.echoTargets = new Map();
     this.stopping = false;
-    this.coreConnector = null;
-    this.coreReconnectTimer = null;
-    this.coreGeneration = 0;
     this.mcpTransports = new Map();
   }
   async start() {
     this.stopping = false;
-    this.coreConnector = null;
-    this.coreReconnectTimer = null;
     this.server = http.createServer((req, res) => {
       const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
       if (url.pathname === '/healthz') {
@@ -250,9 +237,9 @@ class Bridge {
     });
     this.server.on('upgrade', (req, socket, head) => {
       const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
-      const kind = CORE_PATHS.has(url.pathname) ? 'core' : url.pathname === ONEBOT_PATH ? 'onebot' : url.pathname === CONTROL_PATH ? 'control' : '';
+      const kind = CORE_PATHS.has(url.pathname) ? 'core' : url.pathname === ONEBOT_PATH ? 'onebot' : '';
       if (!kind) { socket.destroy(); return; }
-      const expectedToken = kind === 'core' ? CORE_TOKEN : kind === 'onebot' ? PROTOCOL_TOKEN : BRIDGE_TOKEN;
+      const expectedToken = kind === 'core' ? CORE_TOKEN : PROTOCOL_TOKEN;
       if (expectedToken && url.searchParams.get('access_token') !== expectedToken && req.headers.authorization !== `Bearer ${expectedToken}`) { socket.destroy(); return; }
       this.wss.handleUpgrade(req, socket, head, ws => {
         ws._bridgeKind = kind;
@@ -261,22 +248,15 @@ class Bridge {
     });
     this.wss.on('connection', ws => this.attachClient(ws));
     await new Promise(resolve => this.server.listen(PORT, HOST, resolve));
-    log('info', `listening ${HOST}:${PORT}, core=${[...CORE_PATHS].join(',')}, onebot=${ONEBOT_PATH}, control=${CONTROL_PATH}, mcp=${MCP_PATH}`);
-    if (CORE_URL) this.connectOutboundCore();
+    log('info', `listening ${HOST}:${PORT}, core=${[...CORE_PATHS].join(',')}, onebot=${ONEBOT_PATH}, mcp=${MCP_PATH}`);
     return this;
   }
   async stop() {
     this.stopping = true;
-    this.coreGeneration++;
-    if (this.coreReconnectTimer) clearTimeout(this.coreReconnectTimer);
-    this.coreReconnectTimer = null;
-    const outboundCore = this.coreConnector;
-    this.coreConnector = null;
     for (const invocation of this.invocations.values()) invocation.fail(new Error('bridge stopped'));
     for (const transport of this.mcpTransports.values()) { try { await transport.close(); } catch (_) { /* ignore */ } }
     this.mcpTransports.clear();
-    for (const ws of [...this.coreClients, ...this.protocolClients, ...this.controlClients]) ws.close();
-    if (outboundCore && !this.coreClients.has(outboundCore)) outboundCore.close();
+    for (const ws of [...this.coreClients, ...this.protocolClients]) ws.close();
     await new Promise(resolve => this.server ? this.server.close(() => resolve()) : resolve());
   }
   authorizeHttp(req, url) {
@@ -306,38 +286,6 @@ class Bridge {
     await transport.handleRequest(req, res);
   }
   isCoreConnected() { return this.coreClients.size > 0; }
-  connectOutboundCore() {
-    if (!CORE_URL || this.stopping || this.coreConnector) return;
-    const generation = this.coreGeneration;
-    const separator = CORE_URL.includes('?') ? '&' : '?';
-    const url = CORE_TOKEN ? `${CORE_URL}${separator}access_token=${encodeURIComponent(CORE_TOKEN)}` : CORE_URL;
-    let ws;
-    try {
-      ws = new WebSocket(url);
-    } catch (error) {
-      log('warn', `connect outbound core failed: ${url}`, error);
-      this.scheduleCoreReconnect();
-      return;
-    }
-    ws._bridgeKind = 'core';
-    ws._bridgeOutbound = true;
-    this.coreConnector = ws;
-    this.attachClient(ws);
-    ws.on('open', () => log('info', `connected outbound core: ${url.replace(/access_token=[^&]*/, 'access_token=***')}`));
-    ws.on('close', () => {
-      if (this.coreConnector === ws) this.coreConnector = null;
-      if (!this.stopping && this.coreGeneration === generation) this.scheduleCoreReconnect();
-    });
-    ws.on('error', error => log('warn', 'outbound core websocket error', error));
-  }
-  scheduleCoreReconnect() {
-    if (this.stopping || !CORE_URL || this.coreReconnectTimer) return;
-    const generation = this.coreGeneration;
-    this.coreReconnectTimer = setTimeout(() => {
-      this.coreReconnectTimer = null;
-      if (this.coreGeneration === generation) this.connectOutboundCore();
-    }, 1000);
-  }
   attachClient(ws) {
     if (ws._bridgeKind === 'core') {
       ws._bridgeCoreId = '';
@@ -354,19 +302,6 @@ class Bridge {
       ws.on('message', data => this.handleProtocolMessage(ws, data));
       ws.on('close', () => this.protocolClients.delete(ws));
       ws.on('error', e => log('warn', 'protocol client error', e));
-    } else {
-      this.controlClients.add(ws);
-      ws.once('message', data => {
-        const hello = parseMessage(data);
-        if (!hello || hello.type !== 'hello' || hello.protocol !== 'aiplugin4-core-bridge' || (BRIDGE_TOKEN && hello.token !== BRIDGE_TOKEN)) {
-          ws.close(1008, 'invalid hello'); return;
-        }
-        ws._bridgeHello = true;
-        jsonSend(ws, { type: 'hello.ok', protocol: 'aiplugin4-core-bridge', version: 1, coreConnected: this.isCoreConnected() });
-        ws.on('message', raw => this.handleControl(ws, raw));
-      });
-      ws.on('close', () => this.controlClients.delete(ws));
-      ws.on('error', e => log('warn', 'control client error', e));
     }
   }
   coreForTarget(target) {
@@ -474,18 +409,16 @@ class Bridge {
     if (!packet.echo) return;
     jsonSend(coreWs, { status: 'ok', retcode: 0, data: { message_id: Bridge.nextMessageId++ }, echo: packet.echo });
   }
-  async handleControl(ws, raw) {
-    const request = parseMessage(raw);
-    if (!request || request.type !== 'command.invoke' || !request.id || !request.command || !request.command.raw) { jsonSend(ws, { type: 'error', error: 'invalid command.invoke' }); return; }
+  queueInvoke(request) {
     const lane = laneKey(request.target || {});
     const previous = this.lanes.get(lane) || Promise.resolve();
-    const run = previous.catch(() => undefined).then(() => this.invoke(ws, request));
+    const run = previous.catch(() => undefined).then(() => this.invoke(request));
     const queued = run.finally(() => { if (this.lanes.get(lane) === queued) this.lanes.delete(lane); });
     this.lanes.set(lane, queued);
-    await run.catch(e => jsonSend(ws, { type: 'command.result', id: String(request.id), ok: false, error: e.message }));
+    return run;
   }
-  async invoke(ws, request) {
-    const invocation = new Invocation(this, ws, request);
+  async invoke(request) {
+    const invocation = new Invocation(this, request);
     invocation.startedAt = Date.now();
     invocation.virtualMessageId = nowSafeId();
     this.invocations.set(invocation.id, invocation);
@@ -507,14 +440,10 @@ class Bridge {
         sender: { user_id: userId, nickname: String(request.actor && request.actor.nickname || 'AI'), card: '', sex: 'unknown', age: 0, role: String(request.actor && request.actor.role || 'member'), title: '' }
       };
       sendRaw(coreWs, JSON.stringify(fakeEvent));
-      const result = await resultPromise;
-      jsonSend(ws, result);
-      return result;
+      return await resultPromise;
     } catch (e) {
       invocation.fail(e);
-      const result = await resultPromise;
-      jsonSend(ws, result);
-      return result;
+      return await resultPromise;
     } finally {
       this.invocations.delete(invocation.id);
     }
