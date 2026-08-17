@@ -1,0 +1,15 @@
+{
+    "time": 1786251611,
+    "self_id": 10001,
+    "post_type": "message",
+    "message_type": "group",
+    "sub_type": "normal",
+    "message_id": 900000001,
+    "user_id": 30002,
+    "group_id": 20002,
+    "message": [{"type":"text","data":{"text":"示例文本"}}],
+    "raw_message": "示例文本",
+    "font": 0,
+    "anonymous": null,
+    "sender": {"user_id":30002,"nickname":"示例用户","card":"","role":"admin","title":"示例标题"}
+}
