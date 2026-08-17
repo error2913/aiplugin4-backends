@@ -12,11 +12,13 @@ const PORT = Number(process.env.AIPLUGIN4_BACKEND_PORT || 46880);
 const CORE_PATH = process.env.AIPLUGIN4_BRIDGE_CORE_PATH || '/core';
 const CORE_PATHS = new Set((process.env.AIPLUGIN4_BRIDGE_CORE_PATHS || `${CORE_PATH},${CORE_PATH.replace(/\/$/, '')}/ws`)
   .split(',').map(value => value.trim()).filter(Boolean));
-const ONEBOT_PATH = process.env.AIPLUGIN4_BRIDGE_ONEBOT_PATH || '/onebot';
 const MCP_PATH = process.env.AIPLUGIN4_BRIDGE_MCP_PATH || '/mcp';
 const BRIDGE_TOKEN = process.env.AIPLUGIN4_BRIDGE_TOKEN || '';
 const CORE_TOKEN = process.env.AIPLUGIN4_BRIDGE_CORE_TOKEN ?? BRIDGE_TOKEN;
-const PROTOCOL_TOKEN = process.env.AIPLUGIN4_BRIDGE_PROTOCOL_TOKEN ?? BRIDGE_TOKEN;
+const PROTOCOL_URL = process.env.AIPLUGIN4_BRIDGE_PROTOCOL_URL || '';
+const PROTOCOL_TOKEN = process.env.AIPLUGIN4_BRIDGE_PROTOCOL_TOKEN || '';
+const PROTOCOL_RECONNECT_MIN = 1000;
+const PROTOCOL_RECONNECT_MAX = 30000;
 const DEFAULT_TIMEOUT_MS = 10000;
 const DEFAULT_SETTLE_MS = 400;
 const MAX_MESSAGES = 50;
@@ -175,7 +177,7 @@ function mcpResult(result) {
 }
 
 function createMcpServer(bridge) {
-  const server = new McpServer({ name: 'ob11-core-bridge', version: '1.0.2' });
+  const server = new McpServer({ name: 'ob11-core-bridge', version: '1.0.3' });
   const input = {
     target: MCP_TARGET_SCHEMA.describe('注入假消息的目标群/私聊'),
     actor: MCP_ACTOR_SCHEMA.describe('假消息发送者'),
@@ -208,6 +210,8 @@ class Bridge {
     this.echoTargets = new Map();
     this.stopping = false;
     this.mcpTransports = new Map();
+    this.protocolTimer = null;
+    this.protocolReconnectMs = PROTOCOL_RECONNECT_MIN;
   }
   async start() {
     this.stopping = false;
@@ -237,9 +241,9 @@ class Bridge {
     });
     this.server.on('upgrade', (req, socket, head) => {
       const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
-      const kind = CORE_PATHS.has(url.pathname) ? 'core' : url.pathname === ONEBOT_PATH ? 'onebot' : '';
+      const kind = CORE_PATHS.has(url.pathname) ? 'core' : '';
       if (!kind) { socket.destroy(); return; }
-      const expectedToken = kind === 'core' ? CORE_TOKEN : PROTOCOL_TOKEN;
+      const expectedToken = CORE_TOKEN;
       if (expectedToken && url.searchParams.get('access_token') !== expectedToken && req.headers.authorization !== `Bearer ${expectedToken}`) { socket.destroy(); return; }
       this.wss.handleUpgrade(req, socket, head, ws => {
         ws._bridgeKind = kind;
@@ -248,11 +252,13 @@ class Bridge {
     });
     this.wss.on('connection', (ws, req) => this.attachClient(ws, req));
     await new Promise(resolve => this.server.listen(PORT, HOST, resolve));
-    log('info', `listening ${HOST}:${PORT}, core=${[...CORE_PATHS].join(',')}, onebot=${ONEBOT_PATH}, mcp=${MCP_PATH}`);
+    log('info', `listening ${HOST}:${PORT}, core=${[...CORE_PATHS].join(',')}, protocol=${PROTOCOL_URL || '未配置'}, mcp=${MCP_PATH}`);
+    this.startProtocolClient();
     return this;
   }
   async stop() {
     this.stopping = true;
+    if (this.protocolTimer) { clearTimeout(this.protocolTimer); this.protocolTimer = null; }
     for (const invocation of this.invocations.values()) invocation.fail(new Error('bridge stopped'));
     for (const transport of this.mcpTransports.values()) { try { await transport.close(); } catch (_) { /* ignore */ } }
     this.mcpTransports.clear();
@@ -289,28 +295,64 @@ class Bridge {
   attachClient(ws, req) {
     const path = req ? String(req.url || '').split('?')[0] : '';
     const ip = req && req.socket ? req.socket.remoteAddress : '';
-    if (ws._bridgeKind === 'core') {
-      ws._bridgeCoreId = '';
-      this.coreClients.add(ws);
-      log('info', `SealDice 核心已连接: ${path}${ip ? ` (${ip})` : ''}${CORE_TOKEN ? ' [token 校验通过]' : ' [未配置 token]'}`);
-      ws.on('message', data => this.handleCoreMessage(ws, data));
-      ws.on('close', () => {
-        this.coreClients.delete(ws);
-        for (const [echo, target] of this.echoTargets) if (target === ws) this.echoTargets.delete(echo);
-        for (const invocation of this.invocations.values()) if (invocation.coreWs === ws) invocation.fail(new Error('core websocket disconnected'));
-        log('info', `SealDice 核心已断开: ${path}${ip ? ` (${ip})` : ''}${CORE_TOKEN ? ' [token 校验通过]' : ' [未配置 token]'}`);
-      });
-      ws.on('error', e => log('warn', 'core client error', e));
-    } else if (ws._bridgeKind === 'onebot') {
-      this.protocolClients.add(ws);
-      log('info', `协议端已连接: ${path}${ip ? ` (${ip})` : ''}${PROTOCOL_TOKEN ? ' [token 校验通过]' : ' [未配置 token]'}`);
-      ws.on('message', data => this.handleProtocolMessage(ws, data));
-      ws.on('close', () => {
-        this.protocolClients.delete(ws);
-        log('info', `协议端已断开: ${path}${ip ? ` (${ip})` : ''}${PROTOCOL_TOKEN ? ' [token 校验通过]' : ' [未配置 token]'}`);
-      });
-      ws.on('error', e => log('warn', 'protocol client error', e));
+    ws._bridgeCoreId = '';
+    this.coreClients.add(ws);
+    log('info', `SealDice 核心已连接: ${path}${ip ? ` (${ip})` : ''}${CORE_TOKEN ? ' [token 校验通过]' : ' [未配置 token]'}`);
+    ws.on('message', data => this.handleCoreMessage(ws, data));
+    ws.on('close', () => {
+      this.coreClients.delete(ws);
+      for (const [echo, target] of this.echoTargets) if (target === ws) this.echoTargets.delete(echo);
+      for (const invocation of this.invocations.values()) if (invocation.coreWs === ws) invocation.fail(new Error('core websocket disconnected'));
+      log('info', `SealDice 核心已断开: ${path}${ip ? ` (${ip})` : ''}${CORE_TOKEN ? ' [token 校验通过]' : ' [未配置 token]'}`);
+    });
+    ws.on('error', e => log('warn', 'core client error', e));
+  }
+  attachProtocolClient(ws) {
+    this.protocolClients.add(ws);
+    ws.on('message', data => this.handleProtocolMessage(ws, data));
+    ws.on('error', e => log('warn', 'protocol client error', e));
+  }
+  startProtocolClient() {
+    if (!PROTOCOL_URL) {
+      log('warn', '未配置协议端地址 AIPLUGIN4_BRIDGE_PROTOCOL_URL，中间件不会主动连接协议端');
+      return;
     }
+    this.protocolReconnectMs = PROTOCOL_RECONNECT_MIN;
+    this.connectProtocolClient();
+  }
+  connectProtocolClient() {
+    if (this.stopping) return;
+    let url;
+    try { url = new URL(PROTOCOL_URL); } catch (e) {
+      log('error', `协议端地址无效: ${PROTOCOL_URL}`, e);
+      return;
+    }
+    if (PROTOCOL_TOKEN && !url.searchParams.has('access_token')) url.searchParams.set('access_token', PROTOCOL_TOKEN);
+    const ws = new WebSocket(url.toString(), PROTOCOL_TOKEN ? { headers: { Authorization: `Bearer ${PROTOCOL_TOKEN}` } } : undefined);
+    ws.on('open', () => {
+      if (this.stopping) { try { ws.close(); } catch (_) { /* ignore */ } return; }
+      this.protocolReconnectMs = PROTOCOL_RECONNECT_MIN;
+      log('info', `协议端已连接: ${PROTOCOL_URL}`);
+      this.attachProtocolClient(ws);
+    });
+    ws.on('close', () => {
+      this.protocolClients.delete(ws);
+      if (this.stopping) return;
+      log('warn', `协议端连接断开，${this.protocolReconnectMs / 1000}s 后重连: ${PROTOCOL_URL}`);
+      this.scheduleProtocolReconnect();
+    });
+    ws.on('error', () => { /* 连接失败/中途错误随后触发 close，统一在 close 中处理重连 */ });
+    ws.on('unexpected-response', (_req, res) => {
+      log('error', `协议端握手失败 HTTP ${res.statusCode}（token 可能不正确）: ${PROTOCOL_URL}`);
+    });
+  }
+  scheduleProtocolReconnect() {
+    if (this.stopping || this.protocolTimer) return;
+    this.protocolTimer = setTimeout(() => {
+      this.protocolTimer = null;
+      this.protocolReconnectMs = Math.min(this.protocolReconnectMs * 2, PROTOCOL_RECONNECT_MAX);
+      this.connectProtocolClient();
+    }, this.protocolReconnectMs);
   }
   coreForTarget(target) {
     const selfId = idString(target && (target.selfId ?? target.self_id));

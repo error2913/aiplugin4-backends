@@ -4,6 +4,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
+const net = require('node:net');
 const { WebSocket, WebSocketServer } = require('ws');
 
 const FIXTURE = JSON.parse(fs.readFileSync(path.join(__dirname, 'fixtures', 'message_text.json'), 'utf8'));
@@ -70,17 +71,62 @@ let Bridge;
 let bridge;
 let bridgePort;
 let coreSockets;
+let protocolServer;
+let protocolPort;
+let protocolConnections;
 
-async function setup() {
+// 启动一个假的 OB11 协议端 WS 服务端（随机端口），可选 token 校验与指定端口
+async function startProtocolServer(serverToken = 'test-token', port = 0) {
+  protocolConnections = [];
+  protocolServer = new WebSocketServer({ port });
+  protocolServer.on('connection', (ws, req) => {
+    const url = new URL(req.url, 'http://localhost');
+    const hasQuery = url.searchParams.get('access_token') === serverToken;
+    const hasHeader = (req.headers.authorization || '') === `Bearer ${serverToken}`;
+    if (serverToken && !hasQuery && !hasHeader) { ws.close(1008, 'unauthorized'); return; }
+    protocolConnections.push(ws);
+  });
+  await new Promise(resolve => protocolServer.once('listening', resolve));
+  protocolPort = protocolServer.address().port;
+  return protocolPort;
+}
+
+function freePort() {
+  return new Promise((resolve, reject) => {
+    const server = net.createServer();
+    server.once('error', reject);
+    server.listen(0, '127.0.0.1', () => {
+      const port = server.address().port;
+      server.close(() => resolve(port));
+    });
+  });
+}
+
+async function setup(options = {}) {
+  const { withProtocol = true, protocolUrl = '', protocolToken = 'test-token', serverToken = 'test-token' } = options;
   coreSockets = [];
+  protocolConnections = [];
+  protocolServer = null;
+  protocolPort = 0;
   bridgePort = 47000 + Math.floor(Math.random() * 1000);
   process.env.AIPLUGIN4_BACKEND_PORT = String(bridgePort);
   process.env.AIPLUGIN4_BACKEND_HOST = '127.0.0.1';
   process.env.AIPLUGIN4_BRIDGE_CORE_PATH = '/core';
-  process.env.AIPLUGIN4_BRIDGE_ONEBOT_PATH = '/onebot';
   process.env.AIPLUGIN4_BRIDGE_TOKEN = 'test-token';
   process.env.AIPLUGIN4_BRIDGE_CORE_TOKEN = 'test-token';
-  process.env.AIPLUGIN4_BRIDGE_PROTOCOL_TOKEN = 'test-token';
+  delete process.env.AIPLUGIN4_BRIDGE_ONEBOT_PATH;
+  if (withProtocol) {
+    if (protocolUrl) {
+      process.env.AIPLUGIN4_BRIDGE_PROTOCOL_URL = protocolUrl;
+    } else {
+      await startProtocolServer(serverToken);
+      process.env.AIPLUGIN4_BRIDGE_PROTOCOL_URL = `ws://127.0.0.1:${protocolPort}`;
+    }
+    process.env.AIPLUGIN4_BRIDGE_PROTOCOL_TOKEN = protocolToken;
+  } else {
+    delete process.env.AIPLUGIN4_BRIDGE_PROTOCOL_URL;
+    delete process.env.AIPLUGIN4_BRIDGE_PROTOCOL_TOKEN;
+  }
   delete require.cache[require.resolve('../bridge')];
   ({ Bridge } = require('../bridge'));
   bridge = new Bridge();
@@ -90,7 +136,14 @@ async function setup() {
 async function teardown() {
   if (bridge) await bridge.stop();
   bridge = null;
+  for (const ws of coreSockets) { try { ws.close(); } catch (_) { /* ignore */ } }
   coreSockets = [];
+  for (const ws of protocolConnections) { try { ws.close(); } catch (_) { /* ignore */ } }
+  protocolConnections = [];
+  if (protocolServer) {
+    await new Promise(resolve => protocolServer.close(() => resolve()));
+    protocolServer = null;
+  }
 }
 
 async function connectCore(id = null) {
@@ -102,8 +155,13 @@ async function connectCore(id = null) {
   return ws;
 }
 
-async function connectProtocol() {
-  return connect(`ws://127.0.0.1:${bridgePort}/onebot?access_token=test-token`);
+// 返回协议端（假服务端一侧）当前已连接的 socket；桥接器出站主动连接协议端
+function protocolConn() {
+  return protocolConnections.find(ws => ws.readyState === WebSocket.OPEN) || null;
+}
+async function waitForProtocol(timeout = 5000) {
+  await waitFor(() => protocolConn() !== null, timeout);
+  return protocolConn();
 }
 
 function groupTarget(groupId = '20002', selfId = '10001') {
@@ -178,7 +236,7 @@ test('accepts SealDice core websocket on /core and /core/ws', async t => {
 test('transparent forwarding, raw frames, login echo routing, and healthz', async t => {
   await setup(); t.after(teardown);
   const core = await connectCore();
-  const protocol = await connectProtocol();
+  const protocol = await waitForProtocol();
 
   const toCoreRaw = waitForRaw(core, 'raw protocol frame');
   protocol.send('raw protocol frame');
@@ -206,7 +264,7 @@ test('transparent forwarding, raw frames, login echo routing, and healthz', asyn
 });
 
 test('core API requests fail fast with status failed when no protocol client is connected', async t => {
-  await setup(); t.after(teardown);
+  await setup({ withProtocol: false }); t.after(teardown);
   const core = await connectCore();
   const health = await fetch(`http://127.0.0.1:${bridgePort}/healthz`).then(response => response.json());
   assert.equal(health.protocolConnected, false);
@@ -224,7 +282,7 @@ test('core API requests fail fast with status failed when no protocol client is 
 test('invoke captures multiple actions and intercepts them by default', async t => {
   await setup(); t.after(teardown);
   const core = await connectCore();
-  const protocol = await connectProtocol();
+  const protocol = await waitForProtocol();
   const sessionId = await mcpSession();
 
   const seenFake = waitForMessage(core, packet => packet.post_type === 'message' && packet.raw_message === '.jrrp');
@@ -260,7 +318,7 @@ test('invoke captures multiple actions and intercepts them by default', async t 
 test('lane capture intercepts bot message events', async t => {
   await setup(); t.after(teardown);
   const core = await connectCore();
-  const protocol = await connectProtocol();
+  const protocol = await waitForProtocol();
   const sessionId = await mcpSession();
   const protocolPackets = [];
   protocol.on('message', data => { try { protocolPackets.push(JSON.parse(data.toString())); } catch (_) {} });
@@ -284,7 +342,7 @@ test('lane capture intercepts bot message events', async t => {
 test('forward=true forwards actions and routes protocol API responses back to core', async t => {
   await setup(); t.after(teardown);
   const core = await connectCore();
-  const protocol = await connectProtocol();
+  const protocol = await waitForProtocol();
   const sessionId = await mcpSession();
   const protocolActions = [];
   const protocolEvents = [];
@@ -373,7 +431,7 @@ test('private send_msg targets private lanes correctly', async t => {
 test('lane mode captures events, maxMessages bounds mixed replies, and reply_only marks ambiguity', async t => {
   await setup(); t.after(teardown);
   const core = await connectCore();
-  const protocol = await connectProtocol();
+  const protocol = await waitForProtocol();
   const sessionId = await mcpSession();
   let invocationCount = 0;
   core.on('message', data => {
@@ -425,7 +483,7 @@ test('multiple core connections route login responses, events, and invocations b
   await setup(); t.after(teardown);
   const core1 = await connectCore();
   const core2 = await connectCore();
-  const protocol = await connectProtocol();
+  const protocol = await waitForProtocol();
   const login1 = waitForMessage(protocol, packet => packet.echo === 'login-one');
   const login2 = waitForMessage(protocol, packet => packet.echo === 'login-two');
   const loginResponse1 = waitForMessage(core1, packet => packet.echo === 'login-one');
@@ -489,9 +547,50 @@ test('invalid auth and wrong tokens are rejected', async t => {
   const badCore = new WebSocket(`ws://127.0.0.1:${bridgePort}/core?access_token=wrong`);
   badCore.on('error', () => {});
   await waitForEvent(badCore, 'close');
-  const badProtocol = new WebSocket(`ws://127.0.0.1:${bridgePort}/onebot?access_token=wrong`);
-  badProtocol.on('error', () => {});
-  await waitForEvent(badProtocol, 'close');
+});
+
+test('protocol client connects outbound to protocol server with token', async t => {
+  await setup(); t.after(teardown);
+  const protocol = await waitForProtocol();
+  assert.ok(protocol);
+  assert.equal(protocol.readyState, WebSocket.OPEN);
+  await waitFor(() => bridge.protocolClients.size === 1, 3000);
+  const health = await fetch(`http://127.0.0.1:${bridgePort}/healthz`).then(response => response.json());
+  assert.equal(health.protocolConnected, true);
+  assert.equal(health.protocolClients, 1);
+});
+
+test('protocol client reconnects after protocol server disconnects', async t => {
+  await setup(); t.after(teardown);
+  const first = await waitForProtocol();
+  assert.equal(bridge.protocolClients.size, 1);
+  await closeWs(first);
+  await waitFor(() => bridge.protocolClients.size === 0, 3000);
+  const second = await waitForProtocol(5000);
+  assert.notEqual(second, first);
+  assert.equal(second.readyState, WebSocket.OPEN);
+  const health = await fetch(`http://127.0.0.1:${bridgePort}/healthz`).then(response => response.json());
+  assert.equal(health.protocolConnected, true);
+  assert.equal(health.protocolClients, 1);
+});
+
+test('protocol client retries until protocol server becomes available', async t => {
+  const targetPort = await freePort();
+  await setup({ protocolUrl: `ws://127.0.0.1:${targetPort}` });
+  t.after(teardown);
+  await wait(1200);
+  assert.equal(bridge.protocolClients.size, 0);
+  await startProtocolServer('test-token', targetPort);
+  await waitFor(() => bridge.protocolClients.size === 1, 8000);
+  const health = await fetch(`http://127.0.0.1:${bridgePort}/healthz`).then(response => response.json());
+  assert.equal(health.protocolConnected, true);
+});
+
+test('wrong protocol token never establishes an authorized connection', async t => {
+  await setup({ protocolToken: 'wrong' }); t.after(teardown);
+  await wait(1500); // 观察至少一轮重连尝试
+  assert.equal(protocolConnections.length, 0);
+  assert.equal(bridge.protocolClients.size, 0);
 });
 
 async function waitFor(predicate, timeout = 3000) {

@@ -6,16 +6,18 @@ SealDice（OB11 正向 WebSocket 客户端）与 OB11 协议端之间的透明�
 
 ```text
 SealDice（OB11 正向 WS 客户端）  <──>  /core（或 /core/ws）
-OB11 协议端 / 模拟器              <──>  /onebot
+OB11 协议端 / 模拟器              <──  中间件启动时主动连接协议端 WS（出站）
 aiplugin4 插件 MCP 客户端          <──>  /mcp
 ```
 
 默认监听 `0.0.0.0:46880`：
 
 - `/core`、`/core/ws`：SealDice 核心正向 WS（SealDice 主动连接本端点）
-- `/onebot`：协议端 WS
+- 协议端：中间件作为 WS **客户端**，启动时主动连接你在配置里填写的协议端地址（带指数退避重连）
 - `/mcp`：aiplugin4 使用的 Streamable HTTP MCP 端点，提供 `run_ext_command` 与 `run_core_command`
 - `/healthz`：健康检查（返回 `coreConnected` / `protocolConnected` / 客户端数量，便于排障）
+
+> 不支持反向 WS：协议端无需（也无法）连接中间件，由中间件主动出站连接协议端。
 
 ## 启动
 
@@ -30,7 +32,14 @@ npm start
 ws://127.0.0.1:46880/core
 ```
 
-> 协议端（`/onebot`）未连接时，核心发来的 API 请求（如 `get_login_info`）会立即收到 `status: failed` 响应并在日志中记录，不会静默丢弃导致海豹等待 10 秒超时；连接/断开均有日志输出。
+> 协议端未连接时，核心发来的 API 请求（如 `get_login_info`）会立即收到 `status: failed` 响应并在日志中记录，不会静默丢弃导致海豹等待 10 秒超时；连接/断开均有日志输出。协议端地址未配置或不可达时，中间件会一直按指数退避重试，并在连上后自动恢复转发。
+
+### 在 aiplugin4 WebUI 中配置协议端
+
+协议端地址与 token 在 aiplugin4「后端」页的 ob11-core-bridge 卡片「⚙ 配置」中填写（`协议端 WebSocket 地址` / `协议端 token`），**保存后需重启该后端才生效**。也可直接设置环境变量：
+
+- `AIPLUGIN4_BRIDGE_PROTOCOL_URL`：协议端 WS 地址，如 `ws://127.0.0.1:6700`
+- `AIPLUGIN4_BRIDGE_PROTOCOL_TOKEN`：协议端 token（可选；会同时以 `access_token` 查询参数和 `Authorization: Bearer` 头发送）
 
 常用环境变量：
 
@@ -39,10 +48,10 @@ ws://127.0.0.1:46880/core
 | `AIPLUGIN4_BACKEND_HOST` | `0.0.0.0` | 监听地址 |
 | `AIPLUGIN4_BACKEND_PORT` | `46880` | 监听端口 |
 | `AIPLUGIN4_BRIDGE_CORE_PATH` | `/core` | 核心 WS 路径（默认同时接受 `/core/ws`） |
-| `AIPLUGIN4_BRIDGE_ONEBOT_PATH` | `/onebot` | 协议端 WS 路径 |
-| `AIPLUGIN4_BRIDGE_TOKEN` | 空 | 默认鉴权 token，作为 MCP 与协议端默认 token |
+| `AIPLUGIN4_BRIDGE_PROTOCOL_URL` | 空 | 协议端 WS 地址（中间件启动时主动连接；WebUI「⚙ 配置」可填，重启生效） |
+| `AIPLUGIN4_BRIDGE_PROTOCOL_TOKEN` | 空 | 协议端 token（可选；同时以 access_token 查询参数与 Bearer 头发送） |
+| `AIPLUGIN4_BRIDGE_TOKEN` | 空 | MCP 鉴权 token |
 | `AIPLUGIN4_BRIDGE_CORE_TOKEN` | 跟随 bridge token | 核心端（SealDice 连接）token |
-| `AIPLUGIN4_BRIDGE_PROTOCOL_TOKEN` | 跟随 bridge token | 协议端 token |
 | `AIPLUGIN4_BRIDGE_MCP_PATH` | `/mcp` | MCP Streamable HTTP 路径 |
 
 插件在「工具 → MCP服务器配置」中使用标准 mcpServers 配置：
@@ -85,4 +94,4 @@ ws://127.0.0.1:46880/core
 npm test
 ```
 
-测试会模拟：SealDice 正向核心 WS（含 `/core/ws` 后缀）、OB11 协议端、MCP 客户端、多核心 self_id 路由、拦截/转发、多消息、lane 串行化、超时、断线、鉴权、原始帧转发，以及协议端未连接时核心 API 请求的快速失败。
+测试会模拟：SealDice 正向核心 WS（含 `/core/ws` 后缀）、假 OB11 协议端 WS 服务端（中间件出站主动连接，含 token 校验）、协议端断开后的指数退避重连、协议端启动前反复重试、MCP 客户端、多核心 self_id 路由、拦截/转发、多消息、lane 串行化、超时、断线、鉴权、原始帧转发，以及协议端未连接时核心 API 请求的快速失败。
