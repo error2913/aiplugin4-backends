@@ -7,14 +7,16 @@ SealDice PureOneBot 反向 WebSocket 与 OB11 协议端之间的中转站，为 
 ```text
 SealDice PureOneBot reverse WS  <──>  /core 或主动连接 CORE_URL
 OB11 协议端 / 模拟器              <──>  /onebot
-aiplugin4 插件控制端              <──>  /control
+aiplugin4 插件 MCP 客户端          <──>  /mcp
+旧版控制客户端                    <──>  /control（兼容保留）
 ```
 
 默认监听 `0.0.0.0:46880`：
 
 - `/core`、`/core/ws`：SealDice 核心反向 WS
 - `/onebot`：协议端 WS
-- `/control`：aiplugin4 控制 WS
+- `/mcp`：aiplugin4 使用的 Streamable HTTP MCP 端点，提供 `run_ext_command` 与 `run_core_command`
+- `/control`：旧版 aiplugin4 控制 WS（兼容保留）
 - `/healthz`：健康检查
 
 ## 启动
@@ -40,12 +42,32 @@ AIPLUGIN4_BRIDGE_CORE_URL=ws://127.0.0.1:46881/ws
 | `AIPLUGIN4_BRIDGE_TOKEN` | 空 | 控制端鉴权；也作为其他端点默认 token |
 | `AIPLUGIN4_BRIDGE_CORE_TOKEN` | 跟随 bridge token | 核心端 token |
 | `AIPLUGIN4_BRIDGE_PROTOCOL_TOKEN` | 跟随 bridge token | 协议端 token |
+| `AIPLUGIN4_BRIDGE_MCP_PATH` | `/mcp` | MCP Streamable HTTP 路径 |
 
-插件的「后端 → 核心指令中转WS地址」填写：
+插件在「工具 → MCP服务器配置」中使用标准 mcpServers 配置：
 
-```text
-ws://127.0.0.1:46880/control
+```json
+{
+  "mcpServers": {
+    "ob11-core-bridge": {
+      "type": "http",
+      "url": "http://127.0.0.1:46880/mcp"
+    }
+  }
+}
 ```
+
+如启用了 `AIPLUGIN4_BRIDGE_TOKEN`，在该服务器条目中增加 `headers.Authorization` 或 `token`。插件端会通过 MCP 调用 `run_ext_command` / `run_core_command`，而不会直接连接中转 WS。
+
+## MCP 工具
+
+`/mcp` 遵循 Streamable HTTP MCP，工具参数与旧版 `command.invoke` 的请求体一致：
+
+- `run_ext_command`：执行扩展指令。
+- `run_core_command`：执行核心指令。
+- `target`、`actor`、`command`、`capture`、`timeoutMs`：分别表示目标、假消息发送者、指令内容、捕获策略和超时。
+
+工具返回文本内容中的 JSON 即原有 `command.result`，因此多消息、`forward`、`ambiguous`、超时和断线等行为保持一致。MCP 会话只负责传输，底层仍复用同一套 lane 串行与消息捕获逻辑。
 
 ## 控制协议
 
@@ -92,4 +114,4 @@ ws://127.0.0.1:46880/control
 npm test
 ```
 
-测试会模拟：反向核心 WS、OB11 协议端、控制端、主动连接核心、多核心 self_id 路由、拦截/转发、多消息、lane 串行化、超时、断线、鉴权和原始帧转发。
+测试会模拟：反向核心 WS、OB11 协议端、MCP 客户端、旧版控制端、主动连接核心、多核心 self_id 路由、拦截/转发、多消息、lane 串行化、超时、断线、鉴权和原始帧转发。

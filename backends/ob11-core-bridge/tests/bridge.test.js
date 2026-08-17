@@ -468,8 +468,72 @@ test('multiple core connections route login responses, events, and invocations b
   await closeWs(control); await closeWs(protocol); await closeWs(core1); await closeWs(core2);
 });
 
+
+async function mcpRequest(payload, sessionId = '') {
+  const headers = { 'content-type': 'application/json', accept: 'application/json, text/event-stream', authorization: 'Bearer test-token' };
+  if (sessionId) headers['mcp-session-id'] = sessionId;
+  const response = await fetch(`http://127.0.0.1:${bridgePort}/mcp`, { method: 'POST', headers, body: JSON.stringify(payload) });
+  const text = await response.text();
+  let body;
+  try { body = JSON.parse(text); } catch (_) {
+    const dataLine = text.split('\n').find(line => line.startsWith('data: '));
+    body = dataLine ? JSON.parse(dataLine.slice(6)) : null;
+  }
+  return { response, body, sessionId: response.headers.get('mcp-session-id') || sessionId };
+}
+
+
+test('MCP exposes bridge tools and invokes the same capture pipeline', async t => {
+  await setup(); t.after(teardown);
+  const core = await connectCore();
+  core.on('message', data => {
+    let packet; try { packet = JSON.parse(data.toString()); } catch (_) { return; }
+    if (packet.post_type !== 'message') return;
+    sendGroupAction(core, packet.group_id, `mcp-${packet.raw_message}`, 'mcp-action');
+    setTimeout(() => sendGroupAction(core, packet.group_id, 'mcp-second', 'mcp-action-2'), 15);
+  });
+
+  const initialized = await mcpRequest({
+    jsonrpc: '2.0', id: 1, method: 'initialize',
+    params: { protocolVersion: '2025-11-25', capabilities: {}, clientInfo: { name: 'test', version: '1' } }
+  });
+  assert.equal(initialized.response.status, 200);
+  assert.equal(initialized.body.result.serverInfo.name, 'ob11-core-bridge');
+  const sessionId = initialized.sessionId;
+  assert.ok(sessionId);
+  const notified = await mcpRequest({ jsonrpc: '2.0', method: 'notifications/initialized' }, sessionId);
+  assert.equal(notified.response.status, 202);
+
+  const listed = await mcpRequest({ jsonrpc: '2.0', id: 2, method: 'tools/list' }, sessionId);
+  assert.deepEqual(listed.body.result.tools.map(tool => tool.name).sort(), ['run_core_command', 'run_ext_command']);
+
+  const called = await mcpRequest({
+    jsonrpc: '2.0', id: 3, method: 'tools/call',
+    params: {
+      name: 'run_ext_command',
+      arguments: {
+        target: groupTarget(),
+        actor: { userId: '30002', nickname: 'AI', role: 'member' },
+        command: { raw: '.mcp', name: 'mcp', args: [] },
+        capture: { mode: 'reply_only', forward: false, maxMessages: 5, settleMs: 30 },
+        timeoutMs: 1000
+      }
+    }
+  }, sessionId);
+  assert.equal(called.response.status, 200);
+  const result = JSON.parse(called.body.result.content[0].text);
+  assert.equal(result.ok, true);
+  assert.deepEqual(result.messages.map(message => message.text), ['mcp-.mcp', 'mcp-second']);
+  assert.equal(result.interceptedCount, 2);
+  await closeWs(core);
+});
+
 test('invalid auth and malformed control hello are rejected', async t => {
   await setup(); t.after(teardown);
+  const mcpUnauthorized = await fetch(`http://127.0.0.1:${bridgePort}/mcp`, {
+    method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}'
+  });
+  assert.equal(mcpUnauthorized.status, 401);
   const bad = new WebSocket(`ws://127.0.0.1:${bridgePort}/core?access_token=wrong`);
   bad.on('error', () => {});
   await waitForEvent(bad, 'close');

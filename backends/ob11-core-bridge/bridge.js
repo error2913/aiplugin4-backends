@@ -3,6 +3,9 @@
 const http = require('node:http');
 const crypto = require('node:crypto');
 const { WebSocket, WebSocketServer } = require('ws');
+const { McpServer } = require('@modelcontextprotocol/sdk/server/mcp.js');
+const { StreamableHTTPServerTransport } = require('@modelcontextprotocol/sdk/server/streamableHttp.js');
+const { z } = require('zod');
 
 const HOST = process.env.AIPLUGIN4_BACKEND_HOST || '0.0.0.0';
 const PORT = Number(process.env.AIPLUGIN4_BACKEND_PORT || 46880);
@@ -11,6 +14,7 @@ const CORE_PATHS = new Set((process.env.AIPLUGIN4_BRIDGE_CORE_PATHS || `${CORE_P
   .split(',').map(value => value.trim()).filter(Boolean));
 const ONEBOT_PATH = process.env.AIPLUGIN4_BRIDGE_ONEBOT_PATH || '/onebot';
 const CONTROL_PATH = process.env.AIPLUGIN4_BRIDGE_CONTROL_PATH || '/control';
+const MCP_PATH = process.env.AIPLUGIN4_BRIDGE_MCP_PATH || '/mcp';
 const BRIDGE_TOKEN = process.env.AIPLUGIN4_BRIDGE_TOKEN || '';
 const CORE_TOKEN = process.env.AIPLUGIN4_BRIDGE_CORE_TOKEN ?? BRIDGE_TOKEN;
 const PROTOCOL_TOKEN = process.env.AIPLUGIN4_BRIDGE_PROTOCOL_TOKEN ?? BRIDGE_TOKEN;
@@ -150,6 +154,55 @@ class Invocation {
   }
 }
 
+const MCP_TARGET_SCHEMA = z.object({
+  selfId: z.string(),
+  messageType: z.enum(['group', 'private']),
+  groupId: z.string().optional(),
+  userId: z.string().optional()
+});
+const MCP_ACTOR_SCHEMA = z.object({
+  userId: z.string(),
+  nickname: z.string(),
+  role: z.string()
+});
+const MCP_COMMAND_SCHEMA = z.object({
+  raw: z.string(),
+  name: z.string(),
+  args: z.array(z.string()).default([])
+});
+const MCP_CAPTURE_SCHEMA = z.object({
+  mode: z.enum(['reply_only', 'lane']).optional(),
+  forward: z.boolean().optional(),
+  maxMessages: z.number().int().min(1).max(MAX_MESSAGES).optional(),
+  settleMs: z.number().int().min(0).max(10000).optional()
+}).optional();
+
+function mcpResult(result) {
+  return { content: [{ type: 'text', text: JSON.stringify(result) }] };
+}
+
+function createMcpServer(bridge) {
+  const server = new McpServer({ name: 'ob11-core-bridge', version: '1.0.0' });
+  const input = {
+    target: MCP_TARGET_SCHEMA.describe('注入假消息的目标群/私聊'),
+    actor: MCP_ACTOR_SCHEMA.describe('假消息发送者'),
+    command: MCP_COMMAND_SCHEMA.describe('要注入核心的消息'),
+    capture: MCP_CAPTURE_SCHEMA.describe('响应捕获与转发选项'),
+    timeoutMs: z.number().int().min(100).max(120000).optional().describe('最长等待时间，单位毫秒')
+  };
+  const call = (kind) => async (request) => {
+    try {
+      const result = await bridge.invoke(null, { ...request, id: `${kind}_${crypto.randomUUID()}` });
+      return mcpResult(result);
+    } catch (error) {
+      return mcpResult({ ok: false, error: error instanceof Error ? error.message : String(error), messages: [] });
+    }
+  };
+  server.tool('run_ext_command', input, call('ext'));
+  server.tool('run_core_command', input, call('core'));
+  return server;
+}
+
 class Bridge {
   static nextMessageId = 900000000000;
   constructor() {
@@ -165,15 +218,32 @@ class Bridge {
     this.coreConnector = null;
     this.coreReconnectTimer = null;
     this.coreGeneration = 0;
+    this.mcpTransports = new Map();
   }
   async start() {
     this.stopping = false;
     this.coreConnector = null;
     this.coreReconnectTimer = null;
     this.server = http.createServer((req, res) => {
-      if (req.url === '/healthz') {
+      const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
+      if (url.pathname === '/healthz') {
         res.writeHead(200, { 'content-type': 'application/json' });
         res.end(JSON.stringify({ ok: true, coreConnected: this.isCoreConnected(), coreClients: this.coreClients.size, protocolClients: this.protocolClients.size }));
+        return;
+      }
+      if (url.pathname === MCP_PATH) {
+        if (!this.authorizeHttp(req, url)) {
+          res.writeHead(401, { 'content-type': 'application/json' });
+          res.end(JSON.stringify({ error: 'unauthorized' }));
+          return;
+        }
+        this.handleMcp(req, res).catch(error => {
+          log('warn', 'MCP request failed', error);
+          if (!res.headersSent) {
+            res.writeHead(500, { 'content-type': 'application/json' });
+            res.end(JSON.stringify({ error: 'MCP request failed' }));
+          }
+        });
         return;
       }
       res.writeHead(404); res.end('not found');
@@ -191,7 +261,7 @@ class Bridge {
     });
     this.wss.on('connection', ws => this.attachClient(ws));
     await new Promise(resolve => this.server.listen(PORT, HOST, resolve));
-    log('info', `listening ${HOST}:${PORT}, core=${[...CORE_PATHS].join(',')}, onebot=${ONEBOT_PATH}, control=${CONTROL_PATH}`);
+    log('info', `listening ${HOST}:${PORT}, core=${[...CORE_PATHS].join(',')}, onebot=${ONEBOT_PATH}, control=${CONTROL_PATH}, mcp=${MCP_PATH}`);
     if (CORE_URL) this.connectOutboundCore();
     return this;
   }
@@ -203,9 +273,37 @@ class Bridge {
     const outboundCore = this.coreConnector;
     this.coreConnector = null;
     for (const invocation of this.invocations.values()) invocation.fail(new Error('bridge stopped'));
+    for (const transport of this.mcpTransports.values()) { try { await transport.close(); } catch (_) { /* ignore */ } }
+    this.mcpTransports.clear();
     for (const ws of [...this.coreClients, ...this.protocolClients, ...this.controlClients]) ws.close();
     if (outboundCore && !this.coreClients.has(outboundCore)) outboundCore.close();
     await new Promise(resolve => this.server ? this.server.close(() => resolve()) : resolve());
+  }
+  authorizeHttp(req, url) {
+    if (!BRIDGE_TOKEN) return true;
+    const auth = req.headers.authorization || '';
+    return auth === `Bearer ${BRIDGE_TOKEN}`
+      || req.headers['x-token'] === BRIDGE_TOKEN
+      || url.searchParams.get('access_token') === BRIDGE_TOKEN;
+  }
+  async handleMcp(req, res) {
+    const requestedSessionId = req.headers['mcp-session-id'];
+    let transport = requestedSessionId ? this.mcpTransports.get(String(requestedSessionId)) : null;
+    if (!transport) {
+      if (req.method !== 'POST') {
+        res.writeHead(400, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ error: 'MCP session is required' }));
+        return;
+      }
+      let sessionId = '';
+      transport = new StreamableHTTPServerTransport({
+        sessionIdGenerator: () => crypto.randomUUID(),
+        onsessioninitialized: id => { sessionId = id; this.mcpTransports.set(id, transport); }
+      });
+      transport.onclose = () => { if (sessionId) this.mcpTransports.delete(sessionId); };
+      await createMcpServer(this).connect(transport);
+    }
+    await transport.handleRequest(req, res);
   }
   isCoreConnected() { return this.coreClients.size > 0; }
   connectOutboundCore() {
@@ -409,10 +507,14 @@ class Bridge {
         sender: { user_id: userId, nickname: String(request.actor && request.actor.nickname || 'AI'), card: '', sex: 'unknown', age: 0, role: String(request.actor && request.actor.role || 'member'), title: '' }
       };
       sendRaw(coreWs, JSON.stringify(fakeEvent));
-      jsonSend(ws, await resultPromise);
+      const result = await resultPromise;
+      jsonSend(ws, result);
+      return result;
     } catch (e) {
       invocation.fail(e);
-      jsonSend(ws, await resultPromise);
+      const result = await resultPromise;
+      jsonSend(ws, result);
+      return result;
     } finally {
       this.invocations.delete(invocation.id);
     }

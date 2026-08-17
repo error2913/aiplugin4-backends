@@ -9,6 +9,8 @@
     "test": "node --test tests/bridge.test.js"
   },
   "dependencies": {
-    "ws": "^8.18.0"
+    "@modelcontextprotocol/sdk": "^1.30.0",
+    "ws": "^8.18.0",
+    "zod": "^3.25.76"
   }
 }
