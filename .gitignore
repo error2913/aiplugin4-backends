@@ -1,0 +1,12 @@
+dist/
+logs/
+.venv/
+node_modules/
+.runtime.json
+__pycache__/
+*.pyc
+*.pyo
+temp_images/
+generated_images/
+installed/
+data/
