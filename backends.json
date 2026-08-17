@@ -9,7 +9,11 @@
       "port": 46678,
       "version": "1.0.0",
       "source": "https://raw.githubusercontent.com/error2913/aiplugin4-backends/shop/backends/image-url-to-base64",
-      "files": ["backend.json", "requirements.txt", "urltobase64.py"]
+      "files": [
+        "backend.json",
+        "requirements.txt",
+        "urltobase64.py"
+      ]
     },
     {
       "name": "mcp-files-exec",
@@ -20,7 +24,11 @@
       "port": 3910,
       "version": "1.0.1",
       "source": "https://raw.githubusercontent.com/error2913/aiplugin4-backends/shop/backends/mcp-files-exec",
-      "files": ["backend.json", "mcp_files_exec.py", "requirements.txt"]
+      "files": [
+        "backend.json",
+        "mcp_files_exec.py",
+        "requirements.txt"
+      ]
     },
     {
       "name": "md-html-render",
@@ -31,7 +39,11 @@
       "port": 37632,
       "version": "1.0.0",
       "source": "https://raw.githubusercontent.com/error2913/aiplugin4-backends/shop/backends/md-html-render",
-      "files": ["backend.json", "package.json", "render.js"]
+      "files": [
+        "backend.json",
+        "package.json",
+        "render.js"
+      ]
     },
     {
       "name": "stream-output",
@@ -42,7 +54,11 @@
       "port": 3010,
       "version": "1.0.0",
       "source": "https://raw.githubusercontent.com/error2913/aiplugin4-backends/shop/backends/stream-output",
-      "files": ["backend.json", "requirements.txt", "stream_backend.py"]
+      "files": [
+        "backend.json",
+        "requirements.txt",
+        "stream_backend.py"
+      ]
     },
     {
       "name": "usage-chart",
@@ -53,7 +69,11 @@
       "port": 3009,
       "version": "1.0.0",
       "source": "https://raw.githubusercontent.com/error2913/aiplugin4-backends/shop/backends/usage-chart",
-      "files": ["backend.json", "requirements.txt", "usage_chart.py"]
+      "files": [
+        "backend.json",
+        "requirements.txt",
+        "usage_chart.py"
+      ]
     },
     {
       "name": "web-read",
@@ -64,18 +84,29 @@
       "port": 46799,
       "version": "1.0.0",
       "source": "https://raw.githubusercontent.com/error2913/aiplugin4-backends/shop/backends/web-read",
-      "files": ["backend.json", "package.json", "puppeteer.js", "fonts/ScreenCJK.ttf"]
+      "files": [
+        "backend.json",
+        "package.json",
+        "puppeteer.js",
+        "fonts/ScreenCJK.ttf"
+      ]
     },
     {
       "name": "ob11-core-bridge",
-      "description": "SealDice 核心反向 WS /core、OB11 协议端 /onebot 与 MCP /mcp 的透明中转；支持注入假消息执行核心/扩展指令",
+      "description": "SealDice 核心正向 WS /core、OB11 协议端 /onebot 与 MCP /mcp 的透明中转；支持注入假消息执行核心/扩展指令",
       "type": "node",
       "entry": "bridge.js",
       "deps": "package.json",
       "port": 46880,
-      "version": "1.0.0",
+      "version": "1.0.1",
       "source": "https://raw.githubusercontent.com/error2913/aiplugin4-backends/shop/backends/ob11-core-bridge",
-      "files": ["backend.json", "package.json", "package-lock.json", "bridge.js", "README.md"]
+      "files": [
+        "backend.json",
+        "package.json",
+        "package-lock.json",
+        "bridge.js",
+        "README.md"
+      ]
     }
   ]
 }

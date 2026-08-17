@@ -2,11 +2,16 @@
 
 标题格式为 `## <版本号>`，release 工作流按标签版本号读取对应段落作为发布说明；日常更新以「Unreleased」汇总，发版前改成版本号并补日期。
 
+## 0.11.1 - 2026-08-18
+
+- ob11-core-bridge 升级到 1.0.1：移除旧版 `/control` 控制 WS 与 `AIPLUGIN4_BRIDGE_CORE_URL` 反向出站连接，保持整洁；SealDice 以 OB11 正向 WS 客户端身份连接 `/core`（或 `/core/ws`）
+- 插件端统一走 MCP 的 `run_ext_command` / `run_core_command`，lane 串行与捕获逻辑不变，结果由 MCP 一次性返回
+
 ## 0.11.0 - 2026-08-18
 
 - 新增 `ob11-core-bridge` 后端：SealDice 核心反向 WS `/core`、OB11 协议端 `/onebot` 与 MCP `/mcp` 之间的透明中转，默认端口 46880（Node）
 - MCP 提供 `run_ext_command` / `run_core_command` 工具：注入假消息执行核心/扩展指令并收集响应，支持多消息捕获、lane 串行、拦截/转发、超时与断线处理
-- 兼容保留旧版 aiplugin4 控制 WS（`/control`），插件端可平滑升级到 MCP
+- 兼容保留旧版 aiplugin4 控制 WS（`/control`），插件端可平滑升级到 MCP（0.11.1 已移除，统一走 MCP）
 
 ## 0.10.4 - 2026-08-14
 
