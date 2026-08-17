@@ -1,6 +1,6 @@
 # ob11-core-bridge
 
-SealDice（OB11 正向 WebSocket 客户端）与 OB11 协议端之间的透明中转站，为 aiplugin4 提供“注入假消息、执行核心/扩展指令、收集响应”的控制通道。
+SealDice（OB11 正向 WebSocket 客户端）与 OB11 协议端之间的透明中转站，为 aiplugin4 提供“注入假消息、执行核心指令、收集响应”的控制通道。扩展指令由 aiplugin4 插件在本地直调扩展 `solve` 执行（`run_ext_command`），不经过本中间件。
 
 ## 拓扑
 
@@ -14,7 +14,7 @@ aiplugin4 插件 MCP 客户端          <──>  /mcp
 
 - `/core`、`/core/ws`：SealDice 核心正向 WS（SealDice 主动连接本端点）
 - 协议端：中间件作为 WS **客户端**，启动时主动连接你在配置里填写的协议端地址（带指数退避重连）
-- `/mcp`：aiplugin4 使用的 Streamable HTTP MCP 端点，提供 `run_ext_command` 与 `run_core_command`
+- `/mcp`：aiplugin4 使用的 Streamable HTTP MCP 端点，提供 `run_core_command`（核心指令注入；`run_ext_command` 由插件本地执行）
 - `/healthz`：健康检查（返回 `coreConnected` / `protocolConnected` / 客户端数量，便于排障）
 
 > 不支持反向 WS：协议端无需（也无法）连接中间件，由中间件主动出站连接协议端。
@@ -67,14 +67,13 @@ ws://127.0.0.1:46880/core
 }
 ```
 
-如启用了 `AIPLUGIN4_BRIDGE_TOKEN`，在该服务器条目中增加 `headers.Authorization` 或 `token`。插件端会通过 MCP 调用 `run_ext_command` / `run_core_command`，而不会直接连接中转 WS。
+如启用了 `AIPLUGIN4_BRIDGE_TOKEN`，在该服务器条目中增加 `headers.Authorization` 或 `token`。插件端会通过 MCP 调用 `run_core_command`（`run_ext_command` 由插件本地执行），而不会直接连接中转 WS。
 
 ## MCP 工具
 
-`/mcp` 遵循 Streamable HTTP MCP，提供两个工具：
+`/mcp` 遵循 Streamable HTTP MCP，提供 `run_core_command` 工具（`run_ext_command` 由 aiplugin4 插件本地直调扩展 `solve` 实现，无需本中间件；本中间件保留 `run_ext_command` 仅为通用注入接口）：
 
-- `run_ext_command`：执行扩展指令（`builtin` / `non_builtin` 扩展由插件端构造 `command.raw` 区分）。
-- `run_core_command`：执行核心指令。
+- `run_core_command`：执行核心指令（如 `.ext`、`.help`）。
 - 参数 `target`、`actor`、`command`、`capture`、`timeoutMs`：分别表示目标、假消息发送者、指令内容、捕获策略和超时。
 
 工具返回文本内容中的 JSON 即调用结果，包含 `ok`、`messages`、`completedBy`、`ambiguous`、`forwardedCount`、`interceptedCount` 等字段。MCP 会话只负责传输，底层复用同一套 lane 串行与消息捕获逻辑。
