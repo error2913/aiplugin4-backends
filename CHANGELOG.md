@@ -2,6 +2,12 @@
 
 标题格式为 `## <版本号>`，release 工作流按标签版本号读取对应段落作为发布说明；日常更新以「Unreleased」汇总，发版前改成版本号并补日期。
 
+## 0.11.3 - 2026-08-18
+
+- ob11-core-bridge 升级到 1.0.3：协议端改为中间件**出站主动连接**（移除入站 /onebot），启动时连接协议端 WS 地址并带指数退避重连（1s 起、上限 30s）；协议端未配置/不可达时持续重试并在连上后自动恢复
+- 协议端地址与 token 可在 WebUI「后端 → ob11-core-bridge → ⚙ 配置」填写（协议端 WebSocket 地址 / 协议端 token），保存后重启该后端生效；token 同时以 `access_token` 查询参数与 `Authorization: Bearer` 头发送
+- 不支持反向 WS：协议端无需连接中间件，全部由中间件主动出站连接
+
 ## 0.11.2 - 2026-08-18
 
 - ob11-core-bridge 升级到 1.0.2：修复协议端（`/onebot`）未连接时，核心发来的 API 请求（如 `get_login_info`）被静默丢弃、海豹等待 10 秒超时（`context deadline exceeded`）的问题；现在直接返回 `status: failed` 并记录日志
