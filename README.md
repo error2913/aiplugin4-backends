@@ -1,6 +1,6 @@
 # aiplugin4-backends
 
-aiplugin4 的配套后端服务：流式输出、图片转 base64、用量图表、网页读取、Markdown/HTML 渲染。
+aiplugin4 的配套后端服务：流式输出、图片转 base64、用量图表、网页读取、Markdown/HTML 渲染、SealDice 核心/OB11 指令中转。
 
 配合 [aiplugin4](https://github.com/error2913/aiplugin4) 使用：把各服务地址填入插件「后端」配置分组（见 aiplugin4 的 docs/08）。
 
@@ -16,7 +16,7 @@ aiplugin4 的配套后端服务：流式输出、图片转 base64、用量图表
 
 ## 快速开始
 
-环境要求：Python 3.9+、Node.js 18+（仅 `web-read` / `md-html-render` 两个后端需要 Node）。
+环境要求：Python 3.9+、Node.js 18+（`web-read` / `md-html-render` / `ob11-core-bridge` 三个后端需要 Node）。
 
 ```bash
 git clone https://github.com/error2913/aiplugin4-backends.git && cd aiplugin4-backends && python launcher.py
