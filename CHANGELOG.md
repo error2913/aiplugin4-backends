@@ -2,6 +2,11 @@
 
 标题格式为 `## <版本号>`，release 工作流按标签版本号读取对应段落作为发布说明；日常更新以「Unreleased」汇总，发版前改成版本号并补日期。
 
+## 0.11.2 - 2026-08-18
+
+- ob11-core-bridge 升级到 1.0.2：修复协议端（`/onebot`）未连接时，核心发来的 API 请求（如 `get_login_info`）被静默丢弃、海豹等待 10 秒超时（`context deadline exceeded`）的问题；现在直接返回 `status: failed` 并记录日志
+- 中间件新增核心/协议端连接与断开日志，`/healthz` 新增 `protocolConnected` 字段，便于排障
+
 ## 0.11.1 - 2026-08-18
 
 - ob11-core-bridge 升级到 1.0.1：移除旧版 `/control` 控制 WS 与 `AIPLUGIN4_BRIDGE_CORE_URL` 反向出站连接，保持整洁；SealDice 以 OB11 正向 WS 客户端身份连接 `/core`（或 `/core/ws`）
