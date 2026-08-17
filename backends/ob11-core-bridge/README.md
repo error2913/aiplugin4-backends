@@ -15,7 +15,7 @@ aiplugin4 插件 MCP 客户端          <──>  /mcp
 - `/core`、`/core/ws`：SealDice 核心正向 WS（SealDice 主动连接本端点）
 - `/onebot`：协议端 WS
 - `/mcp`：aiplugin4 使用的 Streamable HTTP MCP 端点，提供 `run_ext_command` 与 `run_core_command`
-- `/healthz`：健康检查
+- `/healthz`：健康检查（返回 `coreConnected` / `protocolConnected` / 客户端数量，便于排障）
 
 ## 启动
 
@@ -29,6 +29,8 @@ npm start
 ```text
 ws://127.0.0.1:46880/core
 ```
+
+> 协议端（`/onebot`）未连接时，核心发来的 API 请求（如 `get_login_info`）会立即收到 `status: failed` 响应并在日志中记录，不会静默丢弃导致海豹等待 10 秒超时；连接/断开均有日志输出。
 
 常用环境变量：
 
@@ -83,4 +85,4 @@ ws://127.0.0.1:46880/core
 npm test
 ```
 
-测试会模拟：SealDice 正向核心 WS（含 `/core/ws` 后缀）、OB11 协议端、MCP 客户端、多核心 self_id 路由、拦截/转发、多消息、lane 串行化、超时、断线、鉴权和原始帧转发。
+测试会模拟：SealDice 正向核心 WS（含 `/core/ws` 后缀）、OB11 协议端、MCP 客户端、多核心 self_id 路由、拦截/转发、多消息、lane 串行化、超时、断线、鉴权、原始帧转发，以及协议端未连接时核心 API 请求的快速失败。

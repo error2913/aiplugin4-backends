@@ -175,7 +175,7 @@ function mcpResult(result) {
 }
 
 function createMcpServer(bridge) {
-  const server = new McpServer({ name: 'ob11-core-bridge', version: '1.0.1' });
+  const server = new McpServer({ name: 'ob11-core-bridge', version: '1.0.2' });
   const input = {
     target: MCP_TARGET_SCHEMA.describe('注入假消息的目标群/私聊'),
     actor: MCP_ACTOR_SCHEMA.describe('假消息发送者'),
@@ -215,7 +215,7 @@ class Bridge {
       const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
       if (url.pathname === '/healthz') {
         res.writeHead(200, { 'content-type': 'application/json' });
-        res.end(JSON.stringify({ ok: true, coreConnected: this.isCoreConnected(), coreClients: this.coreClients.size, protocolClients: this.protocolClients.size }));
+        res.end(JSON.stringify({ ok: true, coreConnected: this.isCoreConnected(), protocolConnected: this.protocolClients.size > 0, coreClients: this.coreClients.size, protocolClients: this.protocolClients.size }));
         return;
       }
       if (url.pathname === MCP_PATH) {
@@ -246,7 +246,7 @@ class Bridge {
         this.wss.emit('connection', ws, req);
       });
     });
-    this.wss.on('connection', ws => this.attachClient(ws));
+    this.wss.on('connection', (ws, req) => this.attachClient(ws, req));
     await new Promise(resolve => this.server.listen(PORT, HOST, resolve));
     log('info', `listening ${HOST}:${PORT}, core=${[...CORE_PATHS].join(',')}, onebot=${ONEBOT_PATH}, mcp=${MCP_PATH}`);
     return this;
@@ -286,21 +286,29 @@ class Bridge {
     await transport.handleRequest(req, res);
   }
   isCoreConnected() { return this.coreClients.size > 0; }
-  attachClient(ws) {
+  attachClient(ws, req) {
+    const path = req ? String(req.url || '').split('?')[0] : '';
+    const ip = req && req.socket ? req.socket.remoteAddress : '';
     if (ws._bridgeKind === 'core') {
       ws._bridgeCoreId = '';
       this.coreClients.add(ws);
+      log('info', `SealDice 核心已连接: ${path}${ip ? ` (${ip})` : ''}${CORE_TOKEN ? ' [token 校验通过]' : ' [未配置 token]'}`);
       ws.on('message', data => this.handleCoreMessage(ws, data));
       ws.on('close', () => {
         this.coreClients.delete(ws);
         for (const [echo, target] of this.echoTargets) if (target === ws) this.echoTargets.delete(echo);
         for (const invocation of this.invocations.values()) if (invocation.coreWs === ws) invocation.fail(new Error('core websocket disconnected'));
+        log('info', `SealDice 核心已断开: ${path}${ip ? ` (${ip})` : ''}${CORE_TOKEN ? ' [token 校验通过]' : ' [未配置 token]'}`);
       });
       ws.on('error', e => log('warn', 'core client error', e));
     } else if (ws._bridgeKind === 'onebot') {
       this.protocolClients.add(ws);
+      log('info', `协议端已连接: ${path}${ip ? ` (${ip})` : ''}${PROTOCOL_TOKEN ? ' [token 校验通过]' : ' [未配置 token]'}`);
       ws.on('message', data => this.handleProtocolMessage(ws, data));
-      ws.on('close', () => this.protocolClients.delete(ws));
+      ws.on('close', () => {
+        this.protocolClients.delete(ws);
+        log('info', `协议端已断开: ${path}${ip ? ` (${ip})` : ''}${PROTOCOL_TOKEN ? ' [token 校验通过]' : ' [未配置 token]'}`);
+      });
       ws.on('error', e => log('warn', 'protocol client error', e));
     }
   }
@@ -337,13 +345,22 @@ class Bridge {
     if (packet.data && packet.data.user_id !== undefined && packet.echo) this.setCoreId(ws, packet.data.user_id);
     if (packet.action && ACTIONS.has(packet.action)) {
       if (this.captureAction(ws, packet)) return;
+      if (this.protocolClients.size === 0) { this.failAction(ws, packet); return; }
       if (packet.echo) this.echoTargets.set(String(packet.echo), ws);
       this.broadcastProtocol(JSON.stringify(packet), ws);
       return;
     }
-    if (packet.action && packet.echo) this.echoTargets.set(String(packet.echo), ws);
+    if (packet.action && packet.echo) {
+      if (this.protocolClients.size === 0) { this.failAction(ws, packet); return; }
+      this.echoTargets.set(String(packet.echo), ws);
+    }
     if (packet.post_type === 'message' && this.captureEvent(ws, packet)) return;
     this.broadcastProtocol(JSON.stringify(packet), ws);
+  }
+  failAction(ws, packet) {
+    if (!packet.echo) return;
+    log('warn', `API 请求 ${packet.action} 失败：无 OB11 协议端连接，已直接返回 failed`);
+    jsonSend(ws, { status: 'failed', retcode: 100, data: null, echo: packet.echo });
   }
   handleProtocolMessage(ws, data) {
     const packet = parseMessage(data);

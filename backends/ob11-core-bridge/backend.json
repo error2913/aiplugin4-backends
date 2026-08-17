@@ -5,5 +5,5 @@
   "entry": "bridge.js",
   "deps": "package.json",
   "port": 46880,
-  "version": "1.0.1"
+  "version": "1.0.2"
 }

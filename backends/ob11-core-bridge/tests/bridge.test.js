@@ -201,8 +201,24 @@ test('transparent forwarding, raw frames, login echo routing, and healthz', asyn
   assert.equal((await loginAtCore).data.nickname, 'BridgeBot');
 
   const health = await (await fetch(`http://127.0.0.1:${bridgePort}/healthz`)).json();
-  assert.deepEqual(health, { ok: true, coreConnected: true, coreClients: 1, protocolClients: 1 });
+  assert.deepEqual(health, { ok: true, coreConnected: true, protocolConnected: true, coreClients: 1, protocolClients: 1 });
   await closeWs(protocol); await closeWs(core);
+});
+
+test('core API requests fail fast with status failed when no protocol client is connected', async t => {
+  await setup(); t.after(teardown);
+  const core = await connectCore();
+  const health = await fetch(`http://127.0.0.1:${bridgePort}/healthz`).then(response => response.json());
+  assert.equal(health.protocolConnected, false);
+
+  const login = waitForMessage(core, packet => packet.echo === 'login-orphan');
+  core.send(JSON.stringify({ action: 'get_login_info', params: {}, echo: 'login-orphan' }));
+  assert.deepEqual(await login, { status: 'failed', retcode: 100, data: null, echo: 'login-orphan' });
+
+  const send = waitForMessage(core, packet => packet.echo === 'send-orphan');
+  sendGroupAction(core, 20002, 'orphan', 'send-orphan');
+  assert.deepEqual(await send, { status: 'failed', retcode: 100, data: null, echo: 'send-orphan' });
+  await closeWs(core);
 });
 
 test('invoke captures multiple actions and intercepts them by default', async t => {

@@ -1,6 +1,6 @@
 {
   "name": "aiplugin4-backend-ob11-core-bridge",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "private": true,
   "description": "OB11 WebSocket bridge for aiplugin4",
   "main": "bridge.js",
