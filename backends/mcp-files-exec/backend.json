@@ -1,11 +1,11 @@
 {
   "name": "mcp-files-exec",
-  "description": "MCP 后端：AI 读写文件与执行受限命令（路径沙箱 + 命令拦截 + 审计）",
+  "description": "MCP 后端：AI 读写文件与执行受限命令（路径沙箱 + 命令拦截 + 审计 + 短时文件导出）",
   "type": "python",
   "entry": "mcp_files_exec.py",
   "deps": "requirements.txt",
   "port": 3910,
-  "version": "1.0.2",
+  "version": "1.0.3",
   "config": {
     "sandbox_roots": {
       "label": "沙箱工作路径（分号分隔多个）",
@@ -19,6 +19,24 @@
       "type": "text",
       "default": "{REPO_ROOT}/logs/mcp-files-exec.log",
       "env": "MCP_LOG_FILE"
+    },
+    "max_export_bytes": {
+      "label": "单文件导出上限（字节）",
+      "type": "number",
+      "default": 1048576,
+      "env": "MCP_MAX_EXPORT_BYTES"
+    },
+    "export_ttl_seconds": {
+      "label": "导出下载令牌有效期（秒）",
+      "type": "number",
+      "default": 300,
+      "env": "MCP_EXPORT_TTL_SECONDS"
+    },
+    "public_url": {
+      "label": "文件下载公网地址前缀（反向代理时填写）",
+      "type": "text",
+      "default": "",
+      "env": "MCP_PUBLIC_URL"
     }
   }
 }

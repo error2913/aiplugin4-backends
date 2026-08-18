@@ -19,24 +19,38 @@
   MCP_MAX_OUTPUT_BYTES     命令输出上限（默认 1048576）
   MCP_DEFAULT_TIMEOUT      命令默认超时秒数（默认 30）
   MCP_LOG_FILE             审计日志路径（默认 <仓库>/logs/mcp-files-exec.log）
+  MCP_MAX_EXPORT_BYTES     单文件导出上限（默认与 MCP_MAX_FILE_BYTES 相同）
+  MCP_EXPORT_TTL_SECONDS   导出下载令牌有效期（默认 300）
+  MCP_PUBLIC_URL           下载地址公网前缀（可选，反向代理时填写）
 """
 
 import argparse
 import json
+import mimetypes
 import os
 import re
+import secrets
 import signal
 import subprocess
 import sys
+import threading
 import time
+from pathlib import Path
 from typing import Optional
+from urllib.parse import quote, unquote
 
 from mcp.server.fastmcp import FastMCP
 
 DEFAULT_MAX_FILE = int(os.environ.get("MCP_MAX_FILE_BYTES", 1048576))
 DEFAULT_MAX_OUTPUT = int(os.environ.get("MCP_MAX_OUTPUT_BYTES", 1048576))
 DEFAULT_TIMEOUT = int(os.environ.get("MCP_DEFAULT_TIMEOUT", 30))
+DEFAULT_MAX_EXPORT = int(os.environ.get("MCP_MAX_EXPORT_BYTES", DEFAULT_MAX_FILE))
+DEFAULT_EXPORT_TTL = max(1, int(os.environ.get("MCP_EXPORT_TTL_SECONDS", 300)))
 _AUTH_TOKEN = os.environ.get("AIPLUGIN4_BACKEND_TOKEN", "")
+_PUBLIC_URL = os.environ.get("MCP_PUBLIC_URL", "").strip().rstrip("/")
+_EXPORT_ROUTE_PREFIX = "/files/download/"
+_EXPORTS = {}
+_EXPORT_LOCK = threading.Lock()
 
 _CWD = os.path.abspath(os.getcwd())
 _SANDBOX_ROOTS = [
@@ -92,12 +106,89 @@ def _audit(tool: str, ok: bool, detail: str = "") -> None:
         pass
 
 
+async def _send_http_response(send, status: int, body: bytes = b"", headers=None, content_length: Optional[int] = None) -> None:
+    response_headers = list(headers or [])
+    response_headers.extend([
+        (b"content-length", str(len(body) if content_length is None else content_length).encode("ascii")),
+        (b"cache-control", b"no-store"),
+    ])
+    await send({
+        "type": "http.response.start",
+        "status": status,
+        "headers": response_headers,
+    })
+    await send({"type": "http.response.body", "body": body})
+
+
+def _expire_exports(now: Optional[float] = None) -> None:
+    now = time.time() if now is None else now
+    with _EXPORT_LOCK:
+        for token, item in list(_EXPORTS.items()):
+            if item["expires_at"] <= now:
+                _EXPORTS.pop(token, None)
+
+
+async def _download_export(scope, receive, send) -> None:
+    """使用短时令牌提供文件下载；此路由不要求 MCP Authorization。"""
+    method = scope.get("method", "GET").upper()
+    if method not in ("GET", "HEAD"):
+        await _send_http_response(send, 405, b"method not allowed", [(b"allow", b"GET, HEAD")])
+        return
+
+    path = unquote(str(scope.get("path", "")))
+    token = path[len(_EXPORT_ROUTE_PREFIX):].strip("/")
+    if not token or "/" in token:
+        await _send_http_response(send, 404, b"not found")
+        return
+
+    _expire_exports()
+    with _EXPORT_LOCK:
+        item = _EXPORTS.get(token)
+    if item is None:
+        await _send_http_response(send, 404, b"download token expired or not found")
+        return
+
+    try:
+        target = _resolve(item["path"])
+        if not os.path.isfile(target):
+            raise FileNotFoundError(target)
+        size = os.path.getsize(target)
+        if size > DEFAULT_MAX_EXPORT:
+            raise ValueError(f"file exceeds export limit: {size} > {DEFAULT_MAX_EXPORT}")
+        content_type = mimetypes.guess_type(target)[0] or "application/octet-stream"
+        filename = os.path.basename(target).replace("\r", "").replace("\n", "") or "download"
+        headers = [
+            (b"content-type", content_type.encode("ascii", "replace")),
+            (b"content-disposition", f"attachment; filename*=UTF-8''{quote(filename)}".encode("ascii")),
+            (b"access-control-allow-origin", b"*"),
+        ]
+        body = b"" if method == "HEAD" else Path(target).read_bytes()
+        _audit("download_export", True, f"{target} | {size} bytes")
+        await _send_http_response(send, 200, body, headers, content_length=size)
+    except FileNotFoundError:
+        _audit("download_export", False, f"{item['path']} | file not found")
+        await _send_http_response(send, 404, b"file not found")
+    except ValueError as error:
+        _audit("download_export", False, f"{item['path']} | {error}")
+        await _send_http_response(send, 413, str(error).encode("utf-8"))
+    except OSError as error:
+        _audit("download_export", False, f"{item['path']} | {error}")
+        await _send_http_response(send, 500, b"download failed")
+
+
 def _auth_asgi_wrapper(inner):
-    """纯 ASGI 包装：token 校验（Authorization: Bearer <token> 或 X-Token: <token>）"""
+    """纯 ASGI 包装：导出路由使用令牌，其余 MCP 请求使用 Authorization/X-Token。"""
     token = _AUTH_TOKEN
 
     async def app(scope, receive, send):
-        if scope["type"] != "http":
+        if scope.get("type") != "http":
+            await inner(scope, receive, send)
+            return
+        path = str(scope.get("path", ""))
+        if path.startswith(_EXPORT_ROUTE_PREFIX):
+            await _download_export(scope, receive, send)
+            return
+        if not token:
             await inner(scope, receive, send)
             return
         headers = {}
@@ -106,23 +197,18 @@ def _auth_asgi_wrapper(inner):
         if headers.get("authorization") == f"Bearer {token}" or headers.get("x-token") == token:
             await inner(scope, receive, send)
             return
-        body = b'{"error":"unauthorized"}'
-        await send({
-            "type": "http.response.start",
-            "status": 401,
-            "headers": [
-                (b"content-type", b"application/json"),
-                (b"content-length", str(len(body)).encode()),
-            ],
-        })
-        await send({"type": "http.response.body", "body": body})
+        await _send_http_response(send, 401, b'{"error":"unauthorized"}', [(b"content-type", b"application/json")])
 
     return app
 
 
 def _resolve(path: str) -> str:
-    """校验路径必须位于沙箱根目录内（realpath 防符号链接逃逸）"""
-    real = os.path.realpath(os.path.abspath(path))
+    """校验路径必须位于沙箱根目录内（相对路径相对第一个沙箱根目录）。"""
+    raw = os.fspath(path or "").strip()
+    if not raw:
+        raise ValueError("路径不能为空")
+    candidate = raw if os.path.isabs(raw) else os.path.join(_SANDBOX_ROOTS[0], raw)
+    real = os.path.realpath(os.path.abspath(candidate))
     for root in _SANDBOX_ROOTS:
         rr = os.path.realpath(root)
         if real == rr or real.startswith(rr + os.sep):
@@ -264,6 +350,33 @@ def delete_file(path: str) -> str:
 
 
 @mcp.tool()
+def export_file(path: str) -> str:
+    """为沙箱内文件生成短时下载地址，供 QQ/Milky 等协议端代取文件。"""
+    target = _resolve(path)
+    if not os.path.isfile(target):
+        raise ValueError(f"文件不存在: {path}")
+    size = os.path.getsize(target)
+    if size > DEFAULT_MAX_EXPORT:
+        raise ValueError(f"文件过大（{size} 字节 > 导出上限 {DEFAULT_MAX_EXPORT}）")
+
+    token = secrets.token_urlsafe(32)
+    expires_at = time.time() + DEFAULT_EXPORT_TTL
+    _expire_exports()
+    with _EXPORT_LOCK:
+        _EXPORTS[token] = {"path": target, "expires_at": expires_at}
+    relative_url = f"{_EXPORT_ROUTE_PREFIX}{token}"
+    download_url = f"{_PUBLIC_URL}{relative_url}" if _PUBLIC_URL else relative_url
+    _audit("export_file", True, f"{target} | {size} bytes | expires={int(expires_at)}")
+    return json.dumps({
+        "downloadUrl": download_url,
+        "name": os.path.basename(target),
+        "size": size,
+        "expiresAt": int(expires_at),
+        "ttlSeconds": DEFAULT_EXPORT_TTL,
+    }, ensure_ascii=False)
+
+
+@mcp.tool()
 def run_shell(command: str, cwd: Optional[str] = None, timeout: Optional[int] = None) -> str:
     """在沙箱内执行 shell 命令并返回输出。
 
@@ -316,7 +429,7 @@ def main() -> None:
                 uvicorn = None
             if uvicorn is not None:
                 inner = mcp.streamable_http_app()
-                app = _auth_asgi_wrapper(inner) if _AUTH_TOKEN else inner
+                app = _auth_asgi_wrapper(inner)
         if app is None:
             if _AUTH_TOKEN:
                 print(
