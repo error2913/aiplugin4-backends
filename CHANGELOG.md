@@ -2,6 +2,11 @@
 
 标题格式为 `## <版本号>`，release 工作流按标签版本号读取对应段落作为发布说明；日常更新以「Unreleased」汇总，发版前改成版本号并补日期。
 
+## 0.11.4 - 2026-08-18
+
+- mcp-files-exec 升级到 1.0.2：后端原生工具名改为 `run_shell`，不再注册 `run_command`
+- ob11-core-bridge 升级到 1.0.4：MCP 仅提供 `run_core_command`；`run_ext_command` 完全由 aiplugin4 插件本地实现
+
 ## 0.11.3 - 2026-08-18
 
 - ob11-core-bridge 升级到 1.0.3：协议端改为中间件**出站主动连接**（移除入站 /onebot），启动时连接协议端 WS 地址并带指数退避重连（1s 起、上限 30s）；协议端未配置/不可达时持续重试并在连上后自动恢复

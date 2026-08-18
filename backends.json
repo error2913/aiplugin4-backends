@@ -22,7 +22,7 @@
       "entry": "mcp_files_exec.py",
       "deps": "requirements.txt",
       "port": 3910,
-      "version": "1.0.1",
+      "version": "1.0.2",
       "source": "https://raw.githubusercontent.com/error2913/aiplugin4-backends/shop/backends/mcp-files-exec",
       "files": [
         "backend.json",
@@ -98,7 +98,7 @@
       "entry": "bridge.js",
       "deps": "package.json",
       "port": 46880,
-      "version": "1.0.3",
+      "version": "1.0.4",
       "source": "https://raw.githubusercontent.com/error2913/aiplugin4-backends/shop/backends/ob11-core-bridge",
       "files": [
         "backend.json",
