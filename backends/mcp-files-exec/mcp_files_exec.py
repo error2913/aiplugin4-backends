@@ -59,8 +59,8 @@ def _env_bool(name: str, default: bool = False) -> bool:
 
 _ALLOW_EXTERNAL_PATHS = _env_bool("MCP_ALLOW_EXTERNAL_PATHS", default=True)
 _ALLOW_DANGEROUS_COMMANDS = _env_bool("MCP_ALLOW_DANGEROUS_COMMANDS", default=True)
-MAX_DOWNLOAD_BYTES = max(0, int(os.environ.get("MCP_MAX_DOWNLOAD_BYTES", "0")))
-DOWNLOAD_TIMEOUT = max(1, int(os.environ.get("MCP_DOWNLOAD_TIMEOUT", "120")))
+MAX_DOWNLOAD_BYTES = max(0, int(os.environ.get("MCP_MAX_DOWNLOAD_BYTES", "0") or "0"))
+DOWNLOAD_TIMEOUT = max(1, int(os.environ.get("MCP_DOWNLOAD_TIMEOUT", "120") or "120"))
 _AUTH_TOKEN = os.environ.get("AIPLUGIN4_BACKEND_TOKEN", "")
 _PUBLIC_URL = os.environ.get("MCP_PUBLIC_URL", "").strip().rstrip("/")
 _EXPORT_ROUTE_PREFIX = "/files/download/"

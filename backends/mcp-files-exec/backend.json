@@ -5,7 +5,7 @@
   "entry": "mcp_files_exec.py",
   "deps": "requirements.txt",
   "port": 3910,
-  "version": "1.0.5",
+  "version": "1.0.6",
   "config": {
     "sandbox_roots": {
       "label": "沙箱工作路径（分号分隔多个）",
