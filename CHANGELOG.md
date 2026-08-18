@@ -2,6 +2,11 @@
 
 标题格式为 `## <版本号>`，release 工作流按标签版本号读取对应段落作为发布说明；日常更新以「Unreleased」汇总，发版前改成版本号并补日期。
 
+## 0.11.5 - 2026-08-18
+
+- ob11-core-bridge 升级到 1.0.5：MCP 配置改为标准 mcpServers，工具由 	ools/list 自动发现，仅提供 un_core_command`n- un_core_command 支持结构化 command/rgs 与原始 aw_message 两种互斥调用模式；un_ext_command 继续由插件本地实现
+- 插件 MCP 默认总开关关闭，保留标准 MCP 图片内容块与渲染/截图结果图片处理逻辑
+
 ## 0.11.4 - 2026-08-18
 
 - mcp-files-exec 升级到 1.0.2：后端原生工具名改为 `run_shell`，不再注册 `run_command`
