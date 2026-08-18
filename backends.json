@@ -17,12 +17,12 @@
     },
     {
       "name": "mcp-files-exec",
-      "description": "MCP：AI 读写文件与执行受限命令（沙箱 + 命令拦截 + 审计日志）",
+      "description": "MCP：AI 读写文件与执行受限命令（沙箱 + 命令拦截 + 审计 + 短时文件导出）",
       "type": "python",
       "entry": "mcp_files_exec.py",
       "deps": "requirements.txt",
       "port": 3910,
-      "version": "1.0.2",
+      "version": "1.0.3",
       "source": "https://raw.githubusercontent.com/error2913/aiplugin4-backends/shop/backends/mcp-files-exec",
       "files": [
         "backend.json",
