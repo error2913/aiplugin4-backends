@@ -2,9 +2,9 @@
 # -*- coding: utf-8 -*-
 """MCP 文件与命令后端：AI 可通过 MCP 读写文件、执行受限命令。
 
-安全设计：
-  1. 路径沙箱：所有文件操作必须落在 MCP_SANDBOX_ROOTS 允许的目录内（realpath 校验，防符号链接逃逸）
-  2. 命令拦截：危险命令按规则拦截；设置 MCP_ALLOWED_COMMANDS 后进入白名单模式，只放行指定前缀
+运行模式：
+  1. 默认允许 AI 直接传入绝对路径访问后端主机上的文件；设置 MCP_ALLOW_EXTERNAL_PATHS=0 可恢复沙箱路径限制
+  2. 默认不拦截命令；设置 MCP_ALLOW_DANGEROUS_COMMANDS=0 可恢复危险命令拦截/白名单
   3. 执行隔离：命令在工作目录沙箱内执行，带超时强制终止（杀进程树），输出截断
   4. 审计日志：每次调用（含被拦截的命令）都记录到日志文件
 
@@ -22,6 +22,10 @@
   MCP_MAX_EXPORT_BYTES     单文件导出上限（默认与 MCP_MAX_FILE_BYTES 相同）
   MCP_EXPORT_TTL_SECONDS   导出下载令牌有效期（默认 300）
   MCP_PUBLIC_URL           下载地址公网前缀（可选，反向代理时填写）
+  MCP_ALLOW_EXTERNAL_PATHS 是否允许绝对路径访问沙箱外文件（默认 1；设为 0 恢复沙箱）
+  MCP_ALLOW_DANGEROUS_COMMANDS 是否关闭危险命令拦截（默认 1；设为 0 恢复拦截）
+  MCP_MAX_DOWNLOAD_BYTES 下载文件上限（默认 0，不限制）
+  MCP_DOWNLOAD_TIMEOUT 下载超时秒数（默认 120）
 """
 
 import argparse
@@ -34,7 +38,9 @@ import signal
 import subprocess
 import sys
 import threading
+import tempfile
 import time
+import urllib.request
 from pathlib import Path
 from typing import Optional
 from urllib.parse import quote, unquote
@@ -46,6 +52,15 @@ DEFAULT_MAX_OUTPUT = int(os.environ.get("MCP_MAX_OUTPUT_BYTES", 1048576))
 DEFAULT_TIMEOUT = int(os.environ.get("MCP_DEFAULT_TIMEOUT", 30))
 DEFAULT_MAX_EXPORT = int(os.environ.get("MCP_MAX_EXPORT_BYTES", DEFAULT_MAX_FILE))
 DEFAULT_EXPORT_TTL = max(1, int(os.environ.get("MCP_EXPORT_TTL_SECONDS", 300)))
+
+def _env_bool(name: str, default: bool = False) -> bool:
+    value = os.environ.get(name, "1" if default else "0").strip().lower()
+    return value in {"1", "true", "yes", "on", "是", "开启"}
+
+_ALLOW_EXTERNAL_PATHS = _env_bool("MCP_ALLOW_EXTERNAL_PATHS", default=True)
+_ALLOW_DANGEROUS_COMMANDS = _env_bool("MCP_ALLOW_DANGEROUS_COMMANDS", default=True)
+MAX_DOWNLOAD_BYTES = max(0, int(os.environ.get("MCP_MAX_DOWNLOAD_BYTES", "0")))
+DOWNLOAD_TIMEOUT = max(1, int(os.environ.get("MCP_DOWNLOAD_TIMEOUT", "120")))
 _AUTH_TOKEN = os.environ.get("AIPLUGIN4_BACKEND_TOKEN", "")
 _PUBLIC_URL = os.environ.get("MCP_PUBLIC_URL", "").strip().rstrip("/")
 _EXPORT_ROUTE_PREFIX = "/files/download/"
@@ -203,12 +218,14 @@ def _auth_asgi_wrapper(inner):
 
 
 def _resolve(path: str) -> str:
-    """校验路径必须位于沙箱根目录内（相对路径相对第一个沙箱根目录）。"""
+    """解析文件路径；开启 MCP_ALLOW_EXTERNAL_PATHS 后允许绝对路径访问沙箱外文件。"""
     raw = os.fspath(path or "").strip()
     if not raw:
         raise ValueError("路径不能为空")
     candidate = raw if os.path.isabs(raw) else os.path.join(_SANDBOX_ROOTS[0], raw)
     real = os.path.realpath(os.path.abspath(candidate))
+    if _ALLOW_EXTERNAL_PATHS:
+        return real
     for root in _SANDBOX_ROOTS:
         rr = os.path.realpath(root)
         if real == rr or real.startswith(rr + os.sep):
@@ -221,6 +238,8 @@ def _intercept(command: str) -> Optional[str]:
     cmd = command.strip()
     if not cmd:
         return "空命令"
+    if _ALLOW_DANGEROUS_COMMANDS:
+        return None
     if _ALLOWED_PREFIXES:
         if not any(cmd.startswith(p) for p in _ALLOWED_PREFIXES):
             return f"命令不在白名单内（MCP_ALLOWED_COMMANDS 允许的前缀: {', '.join(_ALLOWED_PREFIXES)}）"
@@ -377,6 +396,56 @@ def export_file(path: str) -> str:
 
 
 @mcp.tool()
+def download_file(url: str, path: str, overwrite: bool = True, timeout: Optional[int] = None) -> str:
+    """从 URL 下载文件到指定路径。
+
+    path 可以是沙箱相对路径，也可以是后端主机上的任意绝对路径（默认开放模式）。
+    不限制 URL 类型或目标主机；需要跨主机读取 QQ/OB11 附件时，可把消息中的 URL 直接传入。
+    """
+    source = str(url or "").strip()
+    if not source:
+        raise ValueError("URL 不能为空")
+    target = _resolve(path)
+    if os.path.isdir(target):
+        raise ValueError(f"目标是目录: {path}")
+    if os.path.exists(target) and not overwrite:
+        raise ValueError(f"目标文件已存在: {path}")
+    parent = os.path.dirname(target)
+    os.makedirs(parent or _SANDBOX_ROOTS[0], exist_ok=True)
+    request = urllib.request.Request(source, headers={"User-Agent": "aiplugin4-mcp-files-exec/1.0"})
+    temp_path = None
+    total = 0
+    limit = MAX_DOWNLOAD_BYTES
+    try:
+        with urllib.request.urlopen(request, timeout=timeout or DOWNLOAD_TIMEOUT) as response:
+            content_length = response.headers.get("Content-Length")
+            if limit and content_length and int(content_length) > limit:
+                raise ValueError(f"下载文件过大（{content_length} 字节 > 上限 {limit}）")
+            with tempfile.NamedTemporaryFile(mode="wb", dir=parent or None, prefix=".mcp-download-", delete=False) as temp:
+                temp_path = temp.name
+                while True:
+                    chunk = response.read(1024 * 1024)
+                    if not chunk:
+                        break
+                    total += len(chunk)
+                    if limit and total > limit:
+                        raise ValueError(f"下载文件过大（>{limit} 字节）")
+                    temp.write(chunk)
+        os.replace(temp_path, target)
+        temp_path = None
+    except Exception as error:
+        if temp_path:
+            try:
+                os.remove(temp_path)
+            except OSError:
+                pass
+        _audit("download_file", False, f"{source} -> {target} | {error}")
+        raise ValueError(f"下载失败: {error}") from error
+    _audit("download_file", True, f"{source} -> {target} | {total} bytes")
+    return json.dumps({"url": source, "path": target, "name": os.path.basename(target), "size": total}, ensure_ascii=False)
+
+
+@mcp.tool()
 def run_shell(command: str, cwd: Optional[str] = None, timeout: Optional[int] = None) -> str:
     """在沙箱内执行 shell 命令并返回输出。
 
@@ -402,7 +471,7 @@ def run_shell(command: str, cwd: Optional[str] = None, timeout: Optional[int] = 
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="MCP 文件与命令后端（沙箱 + 命令拦截）")
+    parser = argparse.ArgumentParser(description="MCP 文件与命令后端（直接路径 + 命令执行）")
     parser.add_argument("--stdio", action="store_true", help="使用 stdio 传输（默认 streamable-http）")
     parser.add_argument("--host", default=os.environ.get("AIPLUGIN4_BACKEND_HOST", "0.0.0.0"), help="streamable-http 监听地址")
     parser.add_argument("--port", type=int, default=int(os.environ.get("AIPLUGIN4_BACKEND_PORT", "3910")))
@@ -412,6 +481,7 @@ def main() -> None:
     print(
         f"[mcp-files-exec] 沙箱根目录: {_SANDBOX_ROOTS}\n"
         f"[mcp-files-exec] 命令白名单: {_ALLOWED_PREFIXES or '(未启用，使用危险规则拦截)'}\n"
+        f"[mcp-files-exec] 外部路径访问: {'开启' if _ALLOW_EXTERNAL_PATHS else '关闭'}；危险命令拦截: {'关闭' if _ALLOW_DANGEROUS_COMMANDS else '开启'}\n"
         f"[mcp-files-exec] 审计日志: {_AUDIT_LOG}",
         file=sys.stderr,
         flush=True,

@@ -21,6 +21,9 @@ class McpFilesExecTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.temp_dir = tempfile.TemporaryDirectory()
+        cls.external_dir = tempfile.TemporaryDirectory()
+        os.environ.pop("MCP_ALLOW_EXTERNAL_PATHS", None)
+        os.environ.pop("MCP_ALLOW_DANGEROUS_COMMANDS", None)
         os.environ["MCP_SANDBOX_ROOTS"] = cls.temp_dir.name
         os.environ["MCP_MAX_EXPORT_BYTES"] = "1024"
         os.environ["MCP_EXPORT_TTL_SECONDS"] = "30"
@@ -42,6 +45,7 @@ class McpFilesExecTests(unittest.TestCase):
     @classmethod
     def tearDownClass(cls):
         cls.temp_dir.cleanup()
+        cls.external_dir.cleanup()
         for name in ("mcp", "mcp.server", "mcp.server.fastmcp", "mcp_files_exec_test_module"):
             sys.modules.pop(name, None)
 
@@ -67,6 +71,20 @@ class McpFilesExecTests(unittest.TestCase):
 
     def test_relative_path_resolves_against_first_sandbox_root(self):
         self.assertEqual(str(self.file_path), self.module._resolve("测试.txt"))
+
+    def test_external_absolute_path_is_readable_by_default_open_mode(self):
+        external = Path(self.external_dir.name) / "outside.txt"
+        external.write_text("outside content", encoding="utf-8")
+        self.assertEqual(self.module.read_file(str(external)), "outside content")
+        self.assertEqual(self.module._resolve(str(external)), str(external.resolve()))
+
+    def test_download_file_accepts_url_and_external_destination(self):
+        source = Path(self.external_dir.name) / "source.bin"
+        source.write_bytes(b"downloaded content")
+        destination = Path(self.external_dir.name) / "nested" / "target.bin"
+        result = json.loads(self.module.download_file(source.as_uri(), str(destination)))
+        self.assertEqual(result["path"], str(destination.resolve()))
+        self.assertEqual(destination.read_bytes(), b"downloaded content")
 
     def test_export_file_returns_short_lived_download_url_and_downloads(self):
         result = json.loads(self.module.export_file("测试.txt"))
