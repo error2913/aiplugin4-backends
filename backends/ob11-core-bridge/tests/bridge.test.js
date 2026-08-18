@@ -550,7 +550,7 @@ test('MCP exposes only the core bridge command', async t => {
   assert.deepEqual(listed.body.result.tools.map(tool => tool.name).sort(), ['run_core_command']);
   const schema = listed.body.result.tools[0].inputSchema;
   assert.deepEqual(Object.keys(schema.properties).sort(), [
-    'action', 'args', 'atUserId', 'captureMode', 'command', 'forward', 'maxMessages', 'raw_message', 'settleMs', 'timeoutMs', 'triggerUserId'
+    'action', 'args', 'at', 'captureMode', 'command', 'forward', 'maxMessages', 'raw_message', 'settleMs', 'timeoutMs', 'trigger'
   ]);
   assert.equal(Object.prototype.hasOwnProperty.call(schema.properties, 'target'), false);
   assert.equal(Object.prototype.hasOwnProperty.call(schema.properties, 'actor'), false);
@@ -578,7 +578,7 @@ test('structured MCP calls are converted to the core raw message', async t => {
   await closeWs(core);
 });
 
-test('triggerUserId and atUserId are injected into the fake OB11 message', async t => {
+test('trigger and at are injected into the fake OB11 message', async t => {
   await setup(); t.after(teardown);
   const core = await connectCore();
   const received = waitForMessage(core, packet => packet.post_type === 'message' && packet.raw_message === '[CQ:at,qq=50005] .rav 1d100 50');
@@ -589,8 +589,8 @@ test('triggerUserId and atUserId are injected into the fake OB11 message', async
     actor: { userId: '30002', nickname: 'AI', role: 'member' },
     command: 'rav',
     args: ['1d100', '50'],
-    triggerUserId: '40004',
-    atUserId: '50005',
+    trigger: '40004',
+    at: ['50005'],
     settleMs: 20,
     timeoutMs: 1000
   }, sessionId);

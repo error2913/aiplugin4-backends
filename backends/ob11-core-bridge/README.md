@@ -77,7 +77,7 @@ ws://127.0.0.1:46880/core
   - `action`：`list` 返回模式说明；`call` 执行指令。
   - 结构化模式使用 `command`（不含前缀）和可选 `args`；中间件按 `__commandPrefix`（默认 `.`）组装核心原始消息。
   - 原始消息模式使用 `raw_message`，内容原样注入核心；`raw_message` 不能与 `command` 或 `args` 同时使用。
-  - `maxMessages`、`settleMs`、`timeoutMs`、`captureMode`、`forward` 控制消息捕获与转发。
+  - `maxMessages`、`settleMs`、`timeoutMs`、`captureMode`、`forward` 控制消息捕获与转发，未提供时默认 `true`。
   - `target`、`actor`、`__commandPrefix` 是插件内部上下文字段，通过 schema passthrough 接收但不出现在 MCP 公开 properties 中。
 
 工具返回文本内容中的 JSON 即调用结果，包含 `ok`、`messages`、`completedBy`、`ambiguous`、`forwardedCount`、`interceptedCount` 等字段。MCP 会话只负责传输，底层复用同一套 lane 串行与消息捕获逻辑。

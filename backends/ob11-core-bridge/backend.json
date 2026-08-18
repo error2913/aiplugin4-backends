@@ -5,7 +5,7 @@
   "entry": "bridge.js",
   "deps": "package.json",
   "port": 46880,
-  "version": "1.0.6",
+  "version": "1.0.7",
   "config": {
     "protocol_url": {
       "label": "协议端 WebSocket 地址（如 ws://127.0.0.1:6700，中间件启动时主动连接）",
