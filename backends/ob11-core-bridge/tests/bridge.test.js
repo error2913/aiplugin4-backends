@@ -441,7 +441,7 @@ test('private send_msg targets private lanes correctly', async t => {
     if (packet.echo === 'private-echo') resolve(packet);
   }));
   const [result, response] = await Promise.all([
-    mcpCall('run_core_command', mcpArgs(privateTarget(), '.private', { settleMs: 20 }), sessionId),
+    mcpCall('run_core_command', mcpArgs(privateTarget(), '.private', { forward: false, settleMs: 20 }), sessionId),
     actionPromise
   ]);
   assert.equal(result.ok, true);
