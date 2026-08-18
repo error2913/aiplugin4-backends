@@ -172,11 +172,33 @@ function privateTarget(userId = '30002', selfId = '10001') {
 }
 
 function mcpArgs(target, raw, capture = {}, timeoutMs = 1000) {
-  return {
+  const args = {
+    action: 'call',
     target,
     actor: { userId: String(target.userId || '30002'), nickname: 'AI', role: 'member' },
-    command: { raw, name: '', args: [] },
-    capture, timeoutMs
+    raw_message: raw,
+    captureMode: capture.mode,
+    forward: capture.forward,
+    maxMessages: capture.maxMessages,
+    settleMs: capture.settleMs,
+    timeoutMs
+  };
+  return args;
+}
+
+function mcpStructuredArgs(target, command, args = [], options = {}) {
+  return {
+    action: 'call',
+    target,
+    actor: { userId: String(target.userId || '30002'), nickname: 'AI', role: 'member' },
+    command,
+    args,
+    __commandPrefix: options.commandPrefix || '.',
+    captureMode: options.captureMode,
+    forward: options.forward,
+    maxMessages: options.maxMessages,
+    settleMs: options.settleMs,
+    timeoutMs: options.timeoutMs || 1000
   };
 }
 
@@ -526,11 +548,52 @@ test('MCP exposes only the core bridge command', async t => {
   const sessionId = await mcpSession();
   const listed = await mcpRequest({ jsonrpc: '2.0', id: 2, method: 'tools/list' }, sessionId);
   assert.deepEqual(listed.body.result.tools.map(tool => tool.name).sort(), ['run_core_command']);
+  const schema = listed.body.result.tools[0].inputSchema;
+  assert.deepEqual(Object.keys(schema.properties).sort(), [
+    'action', 'args', 'captureMode', 'command', 'forward', 'maxMessages', 'raw_message', 'settleMs', 'timeoutMs'
+  ]);
+  assert.equal(Object.prototype.hasOwnProperty.call(schema.properties, 'target'), false);
+  assert.equal(Object.prototype.hasOwnProperty.call(schema.properties, 'actor'), false);
 
   const coreResult = await mcpCall('run_core_command', mcpArgs(groupTarget(), '.ban 100', { settleMs: 30 }), sessionId);
   assert.equal(coreResult.ok, true);
   assert.equal(coreResult.messages[0].text, 'mcp-.ban 100');
   await closeWs(core);
+});
+
+test('structured MCP calls are converted to the core raw message', async t => {
+  await setup(); t.after(teardown);
+  const core = await connectCore();
+  const received = waitForMessage(core, packet => packet.post_type === 'message' && packet.raw_message === '.help ext');
+  core.on('message', data => {
+    let packet; try { packet = JSON.parse(data.toString()); } catch (_) { return; }
+    if (packet.post_type === 'message' && packet.raw_message === '.help ext') sendGroupAction(core, packet.group_id, 'structured-ok', 'structured-action');
+  });
+  const sessionId = await mcpSession();
+  const resultPromise = mcpCall('run_core_command', mcpStructuredArgs(groupTarget(), 'help', ['ext'], { settleMs: 20 }), sessionId);
+  await received;
+  const result = await resultPromise;
+  assert.equal(result.ok, true);
+  assert.equal(result.messages[0].text, 'structured-ok');
+  await closeWs(core);
+});
+
+test('raw_message cannot be combined with structured command arguments', async t => {
+  await setup(); t.after(teardown);
+  const sessionId = await mcpSession();
+  const both = await mcpCall('run_core_command', {
+    action: 'call', raw_message: '.help', command: 'help',
+    target: groupTarget(), actor: { userId: '30002', nickname: 'AI', role: 'member' }
+  }, sessionId);
+  assert.equal(both.ok, false);
+  assert.match(both.error, /raw_message.*command|command.*raw_message/i);
+
+  const rawAndArgs = await mcpCall('run_core_command', {
+    action: 'call', raw_message: '.help', args: ['ext'],
+    target: groupTarget(), actor: { userId: '30002', nickname: 'AI', role: 'member' }
+  }, sessionId);
+  assert.equal(rawAndArgs.ok, false);
+  assert.match(rawAndArgs.error, /raw_message.*command|command.*raw_message/i);
 });
 
 test('invalid auth and wrong tokens are rejected', async t => {

@@ -149,51 +149,124 @@ class Invocation {
   }
 }
 
-const MCP_TARGET_SCHEMA = z.object({
-  selfId: z.string(),
-  messageType: z.enum(['group', 'private']),
-  groupId: z.string().optional(),
-  userId: z.string().optional()
-});
-const MCP_ACTOR_SCHEMA = z.object({
-  userId: z.string(),
-  nickname: z.string(),
-  role: z.string()
-});
-const MCP_COMMAND_SCHEMA = z.object({
-  raw: z.string(),
-  name: z.string(),
-  args: z.array(z.string()).default([])
-});
-const MCP_CAPTURE_SCHEMA = z.object({
-  mode: z.enum(['reply_only', 'lane']).optional(),
-  forward: z.boolean().optional(),
-  maxMessages: z.number().int().min(1).max(MAX_MESSAGES).optional(),
-  settleMs: z.number().int().min(0).max(10000).optional()
-}).optional();
+const MCP_PUBLIC_INPUT_SCHEMA = z.object({
+  action: z.enum(['list', 'call']).describe('list=返回可用模式说明；call=执行核心指令'),
+  command: z.string().min(1).optional().describe('结构化模式的核心指令名，不含前缀'),
+  args: z.array(z.string()).optional().describe('结构化模式的指令参数，按顺序填写'),
+  raw_message: z.string().min(1).optional().describe('原始消息模式；会原样注入核心，不得与 command/args 同时使用'),
+  maxMessages: z.number().int().min(1).max(MAX_MESSAGES).optional().describe('最多收集多少条消息'),
+  settleMs: z.number().int().min(0).max(10000).optional().describe('收到消息后等待多久没有新消息才结束'),
+  timeoutMs: z.number().int().min(100).max(120000).optional().describe('最长等待时间，单位毫秒'),
+  captureMode: z.enum(['reply_only', 'lane']).optional().describe('消息捕获范围'),
+  forward: z.boolean().optional().describe('是否把捕获到的消息继续转发给协议端')
+}).passthrough();
+
+function validateMcpRequest(value) {
+  const hasCommand = value.command !== undefined;
+  const hasArgs = value.args !== undefined;
+  const hasRawMessage = value.raw_message !== undefined;
+  const hasExecutionOptions = value.maxMessages !== undefined
+    || value.settleMs !== undefined
+    || value.timeoutMs !== undefined
+    || value.captureMode !== undefined
+    || value.forward !== undefined;
+
+  if (value.action === 'list') {
+    if (hasCommand || hasArgs || hasRawMessage || hasExecutionOptions) {
+      return 'action=list 不能携带执行参数';
+    }
+    return '';
+  }
+
+  if (hasRawMessage && (hasCommand || hasArgs)) {
+    return 'raw_message 不能与 command/args 同时使用';
+  } else if (!hasRawMessage && !hasCommand) {
+    return 'action=call 必须提供 command 或 raw_message';
+  }
+  if (hasArgs && !hasCommand && !hasRawMessage) {
+    return 'args 只能与 command 一起使用';
+  }
+  if (hasRawMessage && !String(value.raw_message).trim()) {
+    return 'raw_message 不能为空';
+  }
+  return '';
+}
 
 function mcpResult(result) {
   return { content: [{ type: 'text', text: JSON.stringify(result) }] };
 }
 
-function createMcpServer(bridge) {
-  const server = new McpServer({ name: 'ob11-core-bridge', version: '1.0.4' });
-  const input = {
-    target: MCP_TARGET_SCHEMA.describe('注入假消息的目标群/私聊'),
-    actor: MCP_ACTOR_SCHEMA.describe('假消息发送者'),
-    command: MCP_COMMAND_SCHEMA.describe('要注入核心的消息'),
-    capture: MCP_CAPTURE_SCHEMA.describe('响应捕获与转发选项'),
-    timeoutMs: z.number().int().min(100).max(120000).optional().describe('最长等待时间，单位毫秒')
+function normalizeMcpTarget(request) {
+  const target = request && request.target;
+  if (!target || typeof target !== 'object') throw new Error('target is required');
+  const messageType = target.messageType === 'private' ? 'private' : target.messageType === 'group' ? 'group' : '';
+  if (!messageType) throw new Error('target.messageType must be group or private');
+  const selfId = idString(target.selfId);
+  if (!selfId) throw new Error('target.selfId is required');
+  const peer = messageType === 'private' ? target.userId : target.groupId;
+  if (peer === undefined || peer === null || idString(peer) === '') {
+    throw new Error(`target.${messageType === 'private' ? 'userId' : 'groupId'} is required`);
+  }
+  return {
+    selfId,
+    messageType,
+    ...(messageType === 'private' ? { userId: idString(peer) } : { groupId: idString(peer) }),
+    ...(target.userId !== undefined ? { userId: idString(target.userId) } : {})
   };
+}
+
+function normalizeMcpActor(request, target) {
+  const actor = request && request.actor;
+  if (!actor || typeof actor !== 'object') throw new Error('actor is required');
+  return {
+    userId: idString(actor.userId || target.userId || target.selfId),
+    nickname: idString(actor.nickname || 'AI'),
+    role: idString(actor.role || 'member')
+  };
+}
+
+function invocationFromMcp(request, id) {
+  const target = normalizeMcpTarget(request);
+  const actor = normalizeMcpActor(request, target);
+  const forward = request.forward === true;
+  const invocation = {
+    target,
+    actor,
+    capture: {
+      mode: request.captureMode || (forward ? 'lane' : 'reply_only'),
+      forward,
+      ...(request.maxMessages !== undefined ? { maxMessages: request.maxMessages } : {}),
+      ...(request.settleMs !== undefined ? { settleMs: request.settleMs } : {})
+    },
+    ...(request.timeoutMs !== undefined ? { timeoutMs: request.timeoutMs } : {}),
+    id
+  };
+
+  if (request.raw_message !== undefined) {
+    return { ...invocation, raw_message: String(request.raw_message) };
+  }
+
+  const command = String(request.command).trim().replace(/^core\|/, '').trim();
+  const args = Array.isArray(request.args) ? request.args.map(value => String(value)) : [];
+  const prefix = request.__commandPrefix === undefined ? '.' : String(request.__commandPrefix);
+  const raw = `${prefix}${command}${args.length ? ` ${args.join(' ')}` : ''}`.trim();
+  return { ...invocation, command: { raw, name: command, args } };
+}
+
+function createMcpServer(bridge) {
+  const server = new McpServer({ name: 'ob11-core-bridge', version: '1.0.5' });
   const call = async (request) => {
     try {
-      const result = await bridge.queueInvoke({ ...request, id: `core_${crypto.randomUUID()}` });
+      const validationError = validateMcpRequest(request);
+      if (validationError) return mcpResult({ ok: false, error: validationError, messages: [] });
+      if (request.action === 'list') return mcpResult({ ok: true, action: 'list', modes: ['structured', 'raw_message'] });
+      const result = await bridge.queueInvoke(invocationFromMcp(request, `core_${crypto.randomUUID()}`));
       return mcpResult(result);
     } catch (error) {
       return mcpResult({ ok: false, error: error instanceof Error ? error.message : String(error), messages: [] });
     }
   };
-  server.tool('run_core_command', input, call);
+  server.registerTool('run_core_command', { inputSchema: MCP_PUBLIC_INPUT_SCHEMA }, call);
   return server;
 }
 
@@ -488,7 +561,10 @@ class Bridge {
       const messageType = target.messageType === 'private' ? 'private' : 'group';
       const peer = messageType === 'private' ? target.userId : target.groupId;
       if (peer === undefined || peer === null) throw new Error('target.groupId/userId is required');
-      const raw = String(request.command.raw);
+      const raw = request.raw_message !== undefined
+        ? String(request.raw_message)
+        : String(request.command && request.command.raw || '');
+      if (!raw) throw new Error('command.raw or raw_message is required');
       const userId = Number(target.userId || 0);
       const fakeEvent = {
         time: Math.floor(Date.now() / 1000), self_id: Number(target.selfId || coreWs._bridgeCoreId || 0), post_type: 'message',
