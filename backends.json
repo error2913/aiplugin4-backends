@@ -22,7 +22,7 @@
       "entry": "mcp_files_exec.py",
       "deps": "requirements.txt",
       "port": 3910,
-      "version": "1.0.5",
+      "version": "1.0.6",
       "source": "https://raw.githubusercontent.com/error2913/aiplugin4-backends/shop/backends/mcp-files-exec",
       "files": [
         "backend.json",
