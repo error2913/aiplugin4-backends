@@ -71,7 +71,7 @@ ws://127.0.0.1:46880/core
 
 ## MCP 工具
 
-`/mcp` 遵循 Streamable HTTP MCP，提供 `run_core_command` 工具（`run_ext_command` 由 aiplugin4 插件本地直调扩展 `solve` 实现，无需本中间件；本中间件保留 `run_ext_command` 仅为通用注入接口）：
+`/mcp` 遵循 Streamable HTTP MCP，仅提供 `run_core_command` 工具。`run_ext_command` 由 aiplugin4 插件前端本地直调扩展 `solve` 实现，不属于本中间件，也不会出现在 MCP 工具列表中：
 
 - `run_core_command`：执行核心指令（如 `.ext`、`.help`）。
 - 参数 `target`、`actor`、`command`、`capture`、`timeoutMs`：分别表示目标、假消息发送者、指令内容、捕获策略和超时。

@@ -299,7 +299,7 @@ test('invoke captures multiple actions and intercepts them by default', async t 
     sendGroupAction(core, 99999, 'unrelated', 'other');
   };
   core.on('message', coreHandler);
-  const resultPromise = mcpCall('run_ext_command', mcpArgs(groupTarget(), '.jrrp', { mode: 'reply_only', forward: false, settleMs: 70, maxMessages: 20 }), sessionId);
+  const resultPromise = mcpCall('run_core_command', mcpArgs(groupTarget(), '.jrrp', { mode: 'reply_only', forward: false, settleMs: 70, maxMessages: 20 }), sessionId);
 
   assert.equal((await seenFake).message[0].data.text, '.jrrp');
   assert.equal((await coreResponse1).status, 'ok');
@@ -328,7 +328,7 @@ test('lane capture intercepts bot message events', async t => {
       core.send(JSON.stringify({ ...FIXTURE, message_id: 91001, raw_message: 'bot-event', message: [{ type: 'text', data: { text: 'bot-event' } }] }));
     }
   });
-  const result = await mcpCall('run_ext_command', mcpArgs(groupTarget(), '.event', { mode: 'lane', forward: false, settleMs: 40 }), sessionId);
+  const result = await mcpCall('run_core_command', mcpArgs(groupTarget(), '.event', { mode: 'lane', forward: false, settleMs: 40 }), sessionId);
   assert.equal(result.ok, true);
   assert.equal(result.messages.length, 1);
   assert.equal(result.messages[0].source, 'event');
@@ -363,7 +363,7 @@ test('forward=true forwards actions and routes protocol API responses back to co
     }
   });
 
-  const result = await mcpCall('run_ext_command', mcpArgs(groupTarget(), '.forward', { mode: 'lane', forward: true, settleMs: 50 }), sessionId);
+  const result = await mcpCall('run_core_command', mcpArgs(groupTarget(), '.forward', { mode: 'lane', forward: true, settleMs: 50 }), sessionId);
   assert.equal(result.ok, true);
   assert.equal(result.forwardedCount, 2);
   assert.equal(result.interceptedCount, 0);
@@ -393,10 +393,10 @@ test('same-lane invocations serialize while different lanes run concurrently', a
   });
 
   const aStarted = waitForMessage(core, packet => packet.post_type === 'message' && packet.raw_message === '.a');
-  const sameA = mcpCall('run_ext_command', mcpArgs(groupTarget('20002'), '.a', { settleMs: 10 }), sessionA);
+  const sameA = mcpCall('run_core_command', mcpArgs(groupTarget('20002'), '.a', { settleMs: 10 }), sessionA);
   await aStarted;
-  const sameB = mcpCall('run_ext_command', mcpArgs(groupTarget('20002'), '.b', { settleMs: 10 }), sessionB);
-  const different = mcpCall('run_ext_command', mcpArgs(groupTarget('20003'), '.c', { settleMs: 10 }), sessionC);
+  const sameB = mcpCall('run_core_command', mcpArgs(groupTarget('20002'), '.b', { settleMs: 10 }), sessionB);
+  const different = mcpCall('run_core_command', mcpArgs(groupTarget('20003'), '.c', { settleMs: 10 }), sessionC);
   const results = await Promise.all([sameA, sameB, different]);
   assert.equal(results.every(result => result.ok === true), true);
   await waitFor(() => started.includes('20002:.b') && completed.includes('20002:.a'), 3000);
@@ -419,7 +419,7 @@ test('private send_msg targets private lanes correctly', async t => {
     if (packet.echo === 'private-echo') resolve(packet);
   }));
   const [result, response] = await Promise.all([
-    mcpCall('run_ext_command', mcpArgs(privateTarget(), '.private', { settleMs: 20 }), sessionId),
+    mcpCall('run_core_command', mcpArgs(privateTarget(), '.private', { settleMs: 20 }), sessionId),
     actionPromise
   ]);
   assert.equal(result.ok, true);
@@ -445,12 +445,12 @@ test('lane mode captures events, maxMessages bounds mixed replies, and reply_onl
       core.send(JSON.stringify({ ...FIXTURE, message_id: 8002, raw_message: 'reply', message: [{ type: 'reply', data: { id: packet.message_id } }, { type: 'text', data: { text: 'reply' } }] }));
     }
   });
-  const laneResult = await mcpCall('run_ext_command', mcpArgs(groupTarget(), '.lane', { mode: 'lane', maxMessages: 2, settleMs: 100 }), sessionId);
+  const laneResult = await mcpCall('run_core_command', mcpArgs(groupTarget(), '.lane', { mode: 'lane', maxMessages: 2, settleMs: 100 }), sessionId);
   assert.equal(laneResult.ok, true);
   assert.equal(laneResult.messages.length, 2);
   assert.equal(laneResult.completedBy, 'max_messages');
   await wait(50);
-  const replyResult = await mcpCall('run_ext_command', mcpArgs(groupTarget(), '.reply', { mode: 'reply_only', settleMs: 30 }), sessionId);
+  const replyResult = await mcpCall('run_core_command', mcpArgs(groupTarget(), '.reply', { mode: 'reply_only', settleMs: 30 }), sessionId);
   assert.equal(replyResult.ok, true);
   assert.equal(replyResult.messages.length, 1);
   assert.equal(replyResult.messages[0].text, 'reply');
@@ -462,16 +462,16 @@ test('lane mode captures events, maxMessages bounds mixed replies, and reply_onl
 test('timeouts, missing core, and core disconnects fail cleanly', async t => {
   await setup(); t.after(teardown);
   const sessionId = await mcpSession();
-  const missing = await mcpCall('run_ext_command', mcpArgs(groupTarget(), '.missing', {}, 100), sessionId);
+  const missing = await mcpCall('run_core_command', mcpArgs(groupTarget(), '.missing', {}, 100), sessionId);
   assert.equal(missing.ok, false);
   assert.match(missing.error, /核心 WS/);
 
   const core = await connectCore();
-  const timeout = await mcpCall('run_ext_command', mcpArgs(groupTarget(), '.timeout', { settleMs: 20 }, 100), sessionId);
+  const timeout = await mcpCall('run_core_command', mcpArgs(groupTarget(), '.timeout', { settleMs: 20 }, 100), sessionId);
   assert.equal(timeout.ok, true);
   assert.equal(timeout.completedBy, 'timeout');
 
-  const disconnectPromise = mcpCall('run_ext_command', mcpArgs(groupTarget(), '.disconnect', {}, 1000), sessionId);
+  const disconnectPromise = mcpCall('run_core_command', mcpArgs(groupTarget(), '.disconnect', {}, 1000), sessionId);
   await waitForMessage(core, packet => packet.post_type === 'message' && packet.raw_message === '.disconnect');
   await closeWs(core);
   const disconnect = await disconnectPromise;
@@ -507,13 +507,13 @@ test('multiple core connections route login responses, events, and invocations b
     let packet; try { packet = JSON.parse(data.toString()); } catch (_) { return; }
     if (packet.post_type === 'message' && packet.raw_message === '.only-bot-1') sendGroupAction(core1, 20002, 'bot1', 'bot1-echo');
   });
-  const result = await mcpCall('run_ext_command', mcpArgs(groupTarget('20002', '10001'), '.only-bot-1', { settleMs: 20 }), sessionId);
+  const result = await mcpCall('run_core_command', mcpArgs(groupTarget('20002', '10001'), '.only-bot-1', { settleMs: 20 }), sessionId);
   assert.equal(result.ok, true);
   assert.equal(result.messages[0].text, 'bot1');
   await closeWs(protocol); await closeWs(core1); await closeWs(core2);
 });
 
-test('MCP exposes bridge tools and both commands run the same pipeline', async t => {
+test('MCP exposes only the core bridge command', async t => {
   await setup(); t.after(teardown);
   const core = await connectCore();
   core.on('message', data => {
@@ -525,12 +525,7 @@ test('MCP exposes bridge tools and both commands run the same pipeline', async t
 
   const sessionId = await mcpSession();
   const listed = await mcpRequest({ jsonrpc: '2.0', id: 2, method: 'tools/list' }, sessionId);
-  assert.deepEqual(listed.body.result.tools.map(tool => tool.name).sort(), ['run_core_command', 'run_ext_command']);
-
-  const extResult = await mcpCall('run_ext_command', mcpArgs(groupTarget(), '.mcp', { mode: 'reply_only', forward: false, maxMessages: 5, settleMs: 30 }), sessionId);
-  assert.equal(extResult.ok, true);
-  assert.deepEqual(extResult.messages.map(message => message.text), ['mcp-.mcp', 'mcp-second']);
-  assert.equal(extResult.interceptedCount, 2);
+  assert.deepEqual(listed.body.result.tools.map(tool => tool.name).sort(), ['run_core_command']);
 
   const coreResult = await mcpCall('run_core_command', mcpArgs(groupTarget(), '.ban 100', { settleMs: 30 }), sessionId);
   assert.equal(coreResult.ok, true);

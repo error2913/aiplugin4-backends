@@ -185,16 +185,15 @@ function createMcpServer(bridge) {
     capture: MCP_CAPTURE_SCHEMA.describe('响应捕获与转发选项'),
     timeoutMs: z.number().int().min(100).max(120000).optional().describe('最长等待时间，单位毫秒')
   };
-  const call = (kind) => async (request) => {
+  const call = async (request) => {
     try {
-      const result = await bridge.queueInvoke({ ...request, id: `${kind}_${crypto.randomUUID()}` });
+      const result = await bridge.queueInvoke({ ...request, id: `core_${crypto.randomUUID()}` });
       return mcpResult(result);
     } catch (error) {
       return mcpResult({ ok: false, error: error instanceof Error ? error.message : String(error), messages: [] });
     }
   };
-  server.tool('run_ext_command', input, call('ext'));
-  server.tool('run_core_command', input, call('core'));
+  server.tool('run_core_command', input, call);
   return server;
 }
 

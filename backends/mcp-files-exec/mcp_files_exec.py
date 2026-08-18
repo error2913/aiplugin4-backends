@@ -252,7 +252,7 @@ def write_file(path: str, content: str, append: bool = False) -> str:
 
 @mcp.tool()
 def delete_file(path: str) -> str:
-    """删除沙箱目录内的单个文件（目录需先用 run_command 谨慎处理或自行清空）。"""
+    """删除沙箱目录内的单个文件（目录需先用 run_shell 谨慎处理或自行清空）。"""
     target = _resolve(path)
     if os.path.isdir(target):
         raise ValueError(f"目标是目录: {path}")
@@ -264,7 +264,7 @@ def delete_file(path: str) -> str:
 
 
 @mcp.tool()
-def run_command(command: str, cwd: Optional[str] = None, timeout: Optional[int] = None) -> str:
+def run_shell(command: str, cwd: Optional[str] = None, timeout: Optional[int] = None) -> str:
     """在沙箱内执行 shell 命令并返回输出。
 
     带命令拦截（危险命令直接拒绝）、超时强制终止、输出截断与审计。
@@ -272,7 +272,7 @@ def run_command(command: str, cwd: Optional[str] = None, timeout: Optional[int] 
     """
     reason = _intercept(command)
     if reason:
-        _audit("run_command", False, f"{command} | 拦截: {reason}")
+        _audit("run_shell", False, f"{command} | 拦截: {reason}")
         raise ValueError(f"命令被拦截：{reason}")
     workdir = _resolve(cwd) if cwd else _SANDBOX_ROOTS[0]
     if not os.path.isdir(workdir):
@@ -280,7 +280,7 @@ def run_command(command: str, cwd: Optional[str] = None, timeout: Optional[int] 
     timeout = timeout or DEFAULT_TIMEOUT
     timeout = max(1, min(int(timeout), 300))
     result = _exec_command(command, workdir, timeout)
-    _audit("run_command", True, f"{command} | exit={result['exit_code']} | {len(result['output'])} 字符")
+    _audit("run_shell", True, f"{command} | exit={result['exit_code']} | {len(result['output'])} 字符")
     return (
         f"$ {command}\n"
         f"(cwd: {workdir}, exit code: {result['exit_code']})\n"
