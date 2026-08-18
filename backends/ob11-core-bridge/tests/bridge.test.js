@@ -550,7 +550,7 @@ test('MCP exposes only the core bridge command', async t => {
   assert.deepEqual(listed.body.result.tools.map(tool => tool.name).sort(), ['run_core_command']);
   const schema = listed.body.result.tools[0].inputSchema;
   assert.deepEqual(Object.keys(schema.properties).sort(), [
-    'action', 'args', 'captureMode', 'command', 'forward', 'maxMessages', 'raw_message', 'settleMs', 'timeoutMs'
+    'action', 'args', 'atUserId', 'captureMode', 'command', 'forward', 'maxMessages', 'raw_message', 'settleMs', 'timeoutMs', 'triggerUserId'
   ]);
   assert.equal(Object.prototype.hasOwnProperty.call(schema.properties, 'target'), false);
   assert.equal(Object.prototype.hasOwnProperty.call(schema.properties, 'actor'), false);
@@ -578,6 +578,31 @@ test('structured MCP calls are converted to the core raw message', async t => {
   await closeWs(core);
 });
 
+test('triggerUserId and atUserId are injected into the fake OB11 message', async t => {
+  await setup(); t.after(teardown);
+  const core = await connectCore();
+  const received = waitForMessage(core, packet => packet.post_type === 'message' && packet.raw_message === '[CQ:at,qq=50005] .rav 1d100 50');
+  const sessionId = await mcpSession();
+  const resultPromise = mcpCall('run_core_command', {
+    action: 'call',
+    target: groupTarget('20002', '10001'),
+    actor: { userId: '30002', nickname: 'AI', role: 'member' },
+    command: 'rav',
+    args: ['1d100', '50'],
+    triggerUserId: '40004',
+    atUserId: '50005',
+    settleMs: 20,
+    timeoutMs: 1000
+  }, sessionId);
+  const packet = await received;
+  assert.equal(packet.user_id, 40004);
+  assert.equal(packet.sender.user_id, 40004);
+  assert.deepEqual(packet.message[0], { type: 'at', data: { qq: '50005' } });
+  assert.equal(packet.message[1].data.text, '.rav 1d100 50');
+  const result = await resultPromise;
+  assert.equal(result.ok, true);
+  await closeWs(core);
+});
 test('raw_message cannot be combined with structured command arguments', async t => {
   await setup(); t.after(teardown);
   const sessionId = await mcpSession();

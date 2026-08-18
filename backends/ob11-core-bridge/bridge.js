@@ -158,7 +158,9 @@ const MCP_PUBLIC_INPUT_SCHEMA = z.object({
   settleMs: z.number().int().min(0).max(10000).optional().describe('收到消息后等待多久没有新消息才结束'),
   timeoutMs: z.number().int().min(100).max(120000).optional().describe('最长等待时间，单位毫秒'),
   captureMode: z.enum(['reply_only', 'lane']).optional().describe('消息捕获范围'),
-  forward: z.boolean().optional().describe('是否把捕获到的消息继续转发给协议端')
+  forward: z.boolean().optional().describe('是否把捕获到的消息继续转发给协议端'),
+  triggerUserId: z.string().min(1).optional().describe('可选；注入消息的发送者/触发对象用户 ID'),
+  atUserId: z.string().min(1).optional().describe('可选；注入消息中 @ 的用户 ID；群聊可用')
 }).passthrough();
 
 function validateMcpRequest(value) {
@@ -169,7 +171,9 @@ function validateMcpRequest(value) {
     || value.settleMs !== undefined
     || value.timeoutMs !== undefined
     || value.captureMode !== undefined
-    || value.forward !== undefined;
+    || value.forward !== undefined
+    || value.triggerUserId !== undefined
+    || value.atUserId !== undefined;
 
   if (value.action === 'list') {
     if (hasCommand || hasArgs || hasRawMessage || hasExecutionOptions) {
@@ -219,7 +223,7 @@ function normalizeMcpActor(request, target) {
   const actor = request && request.actor;
   if (!actor || typeof actor !== 'object') throw new Error('actor is required');
   return {
-    userId: idString(actor.userId || target.userId || target.selfId),
+    userId: idString(request.triggerUserId || actor.userId || target.userId || target.selfId),
     nickname: idString(actor.nickname || 'AI'),
     role: idString(actor.role || 'member')
   };
@@ -239,7 +243,9 @@ function invocationFromMcp(request, id) {
       ...(request.settleMs !== undefined ? { settleMs: request.settleMs } : {})
     },
     ...(request.timeoutMs !== undefined ? { timeoutMs: request.timeoutMs } : {}),
-    id
+    id,
+    ...(request.triggerUserId !== undefined ? { triggerUserId: idString(request.triggerUserId) } : {}),
+    ...(request.atUserId !== undefined ? { atUserId: idString(request.atUserId) } : {})
   };
 
   if (request.raw_message !== undefined) {
@@ -254,7 +260,7 @@ function invocationFromMcp(request, id) {
 }
 
 function createMcpServer(bridge) {
-  const server = new McpServer({ name: 'ob11-core-bridge', version: '1.0.5' });
+  const server = new McpServer({ name: 'ob11-core-bridge', version: '1.0.6' });
   const call = async (request) => {
     try {
       const validationError = validateMcpRequest(request);
@@ -565,13 +571,18 @@ class Bridge {
         ? String(request.raw_message)
         : String(request.command && request.command.raw || '');
       if (!raw) throw new Error('command.raw or raw_message is required');
-      const userId = Number(target.userId || 0);
+      const triggerUserId = idString(request.triggerUserId || request.actor && request.actor.userId || target.userId || target.selfId);
+      const userIdNumber = Number(triggerUserId);
+      const userId = Number.isFinite(userIdNumber) && userIdNumber > 0 ? userIdNumber : triggerUserId;
+      const atUserId = messageType === 'group' ? idString(request.atUserId) : '';
+      const atSegment = atUserId ? [{ type: 'at', data: { qq: atUserId } }] : [];
+      const atRaw = atUserId ? `[CQ:at,qq=${atUserId}] ` : '';
       const fakeEvent = {
         time: Math.floor(Date.now() / 1000), self_id: Number(target.selfId || coreWs._bridgeCoreId || 0), post_type: 'message',
         message_type: messageType, sub_type: 'normal', message_id: invocation.virtualMessageId,
         user_id: userId, ...(messageType === 'group' ? { group_id: Number(peer) } : {}),
-        message: [{ type: 'text', data: { text: raw } }], raw_message: raw, font: 0,
-        sender: { user_id: userId, nickname: String(request.actor && request.actor.nickname || 'AI'), card: '', sex: 'unknown', age: 0, role: String(request.actor && request.actor.role || 'member'), title: '' }
+        message: [...atSegment, { type: 'text', data: { text: raw } }], raw_message: `${atRaw}${raw}`, font: 0,
+        sender: { user_id: userId, nickname: String(request.actor && request.actor.nickname || `用户${triggerUserId}`), card: '', sex: 'unknown', age: 0, role: String(request.actor && request.actor.role || 'member'), title: '' }
       };
       sendRaw(coreWs, JSON.stringify(fakeEvent));
       return await resultPromise;
