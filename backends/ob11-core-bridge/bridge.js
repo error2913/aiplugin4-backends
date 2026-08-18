@@ -177,7 +177,7 @@ function mcpResult(result) {
 }
 
 function createMcpServer(bridge) {
-  const server = new McpServer({ name: 'ob11-core-bridge', version: '1.0.3' });
+  const server = new McpServer({ name: 'ob11-core-bridge', version: '1.0.4' });
   const input = {
     target: MCP_TARGET_SCHEMA.describe('注入假消息的目标群/私聊'),
     actor: MCP_ACTOR_SCHEMA.describe('假消息发送者'),
