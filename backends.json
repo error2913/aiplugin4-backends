@@ -98,7 +98,7 @@
       "entry": "bridge.js",
       "deps": "package.json",
       "port": 46880,
-      "version": "1.0.6",
+      "version": "1.0.7",
       "source": "https://raw.githubusercontent.com/error2913/aiplugin4-backends/shop/backends/ob11-core-bridge",
       "files": [
         "backend.json",
