@@ -422,7 +422,9 @@ async function renderToImage(content, options = {}) {
             });
         }
 
-        return { imageId, base64 };
+        const w = clip && clip.width > 0 && clip.height > 0 ? Math.ceil(clip.width) : width;
+        const h = clip && clip.width > 0 && clip.height > 0 ? Math.ceil(clip.height) : 0;
+        return { imageId, base64, width: w, height: h, quality };
     } finally {
         await browser.close();
     }
@@ -434,7 +436,7 @@ app.get('/health', (req, res) => {
 
 // ---- MCP server（streamable-http，挂 /mcp；每会话一个 server 实例）----
 function createMcpServer() {
-    const server = new McpServer({ name: 'md-html-render', version: '1.0.0' });
+    const server = new McpServer({ name: 'md-html-render', version: '1.1.0' });
 
     server.tool(
         'render_markdown',
@@ -445,10 +447,19 @@ function createMcpServer() {
             quality: z.number().optional().describe('图片质量，默认 90'),
             hasImages: z.boolean().optional().describe('内容是否包含图片 URL')
         },
+          { title: 'Markdown 渲染', readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
         async ({ markdown, theme = 'light', width = 1200, quality = 90, hasImages = false }) => {
             try {
                 const result = await renderToImage(markdown, { contentType: 'markdown', theme, width, quality, hasImages });
-                return { content: [{ type: 'text', text: result.base64 || '' }] };
+                return {
+                    content: [{ type: 'image', data: result.base64 || '', mimeType: 'image/png' }],
+                    structuredContent: {
+                        theme,
+                        width: result.width || width,
+                        height: result.height || 0,
+                        quality: result.quality || quality
+                    }
+                };
             } catch (e) {
                 return { content: [{ type: 'text', text: `Markdown 渲染失败: ${e.message || String(e)}` }], isError: true };
             }
@@ -464,10 +475,19 @@ function createMcpServer() {
             quality: z.number().optional().describe('图片质量，默认 90'),
             hasImages: z.boolean().optional().describe('内容是否包含图片 URL')
         },
+          { title: 'HTML 渲染', readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
         async ({ html, theme = 'light', width = 1200, quality = 90, hasImages = false }) => {
             try {
                 const result = await renderToImage(html, { contentType: 'html', theme, width, quality, hasImages });
-                return { content: [{ type: 'text', text: result.base64 || '' }] };
+                return {
+                    content: [{ type: 'image', data: result.base64 || '', mimeType: 'image/png' }],
+                    structuredContent: {
+                        theme,
+                        width: result.width || width,
+                        height: result.height || 0,
+                        quality: result.quality || quality
+                    }
+                };
             } catch (e) {
                 return { content: [{ type: 'text', text: `HTML 渲染失败: ${e.message || String(e)}` }], isError: true };
             }
