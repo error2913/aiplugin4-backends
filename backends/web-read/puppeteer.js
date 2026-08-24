@@ -125,11 +125,12 @@ async function screenshotPage({ url, width = 1680, height = 1000, fullPage = fal
 
 // ---- MCP server（streamable-http，挂 /mcp；每会话一个 server 实例）----
 function createMcpServer() {
-  const server = new McpServer({ name: 'web-read', version: '1.0.0' });
+  const server = new McpServer({ name: 'web-read', version: '1.1.0' });
 
   server.tool(
     'scrape_url',
     { url: z.string().describe('需要读取内容的网页链接') },
+      { title: '网页内容读取', readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
     async ({ url }) => {
       try {
         const data = await scrapePage(url);
@@ -137,7 +138,15 @@ function createMcpServer() {
           (data.links && data.links.length > 0
             ? data.links.map((link, index) => `${index + 1}. ${link}`).join('\n')
             : '无链接');
-        return { content: [{ type: 'text', text }] };
+        return {
+          content: [{ type: 'text', text }],
+          structuredContent: {
+            url,
+            title: data.title || '',
+            content: data.content || '',
+            links: data.links || []
+          }
+        };
       } catch (e) {
         return { content: [{ type: 'text', text: `读取网页失败: ${e.message || String(e)}` }], isError: true };
       }
@@ -153,10 +162,19 @@ function createMcpServer() {
       fullPage: z.boolean().optional().describe('是否截取整页（长图），默认 false'),
       delay: z.number().optional().describe('页面加载完成后等待毫秒数，默认 3000')
     },
+      { title: '网页截图', readOnlyHint: true, destructiveHint: false, idempotentHint: false, openWorldHint: true },
     async ({ url, width, height, fullPage, delay }) => {
       try {
         const shot = await screenshotPage({ url, width, height, fullPage, delay });
-        return { content: [{ type: 'text', text: shot.base64 }] };
+        return {
+          content: [{ type: 'image', data: shot.base64, mimeType: 'image/png' }],
+          structuredContent: {
+            url,
+            width: shot.width,
+            height: shot.height,
+            fullPage: shot.fullPage
+          }
+        };
       } catch (e) {
         return { content: [{ type: 'text', text: `网页截图失败: ${e.message || String(e)}` }], isError: true };
       }
