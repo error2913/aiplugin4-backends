@@ -37,7 +37,7 @@
       "entry": "render.js",
       "deps": "package.json",
       "port": 37632,
-      "version": "1.0.0",
+      "version": "1.1.0",
       "source": "https://raw.githubusercontent.com/error2913/aiplugin4-backends/shop/backends/md-html-render",
       "files": [
         "backend.json",
@@ -82,7 +82,7 @@
       "entry": "puppeteer.js",
       "deps": "package.json",
       "port": 46799,
-      "version": "1.0.0",
+      "version": "1.1.0",
       "source": "https://raw.githubusercontent.com/error2913/aiplugin4-backends/shop/backends/web-read",
       "files": [
         "backend.json",
@@ -93,18 +93,19 @@
     },
     {
       "name": "ob11-core-bridge",
-      "description": "SealDice 核心正向 WS /core、中间件主动连接的 OB11 协议端与 MCP /mcp 的透明中转；支持注入假消息执行核心/扩展指令",
+      "description": "SealDice 核心正向 WS /core、中间件主动连接的 OB11 协议端与插件控制 WS /plugin 的透明中转；支持注入假消息执行核心/扩展指令",
       "type": "node",
       "entry": "bridge.js",
       "deps": "package.json",
       "port": 46880,
-      "version": "1.0.7",
+      "version": "1.0.8",
       "source": "https://raw.githubusercontent.com/error2913/aiplugin4-backends/shop/backends/ob11-core-bridge",
       "files": [
         "backend.json",
         "package.json",
         "package-lock.json",
         "bridge.js",
+        "simulate-ws.js",
         "README.md"
       ]
     }

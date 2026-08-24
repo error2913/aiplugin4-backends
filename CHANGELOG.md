@@ -2,6 +2,11 @@
 
 标题格式为 `## <版本号>`，release 工作流按标签版本号读取对应段落作为发布说明；日常更新以「Unreleased」汇总，发版前改成版本号并补日期。
 
+## 0.11.8 - 2026-08-25
+
+- ob11-core-bridge 升级到 1.0.8：移除 MCP /mcp，改为插件控制 WS /plugin 协议（core_command 请求/响应、ping/pong），aiplugin4 插件端直连该 WS 执行核心指令；移除 MCP SDK/zod 依赖，healthz 新增 pluginConnected/pluginClients
+- md-html-render 升级到 1.1.0：渲染结果改为 MCP 图片内容块并附带 structuredContent；工具声明 readOnly/idempotent/openWorld 提示
+- web-read 升级到 1.1.0：scrape_url 返回文本与结构化内容，screenshot 改为图片内容块；工具声明 readOnly/openWorld 提示
 ## 0.11.7 - 2026-08-18
 
 - mcp-files-exec 升级到 1.0.6：兼容后端面板将“0=不限制”配置保存为空字符串的情况，避免后端启动失败；自由路径、危险命令放行与 `download_file` 功能保持不变
