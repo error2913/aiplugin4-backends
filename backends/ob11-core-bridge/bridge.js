@@ -3,18 +3,15 @@
 const http = require('node:http');
 const crypto = require('node:crypto');
 const { WebSocket, WebSocketServer } = require('ws');
-const { McpServer } = require('@modelcontextprotocol/sdk/server/mcp.js');
-const { StreamableHTTPServerTransport } = require('@modelcontextprotocol/sdk/server/streamableHttp.js');
-const { z } = require('zod');
 
 const HOST = process.env.AIPLUGIN4_BACKEND_HOST || '0.0.0.0';
 const PORT = Number(process.env.AIPLUGIN4_BACKEND_PORT || 46880);
 const CORE_PATH = process.env.AIPLUGIN4_BRIDGE_CORE_PATH || '/core';
 const CORE_PATHS = new Set((process.env.AIPLUGIN4_BRIDGE_CORE_PATHS || `${CORE_PATH},${CORE_PATH.replace(/\/$/, '')}/ws`)
   .split(',').map(value => value.trim()).filter(Boolean));
-const MCP_PATH = process.env.AIPLUGIN4_BRIDGE_MCP_PATH || '/mcp';
-const BRIDGE_TOKEN = process.env.AIPLUGIN4_BRIDGE_TOKEN || '';
-const CORE_TOKEN = process.env.AIPLUGIN4_BRIDGE_CORE_TOKEN ?? BRIDGE_TOKEN;
+const PLUGIN_PATH = process.env.AIPLUGIN4_BRIDGE_PLUGIN_PATH || '/plugin';
+const PLUGIN_TOKEN = process.env.AIPLUGIN4_BRIDGE_PLUGIN_TOKEN || '';
+const CORE_TOKEN = process.env.AIPLUGIN4_BRIDGE_CORE_TOKEN || '';
 const PROTOCOL_URL = process.env.AIPLUGIN4_BRIDGE_PROTOCOL_URL || '';
 const PROTOCOL_TOKEN = process.env.AIPLUGIN4_BRIDGE_PROTOCOL_TOKEN || '';
 const PROTOCOL_RECONNECT_MIN = 1000;
@@ -149,58 +146,21 @@ class Invocation {
   }
 }
 
-const MCP_PUBLIC_INPUT_SCHEMA = z.object({
-  action: z.enum(['list', 'call']).describe('list=返回可用模式说明；call=执行核心指令'),
-  command: z.string().min(1).optional().describe('结构化模式的核心指令名，不含前缀'),
-  args: z.array(z.string()).optional().describe('结构化模式的指令参数，按顺序填写'),
-  raw_message: z.string().min(1).optional().describe('原始消息模式；会原样注入核心，不得与 command/args 同时使用'),
-  maxMessages: z.number().int().min(1).max(MAX_MESSAGES).optional().describe('最多收集多少条消息'),
-  settleMs: z.number().int().min(0).max(10000).optional().describe('收到消息后等待多久没有新消息才结束'),
-  timeoutMs: z.number().int().min(100).max(120000).optional().describe('最长等待时间，单位毫秒'),
-  captureMode: z.enum(['reply_only', 'lane']).optional().describe('消息捕获范围'),
-  forward: z.boolean().optional().describe('是否把捕获到的消息继续转发给协议端'),
-  trigger: z.string().min(1).optional().describe('可选；注入消息的发送者/触发对象用户 ID'),
-  at: z.array(z.string().min(1)).optional().describe('可选；注入消息中 @ 的用户 ID 列表；群聊可用')
-}).passthrough();
-
-function validateMcpRequest(value) {
-  const hasCommand = value.command !== undefined;
-  const hasArgs = value.args !== undefined;
-  const hasRawMessage = value.raw_message !== undefined;
-  const hasExecutionOptions = value.maxMessages !== undefined
-    || value.settleMs !== undefined
-    || value.timeoutMs !== undefined
-    || value.captureMode !== undefined
-    || value.forward !== undefined
-    || value.trigger !== undefined
-    || value.at !== undefined;
-
-  if (value.action === 'list') {
-    if (hasCommand || hasArgs || hasRawMessage || hasExecutionOptions) {
-      return 'action=list 不能携带执行参数';
-    }
-    return '';
-  }
-
-  if (hasRawMessage && (hasCommand || hasArgs)) {
-    return 'raw_message 不能与 command/args 同时使用';
-  } else if (!hasRawMessage && !hasCommand) {
-    return 'action=call 必须提供 command 或 raw_message';
-  }
-  if (hasArgs && !hasCommand && !hasRawMessage) {
-    return 'args 只能与 command 一起使用';
-  }
-  if (hasRawMessage && !String(value.raw_message).trim()) {
-    return 'raw_message 不能为空';
-  }
+function validateWsRequest(value) {
+  if (!value || typeof value !== 'object') return 'payload is required';
+  const target = value.target;
+  if (!target || typeof target !== 'object') return 'target is required';
+  const hasRaw = value.raw_message !== undefined;
+  const command = value.command || {};
+  const hasCommandRaw = command.raw !== undefined;
+  if (hasRaw && hasCommandRaw) return 'raw_message cannot be combined with command.raw';
+  if (!hasRaw && !hasCommandRaw) return 'command.raw or raw_message is required';
+  if (hasRaw && !String(value.raw_message).trim()) return 'raw_message cannot be empty';
+  if (hasCommandRaw && !String(command.raw).trim()) return 'command.raw cannot be empty';
   return '';
 }
 
-function mcpResult(result) {
-  return { content: [{ type: 'text', text: JSON.stringify(result) }] };
-}
-
-function normalizeMcpTarget(request) {
+function normalizeTarget(request) {
   const target = request && request.target;
   if (!target || typeof target !== 'object') throw new Error('target is required');
   const messageType = target.messageType === 'private' ? 'private' : target.messageType === 'group' ? 'group' : '';
@@ -219,7 +179,7 @@ function normalizeMcpTarget(request) {
   };
 }
 
-function normalizeMcpActor(request, target) {
+function normalizeActor(request, target) {
   const actor = request && request.actor;
   if (!actor || typeof actor !== 'object') throw new Error('actor is required');
   return {
@@ -229,51 +189,35 @@ function normalizeMcpActor(request, target) {
   };
 }
 
-function invocationFromMcp(request, id) {
-  const target = normalizeMcpTarget(request);
-  const actor = normalizeMcpActor(request, target);
-  const forward = request.forward !== false;
+function invocationFromWs(request, id) {
+  const target = normalizeTarget(request);
+  const actor = normalizeActor(request, target);
+  const capture = request.capture || {};
+  const forward = capture.forward !== false;
   const invocation = {
     target,
     actor,
     capture: {
-      mode: request.captureMode || (forward ? 'lane' : 'reply_only'),
+      mode: capture.mode || (forward ? 'lane' : 'reply_only'),
       forward,
-      ...(request.maxMessages !== undefined ? { maxMessages: request.maxMessages } : {}),
-      ...(request.settleMs !== undefined ? { settleMs: request.settleMs } : {})
+      ...(capture.maxMessages !== undefined ? { maxMessages: Number(capture.maxMessages) } : {}),
+      ...(capture.settleMs !== undefined ? { settleMs: Number(capture.settleMs) } : {})
     },
-    ...(request.timeoutMs !== undefined ? { timeoutMs: request.timeoutMs } : {}),
+    ...(request.timeoutMs !== undefined ? { timeoutMs: Number(request.timeoutMs) } : {}),
     id,
     ...(request.trigger !== undefined ? { trigger: idString(request.trigger) } : {}),
-    ...(request.at !== undefined ? { at: request.at.map(idString).filter(Boolean) } : {})
+    ...(Array.isArray(request.at) ? { at: request.at.map(idString).filter(Boolean) } : {})
   };
 
   if (request.raw_message !== undefined) {
     return { ...invocation, raw_message: String(request.raw_message) };
   }
 
-  const command = String(request.command).trim().replace(/^core\|/, '').trim();
-  const args = Array.isArray(request.args) ? request.args.map(value => String(value)) : [];
-  const prefix = request.__commandPrefix === undefined ? '.' : String(request.__commandPrefix);
-  const raw = `${prefix}${command}${args.length ? ` ${args.join(' ')}` : ''}`.trim();
-  return { ...invocation, command: { raw, name: command, args } };
-}
-
-function createMcpServer(bridge) {
-  const server = new McpServer({ name: 'ob11-core-bridge', version: '1.0.7' });
-  const call = async (request) => {
-    try {
-      const validationError = validateMcpRequest(request);
-      if (validationError) return mcpResult({ ok: false, error: validationError, messages: [] });
-      if (request.action === 'list') return mcpResult({ ok: true, action: 'list', modes: ['structured', 'raw_message'] });
-      const result = await bridge.queueInvoke(invocationFromMcp(request, `core_${crypto.randomUUID()}`));
-      return mcpResult(result);
-    } catch (error) {
-      return mcpResult({ ok: false, error: error instanceof Error ? error.message : String(error), messages: [] });
-    }
-  };
-  server.registerTool('run_core_command', { inputSchema: MCP_PUBLIC_INPUT_SCHEMA }, call);
-  return server;
+  const command = request.command || {};
+  const raw = command.raw !== undefined ? String(command.raw) : '';
+  const name = command.name !== undefined ? String(command.name) : '';
+  const args = Array.isArray(command.args) ? command.args.map(value => String(value)) : [];
+  return { ...invocation, command: { raw, name, args } };
 }
 
 class Bridge {
@@ -282,12 +226,13 @@ class Bridge {
     this.server = null;
     this.wss = new WebSocketServer({ noServer: true });
     this.coreClients = new Set();
+    this.pluginClients = new Set();
     this.protocolClients = new Set();
     this.invocations = new Map();
     this.lanes = new Map();
     this.echoTargets = new Map();
     this.stopping = false;
-    this.mcpTransports = new Map();
+
     this.protocolTimer = null;
     this.protocolReconnectMs = PROTOCOL_RECONNECT_MIN;
   }
@@ -297,31 +242,16 @@ class Bridge {
       const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
       if (url.pathname === '/healthz') {
         res.writeHead(200, { 'content-type': 'application/json' });
-        res.end(JSON.stringify({ ok: true, coreConnected: this.isCoreConnected(), protocolConnected: this.protocolClients.size > 0, coreClients: this.coreClients.size, protocolClients: this.protocolClients.size }));
-        return;
-      }
-      if (url.pathname === MCP_PATH) {
-        if (!this.authorizeHttp(req, url)) {
-          res.writeHead(401, { 'content-type': 'application/json' });
-          res.end(JSON.stringify({ error: 'unauthorized' }));
-          return;
-        }
-        this.handleMcp(req, res).catch(error => {
-          log('warn', 'MCP request failed', error);
-          if (!res.headersSent) {
-            res.writeHead(500, { 'content-type': 'application/json' });
-            res.end(JSON.stringify({ error: 'MCP request failed' }));
-          }
-        });
+        res.end(JSON.stringify({ ok: true, coreConnected: this.isCoreConnected(), protocolConnected: this.protocolClients.size > 0, pluginConnected: this.pluginClients.size > 0, coreClients: this.coreClients.size, protocolClients: this.protocolClients.size, pluginClients: this.pluginClients.size }));
         return;
       }
       res.writeHead(404); res.end('not found');
     });
     this.server.on('upgrade', (req, socket, head) => {
       const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
-      const kind = CORE_PATHS.has(url.pathname) ? 'core' : '';
+      const kind = CORE_PATHS.has(url.pathname) ? 'core' : (url.pathname === PLUGIN_PATH ? 'plugin' : '');
       if (!kind) { socket.destroy(); return; }
-      const expectedToken = CORE_TOKEN;
+      const expectedToken = kind === 'plugin' ? PLUGIN_TOKEN : CORE_TOKEN;
       if (expectedToken && url.searchParams.get('access_token') !== expectedToken && req.headers.authorization !== `Bearer ${expectedToken}`) { socket.destroy(); return; }
       this.wss.handleUpgrade(req, socket, head, ws => {
         ws._bridgeKind = kind;
@@ -330,7 +260,7 @@ class Bridge {
     });
     this.wss.on('connection', (ws, req) => this.attachClient(ws, req));
     await new Promise(resolve => this.server.listen(PORT, HOST, resolve));
-    log('info', `listening ${HOST}:${PORT}, core=${[...CORE_PATHS].join(',')}, protocol=${PROTOCOL_URL || '未配置'}, mcp=${MCP_PATH}`);
+    log('info', `listening ${HOST}:${PORT}, core=${[...CORE_PATHS].join(',')}, plugin=${PLUGIN_PATH}, protocol=${PROTOCOL_URL || '未配置'}`);
     this.startProtocolClient();
     return this;
   }
@@ -338,41 +268,60 @@ class Bridge {
     this.stopping = true;
     if (this.protocolTimer) { clearTimeout(this.protocolTimer); this.protocolTimer = null; }
     for (const invocation of this.invocations.values()) invocation.fail(new Error('bridge stopped'));
-    for (const transport of this.mcpTransports.values()) { try { await transport.close(); } catch (_) { /* ignore */ } }
-    this.mcpTransports.clear();
-    for (const ws of [...this.coreClients, ...this.protocolClients]) ws.close();
+
+    for (const ws of [...this.coreClients, ...this.pluginClients, ...this.protocolClients]) ws.close();
     await new Promise(resolve => this.server ? this.server.close(() => resolve()) : resolve());
   }
-  authorizeHttp(req, url) {
-    if (!BRIDGE_TOKEN) return true;
-    const auth = req.headers.authorization || '';
-    return auth === `Bearer ${BRIDGE_TOKEN}`
-      || req.headers['x-token'] === BRIDGE_TOKEN
-      || url.searchParams.get('access_token') === BRIDGE_TOKEN;
-  }
-  async handleMcp(req, res) {
-    const requestedSessionId = req.headers['mcp-session-id'];
-    let transport = requestedSessionId ? this.mcpTransports.get(String(requestedSessionId)) : null;
-    if (!transport) {
-      if (req.method !== 'POST') {
-        res.writeHead(400, { 'content-type': 'application/json' });
-        res.end(JSON.stringify({ error: 'MCP session is required' }));
-        return;
-      }
-      let sessionId = '';
-      transport = new StreamableHTTPServerTransport({
-        sessionIdGenerator: () => crypto.randomUUID(),
-        onsessioninitialized: id => { sessionId = id; this.mcpTransports.set(id, transport); }
-      });
-      transport.onclose = () => { if (sessionId) this.mcpTransports.delete(sessionId); };
-      await createMcpServer(this).connect(transport);
-    }
-    await transport.handleRequest(req, res);
-  }
   isCoreConnected() { return this.coreClients.size > 0; }
+  attachPluginClient(ws, req, path, ip) {
+    this.pluginClients.add(ws);
+    log('info', `插件已连接: ${path}${ip ? ` (${ip})` : ''}${PLUGIN_TOKEN ? ' [token 校验通过]' : ' [未配置 token]'}`);
+    ws.on('message', data => this.handlePluginMessage(ws, data));
+    ws.on('close', () => {
+      this.pluginClients.delete(ws);
+      log('info', `插件已断开: ${path}${ip ? ` (${ip})` : ''}`);
+    });
+    ws.on('error', e => log('warn', 'plugin client error', e));
+  }
+
+  handlePluginMessage(ws, data) {
+    const packet = parseMessage(data);
+    if (!packet) return;
+    if (packet.type === 'ping') {
+      jsonSend(ws, { type: 'pong' });
+      return;
+    }
+    if (packet.type !== 'core_command') return;
+
+    const requestId = idString(packet.requestId);
+    if (!requestId) {
+      jsonSend(ws, { type: 'core_command_error', requestId: '', error: 'requestId is required' });
+      return;
+    }
+    const request = packet.payload || {};
+    const sendError = error => jsonSend(ws, {
+      type: 'core_command_error',
+      requestId,
+      error: error instanceof Error ? error.message : String(error)
+    });
+    const validationError = validateWsRequest(request);
+    if (validationError) {
+      sendError(validationError);
+      return;
+    }
+    this.queueInvoke(invocationFromWs(request, `core_${crypto.randomUUID()}`))
+      .then(result => jsonSend(ws, { type: 'core_command_result', requestId, result }))
+      .catch(sendError);
+  }
+
   attachClient(ws, req) {
     const path = req ? String(req.url || '').split('?')[0] : '';
     const ip = req && req.socket ? req.socket.remoteAddress : '';
+    if (ws._bridgeKind === 'plugin') {
+      this.attachPluginClient(ws, req, path, ip);
+      return;
+    }
+
     ws._bridgeCoreId = '';
     this.coreClients.add(ws);
     log('info', `SealDice 核心已连接: ${path}${ip ? ` (${ip})` : ''}${CORE_TOKEN ? ' [token 校验通过]' : ' [未配置 token]'}`);

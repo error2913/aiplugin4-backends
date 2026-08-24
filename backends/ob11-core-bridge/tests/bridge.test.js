@@ -71,6 +71,7 @@ let Bridge;
 let bridge;
 let bridgePort;
 let coreSockets;
+let pluginSockets;
 let protocolServer;
 let protocolPort;
 let protocolConnections;
@@ -105,6 +106,7 @@ function freePort() {
 async function setup(options = {}) {
   const { withProtocol = true, protocolUrl = '', protocolToken = 'test-token', serverToken = 'test-token' } = options;
   coreSockets = [];
+  pluginSockets = [];
   protocolConnections = [];
   protocolServer = null;
   protocolPort = 0;
@@ -114,6 +116,8 @@ async function setup(options = {}) {
   process.env.AIPLUGIN4_BRIDGE_CORE_PATH = '/core';
   process.env.AIPLUGIN4_BRIDGE_TOKEN = 'test-token';
   process.env.AIPLUGIN4_BRIDGE_CORE_TOKEN = 'test-token';
+  process.env.AIPLUGIN4_BRIDGE_PLUGIN_PATH = '/plugin';
+  process.env.AIPLUGIN4_BRIDGE_PLUGIN_TOKEN = 'test-token';
   delete process.env.AIPLUGIN4_BRIDGE_ONEBOT_PATH;
   if (withProtocol) {
     if (protocolUrl) {
@@ -138,6 +142,8 @@ async function teardown() {
   bridge = null;
   for (const ws of coreSockets) { try { ws.close(); } catch (_) { /* ignore */ } }
   coreSockets = [];
+  for (const ws of pluginSockets) { try { ws.close(); } catch (_) { /* ignore */ } }
+  pluginSockets = [];
   for (const ws of protocolConnections) { try { ws.close(); } catch (_) { /* ignore */ } }
   protocolConnections = [];
   if (protocolServer) {
@@ -152,6 +158,12 @@ async function connectCore(id = null) {
   if (id !== null) {
     ws.send(JSON.stringify({ action: 'get_login_info', params: {}, echo: `login-${id}` }));
   }
+  return ws;
+}
+
+async function connectPlugin() {
+  const ws = await connect(`ws://127.0.0.1:${bridgePort}/plugin?access_token=test-token`);
+  pluginSockets.push(ws);
   return ws;
 }
 
@@ -171,73 +183,48 @@ function privateTarget(userId = '30002', selfId = '10001') {
   return { selfId, messageType: 'private', userId, groupId: undefined };
 }
 
-function mcpArgs(target, raw, capture = {}, timeoutMs = 1000) {
-  const args = {
-    action: 'call',
-    target,
-    actor: { userId: String(target.userId || '30002'), nickname: 'AI', role: 'member' },
-    raw_message: raw,
-    captureMode: capture.mode,
-    forward: capture.forward,
-    maxMessages: capture.maxMessages,
-    settleMs: capture.settleMs,
-    timeoutMs
-  };
-  return args;
-}
-
-function mcpStructuredArgs(target, command, args = [], options = {}) {
-  return {
-    action: 'call',
-    target,
-    actor: { userId: String(target.userId || '30002'), nickname: 'AI', role: 'member' },
-    command,
-    args,
-    __commandPrefix: options.commandPrefix || '.',
-    captureMode: options.captureMode,
-    forward: options.forward,
-    maxMessages: options.maxMessages,
-    settleMs: options.settleMs,
-    timeoutMs: options.timeoutMs || 1000
-  };
-}
-
 function sendGroupAction(ws, groupId, text, echo) {
   ws.send(JSON.stringify({ action: 'send_group_msg', params: { group_id: groupId, message: [{ type: 'text', data: { text } }] }, echo }));
 }
 
-async function mcpRequest(payload, sessionId = '') {
-  const headers = { 'content-type': 'application/json', accept: 'application/json, text/event-stream', authorization: 'Bearer test-token' };
-  if (sessionId) headers['mcp-session-id'] = sessionId;
-  const response = await fetch(`http://127.0.0.1:${bridgePort}/mcp`, { method: 'POST', headers, body: JSON.stringify(payload) });
-  const text = await response.text();
-  let body;
-  try { body = JSON.parse(text); } catch (_) {
-    const dataLine = text.split('\n').find(line => line.startsWith('data: '));
-    body = dataLine ? JSON.parse(dataLine.slice(6)) : null;
-  }
-  return { response, body, sessionId: response.headers.get('mcp-session-id') || sessionId };
+// 插件控制 WS /plugin 协议：core_command 请求，core_command_result/core_command_error 响应
+function wsArgs(target, raw, capture = {}, timeoutMs = 1000) {
+  return {
+    target,
+    actor: { userId: String(target.userId || '30002'), nickname: 'AI', role: 'member' },
+    raw_message: raw,
+    capture: {
+      mode: capture.mode,
+      forward: capture.forward,
+      maxMessages: capture.maxMessages,
+      settleMs: capture.settleMs
+    },
+    timeoutMs
+  };
 }
 
-async function mcpSession() {
-  const initialized = await mcpRequest({
-    jsonrpc: '2.0', id: 1, method: 'initialize',
-    params: { protocolVersion: '2025-11-25', capabilities: {}, clientInfo: { name: 'test', version: '1' } }
-  });
-  assert.equal(initialized.response.status, 200);
-  assert.equal(initialized.body.result.serverInfo.name, 'ob11-core-bridge');
-  const sessionId = initialized.sessionId;
-  assert.ok(sessionId);
-  const notified = await mcpRequest({ jsonrpc: '2.0', method: 'notifications/initialized' }, sessionId);
-  assert.equal(notified.response.status, 202);
-  return sessionId;
+function wsStructuredArgs(target, command, args = [], options = {}) {
+  const prefix = options.commandPrefix === undefined ? '.' : String(options.commandPrefix);
+  const raw = `${prefix}${command}${args.length ? ` ${args.join(' ')}` : ''}`.trim();
+  return {
+    target,
+    actor: { userId: String(target.userId || '30002'), nickname: 'AI', role: 'member' },
+    command: { raw, name: command, args },
+    capture: {
+      mode: options.captureMode,
+      forward: options.forward,
+      maxMessages: options.maxMessages,
+      settleMs: options.settleMs
+    },
+    timeoutMs: options.timeoutMs || 1000
+  };
 }
 
-async function mcpCall(name, args, sessionId) {
-  const id = 100 + Math.floor(Math.random() * 100000);
-  const called = await mcpRequest({ jsonrpc: '2.0', id, method: 'tools/call', params: { name, arguments: args } }, sessionId);
-  assert.equal(called.response.status, 200);
-  return JSON.parse(called.body.result.content[0].text);
+async function wsCall(plugin, payload, requestId = `test_${Date.now()}_${Math.floor(Math.random() * 1e6)}`) {
+  const packetPromise = waitForMessage(plugin, packet => packet.requestId === requestId &&
+    (packet.type === 'core_command_result' || packet.type === 'core_command_error'));
+  plugin.send(JSON.stringify({ type: 'core_command', requestId, payload }));
+  return packetPromise;
 }
 
 test('accepts SealDice core websocket on /core and /core/ws', async t => {
@@ -281,7 +268,7 @@ test('transparent forwarding, raw frames, login echo routing, and healthz', asyn
   assert.equal((await loginAtCore).data.nickname, 'BridgeBot');
 
   const health = await (await fetch(`http://127.0.0.1:${bridgePort}/healthz`)).json();
-  assert.deepEqual(health, { ok: true, coreConnected: true, protocolConnected: true, coreClients: 1, protocolClients: 1 });
+  assert.deepEqual(health, { ok: true, coreConnected: true, protocolConnected: true, pluginConnected: false, coreClients: 1, protocolClients: 1, pluginClients: 0 });
   await closeWs(protocol); await closeWs(core);
 });
 
@@ -305,7 +292,7 @@ test('invoke captures multiple actions and intercepts them by default', async t 
   await setup(); t.after(teardown);
   const core = await connectCore();
   const protocol = await waitForProtocol();
-  const sessionId = await mcpSession();
+  const plugin = await connectPlugin();
 
   const seenFake = waitForMessage(core, packet => packet.post_type === 'message' && packet.raw_message === '.jrrp');
   const coreResponse1 = waitForMessage(core, packet => packet.echo === 'e1');
@@ -321,12 +308,14 @@ test('invoke captures multiple actions and intercepts them by default', async t 
     sendGroupAction(core, 99999, 'unrelated', 'other');
   };
   core.on('message', coreHandler);
-  const resultPromise = mcpCall('run_core_command', mcpArgs(groupTarget(), '.jrrp', { mode: 'reply_only', forward: false, settleMs: 70, maxMessages: 20 }), sessionId);
+  const resultPromise = wsCall(plugin, wsArgs(groupTarget(), '.jrrp', { mode: 'reply_only', forward: false, settleMs: 70, maxMessages: 20 }));
 
   assert.equal((await seenFake).message[0].data.text, '.jrrp');
   assert.equal((await coreResponse1).status, 'ok');
   assert.equal((await coreResponse2).status, 'ok');
-  const result = await resultPromise;
+  const packet = await resultPromise;
+  assert.equal(packet.type, 'core_command_result');
+  const result = packet.result;
   assert.equal(result.ok, true);
   assert.equal(result.messages.length, 2);
   assert.equal(result.interceptedCount, 2);
@@ -341,7 +330,7 @@ test('lane capture intercepts bot message events', async t => {
   await setup(); t.after(teardown);
   const core = await connectCore();
   const protocol = await waitForProtocol();
-  const sessionId = await mcpSession();
+  const plugin = await connectPlugin();
   const protocolPackets = [];
   protocol.on('message', data => { try { protocolPackets.push(JSON.parse(data.toString())); } catch (_) {} });
   core.on('message', data => {
@@ -350,7 +339,9 @@ test('lane capture intercepts bot message events', async t => {
       core.send(JSON.stringify({ ...FIXTURE, message_id: 91001, raw_message: 'bot-event', message: [{ type: 'text', data: { text: 'bot-event' } }] }));
     }
   });
-  const result = await mcpCall('run_core_command', mcpArgs(groupTarget(), '.event', { mode: 'lane', forward: false, settleMs: 40 }), sessionId);
+  const packet = await wsCall(plugin, wsArgs(groupTarget(), '.event', { mode: 'lane', forward: false, settleMs: 40 }));
+  assert.equal(packet.type, 'core_command_result');
+  const result = packet.result;
   assert.equal(result.ok, true);
   assert.equal(result.messages.length, 1);
   assert.equal(result.messages[0].source, 'event');
@@ -365,7 +356,7 @@ test('forward=true forwards actions and routes protocol API responses back to co
   await setup(); t.after(teardown);
   const core = await connectCore();
   const protocol = await waitForProtocol();
-  const sessionId = await mcpSession();
+  const plugin = await connectPlugin();
   const protocolActions = [];
   const protocolEvents = [];
   const coreResponses = [];
@@ -385,7 +376,9 @@ test('forward=true forwards actions and routes protocol API responses back to co
     }
   });
 
-  const result = await mcpCall('run_core_command', mcpArgs(groupTarget(), '.forward', { mode: 'lane', forward: true, settleMs: 50 }), sessionId);
+  const packet = await wsCall(plugin, wsArgs(groupTarget(), '.forward', { mode: 'lane', forward: true, settleMs: 50 }));
+  assert.equal(packet.type, 'core_command_result');
+  const result = packet.result;
   assert.equal(result.ok, true);
   assert.equal(result.forwardedCount, 2);
   assert.equal(result.interceptedCount, 0);
@@ -399,7 +392,9 @@ test('forward=true forwards actions and routes protocol API responses back to co
 test('same-lane invocations serialize while different lanes run concurrently', async t => {
   await setup(); t.after(teardown);
   const core = await connectCore();
-  const [sessionA, sessionB, sessionC] = await Promise.all([mcpSession(), mcpSession(), mcpSession()]);
+  const pluginA = await connectPlugin();
+  const pluginB = await connectPlugin();
+  const pluginC = await connectPlugin();
   const started = [];
   const completed = [];
   core.on('message', data => {
@@ -415,12 +410,12 @@ test('same-lane invocations serialize while different lanes run concurrently', a
   });
 
   const aStarted = waitForMessage(core, packet => packet.post_type === 'message' && packet.raw_message === '.a');
-  const sameA = mcpCall('run_core_command', mcpArgs(groupTarget('20002'), '.a', { settleMs: 10 }), sessionA);
+  const sameA = wsCall(pluginA, wsArgs(groupTarget('20002'), '.a', { settleMs: 10 }));
   await aStarted;
-  const sameB = mcpCall('run_core_command', mcpArgs(groupTarget('20002'), '.b', { settleMs: 10 }), sessionB);
-  const different = mcpCall('run_core_command', mcpArgs(groupTarget('20003'), '.c', { settleMs: 10 }), sessionC);
-  const results = await Promise.all([sameA, sameB, different]);
-  assert.equal(results.every(result => result.ok === true), true);
+  const sameB = wsCall(pluginB, wsArgs(groupTarget('20002'), '.b', { settleMs: 10 }));
+  const different = wsCall(pluginC, wsArgs(groupTarget('20003'), '.c', { settleMs: 10 }));
+  const packets = await Promise.all([sameA, sameB, different]);
+  assert.equal(packets.every(packet => packet.type === 'core_command_result' && packet.result.ok === true), true);
   await waitFor(() => started.includes('20002:.b') && completed.includes('20002:.a'), 3000);
   assert.equal(started[0], '20002:.a');
   assert.equal(started.indexOf('20002:.b') > completed.indexOf('20002:.a'), true);
@@ -432,7 +427,7 @@ test('same-lane invocations serialize while different lanes run concurrently', a
 test('private send_msg targets private lanes correctly', async t => {
   await setup(); t.after(teardown);
   const core = await connectCore();
-  const sessionId = await mcpSession();
+  const plugin = await connectPlugin();
   const actionPromise = new Promise(resolve => core.on('message', data => {
     let packet; try { packet = JSON.parse(data.toString()); } catch (_) { return; }
     if (packet.post_type === 'message') {
@@ -440,10 +435,10 @@ test('private send_msg targets private lanes correctly', async t => {
     }
     if (packet.echo === 'private-echo') resolve(packet);
   }));
-  const [result, response] = await Promise.all([
-    mcpCall('run_core_command', mcpArgs(privateTarget(), '.private', { forward: false, settleMs: 20 }), sessionId),
-    actionPromise
-  ]);
+  const packetPromise = wsCall(plugin, wsArgs(privateTarget(), '.private', { forward: false, settleMs: 20 }));
+  const [packet, response] = await Promise.all([packetPromise, actionPromise]);
+  assert.equal(packet.type, 'core_command_result');
+  const result = packet.result;
   assert.equal(result.ok, true);
   assert.equal(result.messages[0].text, 'private reply');
   assert.equal(response.status, 'ok');
@@ -454,7 +449,7 @@ test('lane mode captures events, maxMessages bounds mixed replies, and reply_onl
   await setup(); t.after(teardown);
   const core = await connectCore();
   const protocol = await waitForProtocol();
-  const sessionId = await mcpSession();
+  const plugin = await connectPlugin();
   let invocationCount = 0;
   core.on('message', data => {
     let packet; try { packet = JSON.parse(data.toString()); } catch (_) { return; }
@@ -467,12 +462,16 @@ test('lane mode captures events, maxMessages bounds mixed replies, and reply_onl
       core.send(JSON.stringify({ ...FIXTURE, message_id: 8002, raw_message: 'reply', message: [{ type: 'reply', data: { id: packet.message_id } }, { type: 'text', data: { text: 'reply' } }] }));
     }
   });
-  const laneResult = await mcpCall('run_core_command', mcpArgs(groupTarget(), '.lane', { mode: 'lane', maxMessages: 2, settleMs: 100 }), sessionId);
+  const lanePacket = await wsCall(plugin, wsArgs(groupTarget(), '.lane', { mode: 'lane', maxMessages: 2, settleMs: 100 }));
+  assert.equal(lanePacket.type, 'core_command_result');
+  const laneResult = lanePacket.result;
   assert.equal(laneResult.ok, true);
   assert.equal(laneResult.messages.length, 2);
   assert.equal(laneResult.completedBy, 'max_messages');
   await wait(50);
-  const replyResult = await mcpCall('run_core_command', mcpArgs(groupTarget(), '.reply', { mode: 'reply_only', settleMs: 30 }), sessionId);
+  const replyPacket = await wsCall(plugin, wsArgs(groupTarget(), '.reply', { mode: 'reply_only', settleMs: 30 }));
+  assert.equal(replyPacket.type, 'core_command_result');
+  const replyResult = replyPacket.result;
   assert.equal(replyResult.ok, true);
   assert.equal(replyResult.messages.length, 1);
   assert.equal(replyResult.messages[0].text, 'reply');
@@ -483,20 +482,25 @@ test('lane mode captures events, maxMessages bounds mixed replies, and reply_onl
 
 test('timeouts, missing core, and core disconnects fail cleanly', async t => {
   await setup(); t.after(teardown);
-  const sessionId = await mcpSession();
-  const missing = await mcpCall('run_core_command', mcpArgs(groupTarget(), '.missing', {}, 100), sessionId);
-  assert.equal(missing.ok, false);
-  assert.match(missing.error, /核心 WS/);
+  const plugin = await connectPlugin();
+  const missing = await wsCall(plugin, wsArgs(groupTarget(), '.missing', {}, 100));
+  assert.equal(missing.type, 'core_command_result');
+  assert.equal(missing.result.ok, false);
+  assert.match(missing.result.error, /核心 WS/);
 
   const core = await connectCore();
-  const timeout = await mcpCall('run_core_command', mcpArgs(groupTarget(), '.timeout', { settleMs: 20 }, 100), sessionId);
+  const timeoutPacket = await wsCall(plugin, wsArgs(groupTarget(), '.timeout', { settleMs: 20 }, 100));
+  assert.equal(timeoutPacket.type, 'core_command_result');
+  const timeout = timeoutPacket.result;
   assert.equal(timeout.ok, true);
   assert.equal(timeout.completedBy, 'timeout');
 
-  const disconnectPromise = mcpCall('run_core_command', mcpArgs(groupTarget(), '.disconnect', {}, 1000), sessionId);
+  const disconnectPromise = wsCall(plugin, wsArgs(groupTarget(), '.disconnect', {}, 1000));
   await waitForMessage(core, packet => packet.post_type === 'message' && packet.raw_message === '.disconnect');
   await closeWs(core);
-  const disconnect = await disconnectPromise;
+  const disconnectPacket = await disconnectPromise;
+  assert.equal(disconnectPacket.type, 'core_command_result');
+  const disconnect = disconnectPacket.result;
   assert.equal(disconnect.ok, false);
   assert.match(disconnect.error, /disconnected/);
 });
@@ -524,55 +528,65 @@ test('multiple core connections route login responses, events, and invocations b
   protocol.send(JSON.stringify({ ...FIXTURE, self_id: 10002, raw_message: 'from-bot-2', message: [{ type: 'text', data: { text: 'from-bot-2' } }] }));
   await Promise.all([event1, event2]);
 
-  const sessionId = await mcpSession();
+  const plugin = await connectPlugin();
   core1.on('message', data => {
     let packet; try { packet = JSON.parse(data.toString()); } catch (_) { return; }
     if (packet.post_type === 'message' && packet.raw_message === '.only-bot-1') sendGroupAction(core1, 20002, 'bot1', 'bot1-echo');
   });
-  const result = await mcpCall('run_core_command', mcpArgs(groupTarget('20002', '10001'), '.only-bot-1', { settleMs: 20 }), sessionId);
+  const packet = await wsCall(plugin, wsArgs(groupTarget('20002', '10001'), '.only-bot-1', { settleMs: 20 }));
+  assert.equal(packet.type, 'core_command_result');
+  const result = packet.result;
   assert.equal(result.ok, true);
   assert.equal(result.messages[0].text, 'bot1');
   await closeWs(protocol); await closeWs(core1); await closeWs(core2);
 });
 
-test('MCP exposes only the core bridge command', async t => {
+test('plugin WS protocol: ping/pong, request validation, and core_command roundtrip', async t => {
   await setup(); t.after(teardown);
   const core = await connectCore();
+  const plugin = await connectPlugin();
+
+  const pong = waitForMessage(plugin, packet => packet.type === 'pong');
+  plugin.send(JSON.stringify({ type: 'ping' }));
+  assert.equal((await pong).type, 'pong');
+
+  const noRequestId = waitForMessage(plugin, packet => packet.type === 'core_command_error');
+  plugin.send(JSON.stringify({ type: 'core_command', payload: { target: groupTarget() } }));
+  assert.equal((await noRequestId).error, 'requestId is required');
+
+  const badPayload = waitForMessage(plugin, packet => packet.type === 'core_command_error');
+  plugin.send(JSON.stringify({ type: 'core_command', requestId: 'r-bad', payload: 'bad' }));
+  assert.equal((await badPayload).error, 'payload is required');
+
+  const noTarget = waitForMessage(plugin, packet => packet.type === 'core_command_error');
+  plugin.send(JSON.stringify({ type: 'core_command', requestId: 'r-notarget', payload: { raw_message: '.x' } }));
+  assert.equal((await noTarget).error, 'target is required');
+
   core.on('message', data => {
     let packet; try { packet = JSON.parse(data.toString()); } catch (_) { return; }
-    if (packet.post_type !== 'message') return;
-    sendGroupAction(core, packet.group_id, `mcp-${packet.raw_message}`, 'mcp-action');
-    setTimeout(() => sendGroupAction(core, packet.group_id, 'mcp-second', 'mcp-action-2'), 15);
+    if (packet.post_type === 'message' && packet.raw_message === '.ban 100') sendGroupAction(core, packet.group_id, 'banned', 'ban-echo');
   });
-
-  const sessionId = await mcpSession();
-  const listed = await mcpRequest({ jsonrpc: '2.0', id: 2, method: 'tools/list' }, sessionId);
-  assert.deepEqual(listed.body.result.tools.map(tool => tool.name).sort(), ['run_core_command']);
-  const schema = listed.body.result.tools[0].inputSchema;
-  assert.deepEqual(Object.keys(schema.properties).sort(), [
-    'action', 'args', 'at', 'captureMode', 'command', 'forward', 'maxMessages', 'raw_message', 'settleMs', 'timeoutMs', 'trigger'
-  ]);
-  assert.equal(Object.prototype.hasOwnProperty.call(schema.properties, 'target'), false);
-  assert.equal(Object.prototype.hasOwnProperty.call(schema.properties, 'actor'), false);
-
-  const coreResult = await mcpCall('run_core_command', mcpArgs(groupTarget(), '.ban 100', { settleMs: 30 }), sessionId);
-  assert.equal(coreResult.ok, true);
-  assert.equal(coreResult.messages[0].text, 'mcp-.ban 100');
+  const resultPacket = await wsCall(plugin, wsArgs(groupTarget(), '.ban 100', { forward: false, settleMs: 30 }));
+  assert.equal(resultPacket.type, 'core_command_result');
+  assert.equal(resultPacket.result.ok, true);
+  assert.equal(resultPacket.result.messages[0].text, 'banned');
   await closeWs(core);
 });
 
-test('structured MCP calls are converted to the core raw message', async t => {
+test('structured core_command calls are converted to the core raw message', async t => {
   await setup(); t.after(teardown);
   const core = await connectCore();
+  const plugin = await connectPlugin();
   const received = waitForMessage(core, packet => packet.post_type === 'message' && packet.raw_message === '.help ext');
   core.on('message', data => {
     let packet; try { packet = JSON.parse(data.toString()); } catch (_) { return; }
     if (packet.post_type === 'message' && packet.raw_message === '.help ext') sendGroupAction(core, packet.group_id, 'structured-ok', 'structured-action');
   });
-  const sessionId = await mcpSession();
-  const resultPromise = mcpCall('run_core_command', mcpStructuredArgs(groupTarget(), 'help', ['ext'], { settleMs: 20 }), sessionId);
+  const resultPromise = wsCall(plugin, wsStructuredArgs(groupTarget(), 'help', ['ext'], { settleMs: 20 }));
   await received;
-  const result = await resultPromise;
+  const packet = await resultPromise;
+  assert.equal(packet.type, 'core_command_result');
+  const result = packet.result;
   assert.equal(result.ok, true);
   assert.equal(result.messages[0].text, 'structured-ok');
   await closeWs(core);
@@ -581,55 +595,71 @@ test('structured MCP calls are converted to the core raw message', async t => {
 test('trigger and at are injected into the fake OB11 message', async t => {
   await setup(); t.after(teardown);
   const core = await connectCore();
+  const plugin = await connectPlugin();
   const received = waitForMessage(core, packet => packet.post_type === 'message' && packet.raw_message === '[CQ:at,qq=50005] .rav 1d100 50');
-  const sessionId = await mcpSession();
-  const resultPromise = mcpCall('run_core_command', {
-    action: 'call',
+  const resultPromise = wsCall(plugin, {
     target: groupTarget('20002', '10001'),
     actor: { userId: '30002', nickname: 'AI', role: 'member' },
-    command: 'rav',
-    args: ['1d100', '50'],
+    command: { raw: '.rav 1d100 50', name: 'rav', args: ['1d100', '50'] },
+    capture: { mode: 'reply_only', forward: false, settleMs: 20 },
+    timeoutMs: 1000,
     trigger: '40004',
-    at: ['50005'],
-    settleMs: 20,
-    timeoutMs: 1000
-  }, sessionId);
+    at: ['50005']
+  });
   const packet = await received;
   assert.equal(packet.user_id, 40004);
   assert.equal(packet.sender.user_id, 40004);
   assert.deepEqual(packet.message[0], { type: 'at', data: { qq: '50005' } });
   assert.equal(packet.message[1].data.text, '.rav 1d100 50');
   const result = await resultPromise;
-  assert.equal(result.ok, true);
+  assert.equal(result.type, 'core_command_result');
+  assert.equal(result.result.ok, true);
   await closeWs(core);
 });
-test('raw_message cannot be combined with structured command arguments', async t => {
-  await setup(); t.after(teardown);
-  const sessionId = await mcpSession();
-  const both = await mcpCall('run_core_command', {
-    action: 'call', raw_message: '.help', command: 'help',
-    target: groupTarget(), actor: { userId: '30002', nickname: 'AI', role: 'member' }
-  }, sessionId);
-  assert.equal(both.ok, false);
-  assert.match(both.error, /raw_message.*command|command.*raw_message/i);
 
-  const rawAndArgs = await mcpCall('run_core_command', {
-    action: 'call', raw_message: '.help', args: ['ext'],
-    target: groupTarget(), actor: { userId: '30002', nickname: 'AI', role: 'member' }
-  }, sessionId);
-  assert.equal(rawAndArgs.ok, false);
-  assert.match(rawAndArgs.error, /raw_message.*command|command.*raw_message/i);
+test('core_command payload validation rejects ambiguous or empty commands', async t => {
+  await setup(); t.after(teardown);
+  const plugin = await connectPlugin();
+
+  const both = waitForMessage(plugin, packet => packet.type === 'core_command_error');
+  plugin.send(JSON.stringify({ type: 'core_command', requestId: 'both', payload: {
+    target: groupTarget(),
+    actor: { userId: '30002', nickname: 'AI', role: 'member' },
+    raw_message: '.help',
+    command: { raw: '.help', name: 'help', args: [] }
+  } }));
+  assert.match((await both).error, /raw_message.*command|command.*raw_message/i);
+
+  const neither = waitForMessage(plugin, packet => packet.type === 'core_command_error');
+  plugin.send(JSON.stringify({ type: 'core_command', requestId: 'neither', payload: {
+    target: groupTarget(),
+    actor: { userId: '30002', nickname: 'AI', role: 'member' }
+  } }));
+  assert.match((await neither).error, /command[.]raw or raw_message is required/);
 });
 
 test('invalid auth and wrong tokens are rejected', async t => {
   await setup(); t.after(teardown);
-  const mcpUnauthorized = await fetch(`http://127.0.0.1:${bridgePort}/mcp`, {
+  const mcpGone = await fetch(`http://127.0.0.1:${bridgePort}/mcp`, {
     method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}'
   });
-  assert.equal(mcpUnauthorized.status, 401);
+  assert.equal(mcpGone.status, 404);
+
   const badCore = new WebSocket(`ws://127.0.0.1:${bridgePort}/core?access_token=wrong`);
   badCore.on('error', () => {});
   await waitForEvent(badCore, 'close');
+
+  const badPlugin = new WebSocket(`ws://127.0.0.1:${bridgePort}/plugin?access_token=wrong`);
+  badPlugin.on('error', () => {});
+  await waitForEvent(badPlugin, 'close');
+
+  const core = await connectCore();
+  const plugin = await connectPlugin();
+  const health = await fetch(`http://127.0.0.1:${bridgePort}/healthz`).then(response => response.json());
+  assert.equal(health.pluginConnected, true);
+  assert.equal(health.pluginClients, 1);
+  assert.equal(health.coreConnected, true);
+  await closeWs(core); await closeWs(plugin);
 });
 
 test('protocol client connects outbound to protocol server with token', async t => {
