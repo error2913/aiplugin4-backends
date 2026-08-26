@@ -2,6 +2,7 @@ dist/
 logs/
 .venv/
 node_modules/
+.playwright-mcp/
 .runtime.json
 __pycache__/
 *.pyc

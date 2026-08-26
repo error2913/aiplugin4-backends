@@ -1,0 +1,16 @@
+{
+  "name": "aiplugin4-backend-mcp-browser",
+  "version": "1.0.0",
+  "private": true,
+  "description": "aiplugin4 后端：AI 浏览器操作与截图（MCP）",
+  "main": "browser.js",
+  "scripts": {
+    "start": "node browser.js",
+    "postinstall": "playwright install chromium"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.30.0",
+    "@playwright/mcp": "^0.0.79",
+    "express": "^4.19.2"
+  }
+}

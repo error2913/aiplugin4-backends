@@ -1,0 +1,35 @@
+{
+  "name": "mcp-browser",
+  "description": "MCP：AI 浏览器操作与截图（导航/点击/输入/快照/截图/等待，常驻会话，按 AI 会话隔离）",
+  "type": "node",
+  "entry": "browser.js",
+  "deps": "package.json",
+  "port": 8921,
+  "version": "1.0.0",
+  "config": {
+    "browser_name": {
+      "label": "浏览器类型（chromium/firefox/webkit）",
+      "type": "text",
+      "default": "chromium",
+      "env": "AIPLUGIN4_BROWSER_NAME"
+    },
+    "browser_headless": {
+      "label": "无头模式（开启后不显示窗口）",
+      "type": "boolean",
+      "default": true,
+      "env": "AIPLUGIN4_BROWSER_HEADLESS"
+    },
+    "browser_viewport": {
+      "label": "浏览器视口（宽x高，如 1280x720）",
+      "type": "text",
+      "default": "1280x720",
+      "env": "AIPLUGIN4_BROWSER_VIEWPORT"
+    },
+    "session_idle_minutes": {
+      "label": "MCP 会话空闲回收分钟（0=不回收；兜底防止浏览器泄漏）",
+      "type": "number",
+      "default": 30,
+      "env": "AIPLUGIN4_BROWSER_IDLE_MINUTES"
+    }
+  }
+}
