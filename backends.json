@@ -98,7 +98,7 @@
       "entry": "browser.js",
       "deps": "package.json",
       "port": 8921,
-      "version": "1.0.0",
+      "version": "1.0.1",
       "source": "https://raw.githubusercontent.com/error2913/aiplugin4-backends/shop/backends/mcp-browser",
       "files": [
         "backend.json",

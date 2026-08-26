@@ -2,6 +2,9 @@
 
 标题格式为 `## <版本号>`，release 工作流按标签版本号读取对应段落作为发布说明；日常更新以「Unreleased」汇总，发版前改成版本号并补日期。
 
+## 0.11.10 - 2026-08-26
+
+- mcp-browser 升级到 1.0.1：修复 root/容器环境 Chromium 沙箱启动失败——root 下自动关闭沙箱（chromiumSandbox: false），其他环境保持默认开启；新增「Chromium 沙箱」配置项（env AIPLUGIN4_BROWSER_CHROMIUM_SANDBOX）可手动覆盖
 ## 0.11.9 - 2026-08-26
 
 - 新增 mcp-browser 后端（v1.0.0）：基于官方 @playwright/mcp 内嵌，提供 AI 浏览器操作与截图（browser_navigate / browser_click / browser_type / browser_snapshot / browser_take_screenshot / browser_wait_for / browser_close，默认端口 8921）；每个 MCP 会话独立浏览器 context，配合 aiplugin4 插件多会话分桶实现按 AI 会话隔离；支持浏览器类型 / 无头 / 视口配置，内置会话空闲回收兜底（默认 30 分钟）
