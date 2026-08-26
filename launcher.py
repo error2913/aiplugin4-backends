@@ -46,7 +46,7 @@ WEBUI_PID_FILE = os.path.join(ROOT_DIR, "logs", "webui.pid")
 VENV_DIR_NAME = ".venv"
 DEPS_MARKER = ".deps_ready"
 # 旧版后端曾位于仓库顶层目录（新模型为 backends/ 商店 + installed/ 运行副本）
-LEGACY_BACKEND_DIRS = ["image-url-to-base64", "mcp-files-exec", "md-html-render", "stream-output", "usage-chart", "web-read"]
+LEGACY_BACKEND_DIRS = ["image-url-to-base64", "mcp-files-exec", "md-html-render", "stream-output", "usage-chart"]
 
 # 打包时排除的目录/文件
 EXCLUDE_DIRS = {"logs", "node_modules", "__pycache__", ".venv", "venv", "dist", ".git", "lang-data", "cache", "backends", "data"}

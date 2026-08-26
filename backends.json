@@ -76,22 +76,6 @@
       ]
     },
     {
-      "name": "web-read",
-      "description": "网页 URL 内容读取与截图（MCP）",
-      "type": "node",
-      "entry": "puppeteer.js",
-      "deps": "package.json",
-      "port": 46799,
-      "version": "1.1.0",
-      "source": "https://raw.githubusercontent.com/error2913/aiplugin4-backends/shop/backends/web-read",
-      "files": [
-        "backend.json",
-        "package.json",
-        "puppeteer.js",
-        "fonts/ScreenCJK.ttf"
-      ]
-    },
-    {
       "name": "mcp-browser",
       "description": "MCP：AI 浏览器操作与截图（导航/点击/输入/快照/截图/等待，常驻会话，按 AI 会话隔离）",
       "type": "node",

@@ -16,7 +16,7 @@ aiplugin4 的配套后端服务：流式输出、图片转 base64、用量图表
 
 ## 快速开始
 
-环境要求：Python 3.9+、Node.js 18+（`web-read` / `md-html-render` / `ob11-core-bridge` 三个后端需要 Node）。
+环境要求：Python 3.9+、Node.js 18+（`md-html-render` / `ob11-core-bridge` / `mcp-browser` 三个后端需要 Node）。
 
 ```bash
 git clone https://github.com/error2913/aiplugin4-backends.git && cd aiplugin4-backends && python launcher.py
@@ -47,7 +47,7 @@ Windows 与 Linux 均支持，同一套代码无需改动：
 - 内存读取：Windows 走系统 API，Linux 读 `/proc`；运行时长/自动拉起次数两平台一致
 - 安装 `aibackend` 命令：Windows 生成 `aibackend.cmd`，Linux 生成 shell 脚本并写入 shell 配置（`.bashrc` / `.zshrc` / `.profile`）
 
-Linux 注意：Puppeteer 需要 Chromium 系统依赖。启动 `web-read` / `md-html-render` 时会自动用 `ldd` 检测缺失的共享库，并在 Debian/Ubuntu 下自动 `apt-get install` 补齐（需 root/sudo）；非 apt 发行版或自动安装失败时，按日志提示手动安装（如 `libnss3`、`libatk-1.0-0`、`libx11-xcb1` 等）。
+Linux 注意：Puppeteer 需要 Chromium 系统依赖。启动 `md-html-render` 时会自动用 `ldd` 检测缺失的共享库，并在 Debian/Ubuntu 下自动 `apt-get install` 补齐（需 root/sudo）；非 apt 发行版或自动安装失败时，按日志提示手动安装（如 `libnss3`、`libatk-1.0-0`、`libx11-xcb1` 等）。
 
 ## Linux 系统服务
 
@@ -113,8 +113,8 @@ aibackend restart stream-output             # 重启
 aibackend logs stream-output -f             # 查看/跟随日志
 aibackend info stream-output                # 进程详情（pid/时长/内存/拉起次数）
 aibackend monitor                           # 实时监控面板
-aibackend install-backend web-read          # 安装后端（复制/下载程序 + 安装依赖）
-aibackend uninstall-backend web-read        # 卸载后端（停止并删除运行副本）
+aibackend install-backend mcp-browser       # 安装后端（复制/下载程序 + 安装依赖）
+aibackend uninstall-backend mcp-browser     # 卸载后端（停止并删除运行副本）
 aibackend update                            # 从 GitHub 更新到最新版（手动，不依赖 git）
 aibackend webui                             # 后台启动 Web 管理界面（不占终端）
 aibackend webui-stop                        # 停止后台 WebUI

@@ -57,7 +57,7 @@ aibackend help                         # 查看所有命令
 ### 后端 token/监听 IP
 后端读取 `AIPLUGIN4_BACKEND_HOST`（默认 `0.0.0.0`）与 `AIPLUGIN4_BACKEND_TOKEN`（默认空）。token 非空时校验请求头 `Authorization: Bearer <token>` 或 `X-Token: <token>`，否则 401。六个后端均已实现（Flask/FastAPI 中间件、express 中间件、mcp-files-exec 的 ASGI 包装）。
 
-`web-read` 与 `md-html-render` 仅提供 **MCP（Streamable HTTP，挂 `/mcp`，每会话一个 McpServer 实例）**，已移除 REST 路由：工具为 `scrape_url` / `screenshot_url`（web-read）、`render_markdown` / `render_html`（md-html-render，返回 PNG base64 文本）；token 中间件对 `/mcp` 同样生效。注意 `/mcp` 必须在 `express.json()` 之前注册，让 transport 自行解析原始 body。
+`md-html-render` 仅提供 **MCP（Streamable HTTP，挂 `/mcp`，每会话一个 McpServer 实例）**，已移除 REST 路由：工具为 `render_markdown` / `render_html`（返回 PNG base64 文本）；token 中间件对 `/mcp` 同样生效。注意 `/mcp` 必须在 `express.json()` 之前注册，让 transport 自行解析原始 body。
 
 ### 更新（`aibackend update` / WebUI「⬆ 更新」）
 更新不依赖 git：`launcher.update_project()` 查询 GitHub 最新 release（`_latest_release()`），tag 高于本地 `read_version()` 才下载本体包 `aiplugin4-backends-<版本>.zip` 解压覆盖仓库根目录（`_extract_update_zip()` 跳过 `installed/`、`logs/`、`backends/`、`dist/`、`.git/`、`.runtime.json`）；无新版本返回 `updated=False`（前端弹「没有可以更新的」）。后端各自有独立包（`aiplugin4-backends-<后端名>-<版本>.zip`），`launcher.update_backend(name)` 按注册表版本找对应资产下载解压覆盖缓存 `backends/<名称>/`，再走 `install_backend()` 重装到 `installed/` 并同步依赖；资产缺失时回退按 `source` raw URL 逐文件下载。更新检查 `refresh_update_check()` 对比 release tag 与远端 `backends.json` 注册表版本（`_remote_registry()`）。

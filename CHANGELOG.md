@@ -2,6 +2,10 @@
 
 标题格式为 `## <版本号>`，release 工作流按标签版本号读取对应段落作为发布说明；日常更新以「Unreleased」汇总，发版前改成版本号并补日期。
 
+## 0.11.12 - 2026-08-26
+
+- 下架 web-read 后端：网页读取能力统一由 mcp-browser 提供（browser_navigate / browser_snapshot / browser_take_screenshot，截图时机由 AI 自主选择）；注册表移除 web-read，已安装副本不受影响，可手动 `aibackend uninstall-backend web-read` 清理
+
 ## 0.11.11 - 2026-08-26
 
 - mcp-browser 升级到 1.0.2：修复 root 自动检测被覆盖的问题——沙箱配置默认值改为留空（留空=自动检测 root/容器环境，true/false 才强制覆盖），此前 launcher 总会注入默认 true 导致 root 下仍报沙箱错误
