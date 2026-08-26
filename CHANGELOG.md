@@ -2,6 +2,9 @@
 
 标题格式为 `## <版本号>`，release 工作流按标签版本号读取对应段落作为发布说明；日常更新以「Unreleased」汇总，发版前改成版本号并补日期。
 
+## 0.11.9 - 2026-08-26
+
+- 新增 mcp-browser 后端（v1.0.0）：基于官方 @playwright/mcp 内嵌，提供 AI 浏览器操作与截图（browser_navigate / browser_click / browser_type / browser_snapshot / browser_take_screenshot / browser_wait_for / browser_close，默认端口 8921）；每个 MCP 会话独立浏览器 context，配合 aiplugin4 插件多会话分桶实现按 AI 会话隔离；支持浏览器类型 / 无头 / 视口配置，内置会话空闲回收兜底（默认 30 分钟）
 ## 0.11.8 - 2026-08-25
 
 - ob11-core-bridge 升级到 1.0.8：移除 MCP /mcp，改为插件控制 WS /plugin 协议（core_command 请求/响应、ping/pong），aiplugin4 插件端直连该 WS 执行核心指令；移除 MCP SDK/zod 依赖，healthz 新增 pluginConnected/pluginClients
