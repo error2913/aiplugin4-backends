@@ -5,7 +5,7 @@
   "entry": "browser.js",
   "deps": "package.json",
   "port": 8921,
-  "version": "1.0.0",
+  "version": "1.0.1",
   "config": {
     "browser_name": {
       "label": "浏览器类型（chromium/firefox/webkit）",
@@ -24,6 +24,12 @@
       "type": "text",
       "default": "1280x720",
       "env": "AIPLUGIN4_BROWSER_VIEWPORT"
+    },
+    "browser_chromium_sandbox": {
+      "label": "Chromium 沙箱（root/容器环境需关闭，否则启动失败）",
+      "type": "boolean",
+      "default": true,
+      "env": "AIPLUGIN4_BROWSER_CHROMIUM_SANDBOX"
     },
     "session_idle_minutes": {
       "label": "MCP 会话空闲回收分钟（0=不回收；兜底防止浏览器泄漏）",

@@ -62,12 +62,24 @@ function idleMinutes() {
   return Number.isFinite(v) && v > 0 ? v : 30;
 }
 
+function parseChromiumSandbox(value) {
+  if (value !== undefined && value !== null && value !== '') {
+    const v = String(value).trim().toLowerCase();
+    return !['0', 'false', 'no', 'off'].includes(v); // 显式 true/1/yes/on -> 开启
+  }
+  // 未显式设置：root 下 Chromium 沙箱起不来，自动关闭；其他环境保持默认开启
+  return !(typeof process.getuid === 'function' && process.getuid() === 0);
+}
+
 function makeConfig() {
   return {
     browser: {
       browserName: process.env.AIPLUGIN4_BROWSER_NAME || 'chromium',
       isolated: true,
-      launchOptions: { headless: parseHeadless(process.env.AIPLUGIN4_BROWSER_HEADLESS) },
+      launchOptions: {
+        headless: parseHeadless(process.env.AIPLUGIN4_BROWSER_HEADLESS),
+        chromiumSandbox: parseChromiumSandbox(process.env.AIPLUGIN4_BROWSER_CHROMIUM_SANDBOX)
+      },
       contextOptions: { viewport: parseViewport(process.env.AIPLUGIN4_BROWSER_VIEWPORT) }
     },
     capabilities: ['core']
