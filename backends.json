@@ -92,6 +92,22 @@
       ]
     },
     {
+      "name": "mcp-browser",
+      "description": "MCP：AI 浏览器操作与截图（导航/点击/输入/快照/截图/等待，常驻会话，按 AI 会话隔离）",
+      "type": "node",
+      "entry": "browser.js",
+      "deps": "package.json",
+      "port": 8921,
+      "version": "1.0.0",
+      "source": "https://raw.githubusercontent.com/error2913/aiplugin4-backends/shop/backends/mcp-browser",
+      "files": [
+        "backend.json",
+        "package.json",
+        "package-lock.json",
+        "browser.js"
+      ]
+    },
+    {
       "name": "ob11-core-bridge",
       "description": "SealDice 核心正向 WS /core、中间件主动连接的 OB11 协议端与插件控制 WS /plugin 的透明中转；支持注入假消息执行核心/扩展指令",
       "type": "node",
