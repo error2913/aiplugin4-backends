@@ -2,6 +2,9 @@
 
 标题格式为 `## <版本号>`，release 工作流按标签版本号读取对应段落作为发布说明；日常更新以「Unreleased」汇总，发版前改成版本号并补日期。
 
+## 0.11.11 - 2026-08-26
+
+- mcp-browser 升级到 1.0.2：修复 root 自动检测被覆盖的问题——沙箱配置默认值改为留空（留空=自动检测 root/容器环境，true/false 才强制覆盖），此前 launcher 总会注入默认 true 导致 root 下仍报沙箱错误
 ## 0.11.10 - 2026-08-26
 
 - mcp-browser 升级到 1.0.1：修复 root/容器环境 Chromium 沙箱启动失败——root 下自动关闭沙箱（chromiumSandbox: false），其他环境保持默认开启；新增「Chromium 沙箱」配置项（env AIPLUGIN4_BROWSER_CHROMIUM_SANDBOX）可手动覆盖
