@@ -2,6 +2,11 @@
 
 标题格式为 `## <版本号>`，release 工作流按标签版本号读取对应段落作为发布说明；日常更新以「Unreleased」汇总，发版前改成版本号并补日期。
 
+## 0.11.13 - 2026-08-28
+
+- mcp-browser 升级到 1.0.3：空闲回收真正生效——后端自持共享浏览器进程（所有 AI 会话共用 1 个 Chromium，会话间仍按独立 context 隔离），空闲超过默认 10 分钟（配置「MCP 会话空闲回收分钟」/ env AIPLUGIN4_BROWSER_IDLE_MINUTES）时关闭浏览器 context 并退出浏览器进程，不再常驻吃 CPU；修复旧版只摘 MCP 监听器、Chromium 带页面常驻的问题
+- 配套：插件「MCP会话空闲回收分钟」默认 15→10，「MCP每服务器最大会话数」默认 8→3
+
 ## 0.11.12 - 2026-08-26
 
 - 下架 web-read 后端：网页读取能力统一由 mcp-browser 提供（browser_navigate / browser_snapshot / browser_take_screenshot，截图时机由 AI 自主选择）；注册表移除 web-read，已安装副本不受影响，可手动 `aibackend uninstall-backend web-read` 清理
@@ -145,3 +150,5 @@ un_ext_command 继续由插件本地实现
 - 卡片展示运行时长、自动拉起次数与内存占用，异常退出自动拉起
 - 使用 aiplugin4 插件包图标
 - release 自动打包 zip + tar.gz 并发布
+
+
