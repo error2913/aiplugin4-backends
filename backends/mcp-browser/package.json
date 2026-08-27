@@ -11,6 +11,7 @@
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.30.0",
     "@playwright/mcp": "^0.0.79",
-    "express": "^4.19.2"
+    "express": "^4.19.2",
+    "playwright": "1.63.0-alpha-2026-08-05"
   }
 }
