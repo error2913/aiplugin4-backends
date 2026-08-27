@@ -77,12 +77,12 @@
     },
     {
       "name": "mcp-browser",
-      "description": "MCP：AI 浏览器操作与截图（导航/点击/输入/快照/截图/等待，常驻会话，按 AI 会话隔离；空闲 10 分钟自动回收并关闭浏览器进程）",
+      "description": "MCP：AI 浏览器操作与截图（导航/点击/输入/快照/截图/等待；惰性启动，工具列表不拉起浏览器，首次浏览器操作才启动 Chromium，按 AI 会话隔离；browser_close 或空闲 10 分钟自动回收并关闭浏览器进程）",
       "type": "node",
       "entry": "browser.js",
       "deps": "package.json",
       "port": 8921,
-      "version": "1.0.3",
+      "version": "1.0.4",
       "source": "https://raw.githubusercontent.com/error2913/aiplugin4-backends/shop/backends/mcp-browser",
       "files": [
         "backend.json",

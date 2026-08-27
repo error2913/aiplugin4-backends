@@ -2,6 +2,11 @@
 
 标题格式为 `## <版本号>`，release 工作流按标签版本号读取对应段落作为发布说明；日常更新以「Unreleased」汇总，发版前改成版本号并补日期。
 
+## 0.11.14 - 2026-08-28
+
+- mcp-browser 升级到 1.0.4：浏览器惰性启动——tools/list 只返回工具声明，不再拉起 Chromium，只有真正调用 browser_* 工具才启动共享浏览器（插件侧每 ≤60s 的工具列表同步不再让浏览器常驻/续命）；browser_close 成功后立即回收会话并退出浏览器进程，空闲兜底回收（默认 10 分钟，env AIPLUGIN4_BROWSER_IDLE_MINUTES）保留，彻底解决活跃群里 Chromium 常驻吃 CPU 的问题
+- 配套：插件无需改动，旧版 1.0.3 后端可平滑升级
+
 ## 0.11.13 - 2026-08-28
 
 - mcp-browser 升级到 1.0.3：空闲回收真正生效——后端自持共享浏览器进程（所有 AI 会话共用 1 个 Chromium，会话间仍按独立 context 隔离），空闲超过默认 10 分钟（配置「MCP 会话空闲回收分钟」/ env AIPLUGIN4_BROWSER_IDLE_MINUTES）时关闭浏览器 context 并退出浏览器进程，不再常驻吃 CPU；修复旧版只摘 MCP 监听器、Chromium 带页面常驻的问题
