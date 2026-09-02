@@ -52,6 +52,20 @@ function waitForRaw(ws, expected, timeout = 3000) {
   });
 }
 
+/** 断言窗口内没有匹配的 JSON 消息到达（用于验证协议端事件被丢弃，而不是被转发到核心） */
+async function assertNoJsonArrival(ws, predicate, timeout = 150) {
+  let hit = null;
+  const onMessage = data => {
+    let value;
+    try { value = JSON.parse(data.toString()); } catch (_) { return; }
+    if (predicate(value)) hit = value;
+  };
+  ws.on('message', onMessage);
+  await wait(timeout);
+  ws.off('message', onMessage);
+  return hit;
+}
+
 async function connect(url) {
   const ws = new WebSocket(url);
   await waitForEvent(ws, 'open');
@@ -242,7 +256,7 @@ test('accepts SealDice core websocket on /core and /core/ws', async t => {
   await closeWs(coreWs);
 });
 
-test('transparent forwarding, raw frames, login echo routing, and healthz', async t => {
+test('raw frames passthrough, protocol message events dropped, login echo routed, and healthz', async t => {
   await setup(); t.after(teardown);
   const core = await connectCore();
   const protocol = await waitForProtocol();
@@ -255,10 +269,10 @@ test('transparent forwarding, raw frames, login echo routing, and healthz', asyn
   core.send('raw core frame');
   assert.equal(await toProtocolRaw, 'raw core frame');
 
+  // 双连接冗余模式：协议端实时消息由海豹直连收取，桥不再转发，避免同一条事件双份进入海豹
   const event = { ...FIXTURE, raw_message: 'hello', message: [{ type: 'text', data: { text: 'hello' } }] };
-  const eventAtCore = waitForMessage(core, packet => packet.post_type === 'message' && packet.raw_message === 'hello');
   protocol.send(JSON.stringify(event));
-  assert.equal((await eventAtCore).group_id, 20002);
+  assert.equal(await assertNoJsonArrival(core, packet => packet.post_type === 'message' && packet.raw_message === 'hello'), null, '协议端 message 事件不应转发给核心');
 
   const loginAtProtocol = waitForMessage(protocol, packet => packet.action === 'get_login_info' && packet.echo === 'login-check');
   const loginAtCore = waitForMessage(core, packet => packet.echo === 'login-check');
@@ -268,7 +282,31 @@ test('transparent forwarding, raw frames, login echo routing, and healthz', asyn
   assert.equal((await loginAtCore).data.nickname, 'BridgeBot');
 
   const health = await (await fetch(`http://127.0.0.1:${bridgePort}/healthz`)).json();
-  assert.deepEqual(health, { ok: true, coreConnected: true, protocolConnected: true, pluginConnected: false, coreClients: 1, protocolClients: 1, pluginClients: 0 });
+  assert.deepEqual(health, { ok: true, coreConnected: true, protocolConnected: true, pluginConnected: false, coreClients: 1, protocolClients: 1, pluginClients: 0, droppedProtocolEvents: 1 });
+  await closeWs(protocol); await closeWs(core);
+});
+
+test('protocol notice/meta events are dropped while echo responses still route to core', async t => {
+  await setup(); t.after(teardown);
+  const core = await connectCore();
+  const protocol = await waitForProtocol();
+
+  const notice = { post_type: 'notice', notice_type: 'group_increase', group_id: 20002, user_id: 30003, self_id: 10001, time: Math.floor(Date.now() / 1000) };
+  const meta = { post_type: 'meta_event', meta_event_type: 'heartbeat', self_id: 10001, time: Math.floor(Date.now() / 1000), status: { online: true } };
+  protocol.send(JSON.stringify(notice));
+  protocol.send(JSON.stringify(meta));
+  assert.equal(await assertNoJsonArrival(core, packet => packet.post_type === 'notice' || packet.post_type === 'meta_event'), null, 'notice/meta 事件不应转发给核心');
+
+  // API 响应（echo 路由）不受影响：核心发起的请求仍能收到协议端回包
+  const requestAtProtocol = waitForMessage(protocol, packet => packet.action === 'get_group_info' && packet.echo === 'group-echo');
+  const responseAtCore = waitForMessage(core, packet => packet.echo === 'group-echo');
+  core.send(JSON.stringify({ action: 'get_group_info', params: { group_id: 20002 }, echo: 'group-echo' }));
+  assert.equal((await requestAtProtocol).action, 'get_group_info');
+  protocol.send(JSON.stringify({ status: 'ok', retcode: 0, data: { group_id: 20002, group_name: '测试群' }, echo: 'group-echo' }));
+  assert.equal((await responseAtCore).data.group_name, '测试群');
+
+  const health = await (await fetch(`http://127.0.0.1:${bridgePort}/healthz`)).json();
+  assert.equal(health.droppedProtocolEvents, 2);
   await closeWs(protocol); await closeWs(core);
 });
 
@@ -505,7 +543,7 @@ test('timeouts, missing core, and core disconnects fail cleanly', async t => {
   assert.match(disconnect.error, /disconnected/);
 });
 
-test('multiple core connections route login responses, events, and invocations by self_id', async t => {
+test('multiple core connections route login responses and invocations by self_id, protocol events dropped', async t => {
   await setup(); t.after(teardown);
   const core1 = await connectCore();
   const core2 = await connectCore();
@@ -522,11 +560,13 @@ test('multiple core connections route login responses, events, and invocations b
   assert.equal((await loginResponse1).data.user_id, 10001);
   assert.equal((await loginResponse2).data.user_id, 10002);
 
-  const event1 = waitForMessage(core1, packet => packet.post_type === 'message' && packet.raw_message === 'from-bot-1');
-  const event2 = waitForMessage(core2, packet => packet.post_type === 'message' && packet.raw_message === 'from-bot-2');
+  // 实时事件即使带 self_id 也不再路由给对应核心（直连收取，桥不转发）
   protocol.send(JSON.stringify({ ...FIXTURE, self_id: 10001, raw_message: 'from-bot-1', message: [{ type: 'text', data: { text: 'from-bot-1' } }] }));
   protocol.send(JSON.stringify({ ...FIXTURE, self_id: 10002, raw_message: 'from-bot-2', message: [{ type: 'text', data: { text: 'from-bot-2' } }] }));
-  await Promise.all([event1, event2]);
+  assert.equal(await assertNoJsonArrival(core1, packet => packet.post_type === 'message' && packet.raw_message === 'from-bot-1'), null, '事件不应到达 core1');
+  assert.equal(await assertNoJsonArrival(core2, packet => packet.post_type === 'message' && packet.raw_message === 'from-bot-2'), null, '事件不应到达 core2');
+  const health = await (await fetch(`http://127.0.0.1:${bridgePort}/healthz`)).json();
+  assert.equal(health.droppedProtocolEvents, 2);
 
   const plugin = await connectPlugin();
   core1.on('message', data => {

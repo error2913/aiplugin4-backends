@@ -231,6 +231,7 @@ class Bridge {
     this.invocations = new Map();
     this.lanes = new Map();
     this.echoTargets = new Map();
+    this.droppedProtocolEvents = 0;
     this.stopping = false;
 
     this.protocolTimer = null;
@@ -242,7 +243,7 @@ class Bridge {
       const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
       if (url.pathname === '/healthz') {
         res.writeHead(200, { 'content-type': 'application/json' });
-        res.end(JSON.stringify({ ok: true, coreConnected: this.isCoreConnected(), protocolConnected: this.protocolClients.size > 0, pluginConnected: this.pluginClients.size > 0, coreClients: this.coreClients.size, protocolClients: this.protocolClients.size, pluginClients: this.pluginClients.size }));
+        res.end(JSON.stringify({ ok: true, coreConnected: this.isCoreConnected(), protocolConnected: this.protocolClients.size > 0, pluginConnected: this.pluginClients.size > 0, coreClients: this.coreClients.size, protocolClients: this.protocolClients.size, pluginClients: this.pluginClients.size, droppedProtocolEvents: this.droppedProtocolEvents }));
         return;
       }
       res.writeHead(404); res.end('not found');
@@ -439,6 +440,13 @@ class Bridge {
       this.echoTargets.delete(String(packet.echo));
       if (packet.data && packet.data.user_id !== undefined) this.setCoreId(core, packet.data.user_id);
       sendRaw(core, JSON.stringify(packet));
+      return;
+    }
+    // 实时事件（message/notice/request/meta_event）一律不转发给核心：
+    // 海豹需另接一条直连协议端的 WS 作为消息入口，桥只负责 API 中转与假消息注入/捕获，
+    // 避免同一条事件经桥再进一次海豹导致双份处理（双连接冗余模式）。
+    if (packet.post_type) {
+      this.droppedProtocolEvents++;
       return;
     }
     const core = packet.self_id !== undefined ? this.coreForEvent(packet) : (this.coreClients.size === 1 ? [...this.coreClients][0] : null);
