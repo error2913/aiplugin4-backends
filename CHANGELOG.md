@@ -2,6 +2,12 @@
 
 标题格式为 `## <版本号>`，release 工作流按标签版本号读取对应段落作为发布说明；日常更新以「Unreleased」汇总，发版前改成版本号并补日期。
 
+## 0.11.15 - 2026-09-03
+
+- ob11-core-bridge 升级到 1.1.0：协议端实时事件（message/notice/request/meta）不再转发给核心，改为“海豹直连协议端收发 + 桥只做核心 API 中转与 `run_core_command` 指令注入/捕获”的双连接冗余部署，避免同一事件双份进入海豹导致重复处理；`/healthz` 新增 `droppedProtocolEvents` 计数
+- 注意：1.1.0 为破坏性变更，升级后海豹必须另接一条直连协议端的 OB11 正向 WS（建议排在账号列表首位），否则收不到任何实时消息；桥断线不再影响聊天与 AI，仅 `run_core_command` 不可用
+- mcp-files-exec 升级到 1.0.7：默认工作区按 AI 会话隔离——HTTP 请求携带 `X-Aiplugin4-Session` 头时，相对路径与命令默认工作目录落到 `沙箱根/sessions/<清洗后的会话ID>`，无会话（stdio/老客户端）回退共享沙箱根；绝对路径访问与命令策略不变，审计日志记录会话 ID
+
 ## 0.11.14 - 2026-08-28
 
 - mcp-browser 升级到 1.0.4：浏览器惰性启动——tools/list 只返回工具声明，不再拉起 Chromium，只有真正调用 browser_* 工具才启动共享浏览器（插件侧每 ≤60s 的工具列表同步不再让浏览器常驻/续命）；browser_close 成功后立即回收会话并退出浏览器进程，空闲兜底回收（默认 10 分钟，env AIPLUGIN4_BROWSER_IDLE_MINUTES）保留，彻底解决活跃群里 Chromium 常驻吃 CPU 的问题

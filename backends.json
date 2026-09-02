@@ -17,12 +17,12 @@
     },
     {
       "name": "mcp-files-exec",
-      "description": "MCP：AI 直接读写任意路径、下载文件与执行命令（默认开放）",
+      "description": "MCP 后端：AI 直接读写任意路径、下载文件与执行命令（可选恢复沙箱限制）；按 AI 会话隔离默认工作区（相对路径/默认 cwd 落到会话目录，无会话时维持共享沙箱根）",
       "type": "python",
       "entry": "mcp_files_exec.py",
       "deps": "requirements.txt",
       "port": 3910,
-      "version": "1.0.6",
+      "version": "1.0.7",
       "source": "https://raw.githubusercontent.com/error2913/aiplugin4-backends/shop/backends/mcp-files-exec",
       "files": [
         "backend.json",
@@ -93,12 +93,12 @@
     },
     {
       "name": "ob11-core-bridge",
-      "description": "SealDice 核心正向 WS /core、中间件主动连接的 OB11 协议端与插件控制 WS /plugin 的透明中转；支持注入假消息执行核心/扩展指令",
+      "description": "SealDice 双连接冗余部署：协议端实时事件不转发核心（海豹另接直连协议端收发），核心 API 中转 + /plugin 注入假消息执行核心指令",
       "type": "node",
       "entry": "bridge.js",
       "deps": "package.json",
       "port": 46880,
-      "version": "1.0.8",
+      "version": "1.1.0",
       "source": "https://raw.githubusercontent.com/error2913/aiplugin4-backends/shop/backends/ob11-core-bridge",
       "files": [
         "backend.json",
