@@ -7,6 +7,8 @@
   2. 默认不拦截命令；设置 MCP_ALLOW_DANGEROUS_COMMANDS=0 可恢复危险命令拦截/白名单
   3. 执行隔离：命令在工作目录沙箱内执行，带超时强制终止（杀进程树），输出截断
   4. 审计日志：每次调用（含被拦截的命令）都记录到日志文件
+  5. 会话工作区：HTTP 请求携带 X-Aiplugin4-Session 头（会话 ID）时，相对路径与命令
+     默认工作目录按会话隔离到 沙箱根/sessions/<清洗后的会话ID>；无会话（stdio/老客户端）回退共享沙箱根
 
 传输方式：
   默认 streamable-http（端口取 AIPLUGIN4_BACKEND_PORT，默认 3910）；
@@ -29,6 +31,7 @@
 """
 
 import argparse
+import contextvars
 import json
 import mimetypes
 import os
@@ -45,7 +48,7 @@ from pathlib import Path
 from typing import Optional
 from urllib.parse import quote, unquote
 
-from mcp.server.fastmcp import FastMCP
+from mcp.server.fastmcp import FastMCP, Context
 
 DEFAULT_MAX_FILE = int(os.environ.get("MCP_MAX_FILE_BYTES", 1048576))
 DEFAULT_MAX_OUTPUT = int(os.environ.get("MCP_MAX_OUTPUT_BYTES", 1048576))
@@ -67,12 +70,70 @@ _EXPORT_ROUTE_PREFIX = "/files/download/"
 _EXPORTS = {}
 _EXPORT_LOCK = threading.Lock()
 
+_SESSION_HEADER = "x-aiplugin4-session"
+_MAX_SESSION_KEY_LEN = 256
+_current_session = contextvars.ContextVar("mcp_files_exec_session_id", default="")
+
 _CWD = os.path.abspath(os.getcwd())
 _SANDBOX_ROOTS = [
     os.path.abspath(p)
     for p in os.environ.get("MCP_SANDBOX_ROOTS", _CWD).split(os.pathsep)
     if p.strip()
 ] or [_CWD]
+
+
+def _current_session_id() -> str:
+    """当前请求的 AI 会话 ID（无会话时为空字符串）。"""
+    return _current_session.get()
+
+
+def _parse_session_header(value: Optional[str]) -> str:
+    """解析 X-Aiplugin4-Session 头：percent-decode 后去空白并截断。"""
+    raw = str(value or "").strip()
+    if not raw:
+        return ""
+    return unquote(raw)[:_MAX_SESSION_KEY_LEN]
+
+
+def _sanitize_session_id(session_id: str) -> str:
+    """会话 ID → 目录名：保留字母数字与 ._-，其余字符替换为 -；去掉首尾 ./-。"""
+    return re.sub(r"[^A-Za-z0-9._-]", "-", session_id or "").strip(".-")
+
+
+def _session_workspace() -> Optional[str]:
+    """当前会话的工作区目录；无会话或目录名清洗后为空时返回 None。"""
+    session_id = _current_session_id()
+    if not session_id:
+        return None
+    name = _sanitize_session_id(session_id)
+    if not name:
+        return None
+    return os.path.join(_SANDBOX_ROOTS[0], "sessions", name)
+
+
+def _default_workspace() -> str:
+    """相对路径/默认工作目录基准：有会话用会话工作区，无会话回退第一个沙箱根。"""
+    return _session_workspace() or _SANDBOX_ROOTS[0]
+
+
+def _bind_request_session(ctx: Optional[Context] = None) -> str:
+    """把 FastMCP 请求上下文里的 X-Aiplugin4-Session 头绑定到请求级 ContextVar。
+
+    每个文件工具入口调用一次；单测直调（ctx=None）不覆盖既有上下文；
+    stdio 等无 HTTP 请求头的场景解析为空，回退无会话共享根。
+    """
+    if ctx is not None:
+        session_id = ""
+        try:
+            request = getattr(ctx.request_context, "request", None)
+            headers = getattr(request, "headers", None)
+            if headers is not None:
+                session_id = _parse_session_header(headers.get(_SESSION_HEADER))
+        except Exception:
+            session_id = ""
+        _current_session.set(session_id)
+    return _current_session_id()
+
 
 _ALLOWED_PREFIXES = [
     p.strip()
@@ -106,11 +167,12 @@ DANGER_RULES = [
 ]
 
 
-def _audit(tool: str, ok: bool, detail: str = "") -> None:
+def _audit(tool: str, ok: bool, detail: str = "", session: Optional[str] = None) -> None:
     entry = {
         "ts": time.strftime("%Y-%m-%d %H:%M:%S"),
         "tool": tool,
         "ok": bool(ok),
+        "session": session if session is not None else _current_session_id(),
         "detail": detail[:2000],
     }
     try:
@@ -178,16 +240,16 @@ async def _download_export(scope, receive, send) -> None:
             (b"access-control-allow-origin", b"*"),
         ]
         body = b"" if method == "HEAD" else Path(target).read_bytes()
-        _audit("download_export", True, f"{target} | {size} bytes")
+        _audit("download_export", True, f"{target} | {size} bytes", session=item.get("session") or "")
         await _send_http_response(send, 200, body, headers, content_length=size)
     except FileNotFoundError:
-        _audit("download_export", False, f"{item['path']} | file not found")
+        _audit("download_export", False, f"{item['path']} | file not found", session=item.get("session") or "")
         await _send_http_response(send, 404, b"file not found")
     except ValueError as error:
-        _audit("download_export", False, f"{item['path']} | {error}")
+        _audit("download_export", False, f"{item['path']} | {error}", session=item.get("session") or "")
         await _send_http_response(send, 413, str(error).encode("utf-8"))
     except OSError as error:
-        _audit("download_export", False, f"{item['path']} | {error}")
+        _audit("download_export", False, f"{item['path']} | {error}", session=item.get("session") or "")
         await _send_http_response(send, 500, b"download failed")
 
 
@@ -203,26 +265,24 @@ def _auth_asgi_wrapper(inner):
         if path.startswith(_EXPORT_ROUTE_PREFIX):
             await _download_export(scope, receive, send)
             return
-        if not token:
-            await inner(scope, receive, send)
-            return
         headers = {}
         for k, v in scope.get("headers", []):
             headers[k.decode("latin-1").lower()] = v.decode("latin-1")
-        if headers.get("authorization") == f"Bearer {token}" or headers.get("x-token") == token:
-            await inner(scope, receive, send)
+        if token and headers.get("authorization") != f"Bearer {token}" and headers.get("x-token") != token:
+            await _send_http_response(send, 401, b'{"error":"unauthorized"}', [(b"content-type", b"application/json")])
             return
-        await _send_http_response(send, 401, b'{"error":"unauthorized"}', [(b"content-type", b"application/json")])
+        await inner(scope, receive, send)
 
     return app
 
 
 def _resolve(path: str) -> str:
-    """解析文件路径；开启 MCP_ALLOW_EXTERNAL_PATHS 后允许绝对路径访问沙箱外文件。"""
+    """解析文件路径；开启 MCP_ALLOW_EXTERNAL_PATHS 后允许绝对路径访问沙箱外文件。
+    相对路径在有会话时相对当前会话工作区解析，无会话时相对第一个沙箱根目录。"""
     raw = os.fspath(path or "").strip()
     if not raw:
         raise ValueError("路径不能为空")
-    candidate = raw if os.path.isabs(raw) else os.path.join(_SANDBOX_ROOTS[0], raw)
+    candidate = raw if os.path.isabs(raw) else os.path.join(_default_workspace(), raw)
     real = os.path.realpath(os.path.abspath(candidate))
     if _ALLOW_EXTERNAL_PATHS:
         return real
@@ -304,8 +364,9 @@ mcp = FastMCP("aiplugin4-files-exec")
 
 
 @mcp.tool()
-def read_file(path: str) -> str:
+def read_file(path: str, ctx: Context = None) -> str:
     """读取文本文件内容。path 必须是沙箱目录内的文件路径。"""
+    _bind_request_session(ctx)
     target = _resolve(path)
     if not os.path.isfile(target):
         raise ValueError(f"文件不存在: {path}")
@@ -319,8 +380,9 @@ def read_file(path: str) -> str:
 
 
 @mcp.tool()
-def list_dir(path: str = ".") -> str:
+def list_dir(path: str = ".", ctx: Context = None) -> str:
     """列出沙箱目录内的文件与子目录（名称、类型、大小）。"""
+    _bind_request_session(ctx)
     target = _resolve(path)
     if not os.path.isdir(target):
         raise ValueError(f"目录不存在: {path}")
@@ -340,8 +402,9 @@ def list_dir(path: str = ".") -> str:
 
 
 @mcp.tool()
-def write_file(path: str, content: str, append: bool = False) -> str:
+def write_file(path: str, content: str, append: bool = False, ctx: Context = None) -> str:
     """写入文本文件（默认覆盖；append=True 追加）。只能写沙箱目录内。"""
+    _bind_request_session(ctx)
     target = _resolve(path)
     if os.path.isdir(target):
         raise ValueError(f"目标是目录: {path}")
@@ -356,8 +419,9 @@ def write_file(path: str, content: str, append: bool = False) -> str:
 
 
 @mcp.tool()
-def delete_file(path: str) -> str:
+def delete_file(path: str, ctx: Context = None) -> str:
     """删除沙箱目录内的单个文件（目录需先用 run_shell 谨慎处理或自行清空）。"""
+    _bind_request_session(ctx)
     target = _resolve(path)
     if os.path.isdir(target):
         raise ValueError(f"目标是目录: {path}")
@@ -369,8 +433,9 @@ def delete_file(path: str) -> str:
 
 
 @mcp.tool()
-def export_file(path: str) -> str:
+def export_file(path: str, ctx: Context = None) -> str:
     """为沙箱内文件生成短时下载地址，供 QQ/Milky 等协议端代取文件。"""
+    _bind_request_session(ctx)
     target = _resolve(path)
     if not os.path.isfile(target):
         raise ValueError(f"文件不存在: {path}")
@@ -382,7 +447,7 @@ def export_file(path: str) -> str:
     expires_at = time.time() + DEFAULT_EXPORT_TTL
     _expire_exports()
     with _EXPORT_LOCK:
-        _EXPORTS[token] = {"path": target, "expires_at": expires_at}
+        _EXPORTS[token] = {"path": target, "expires_at": expires_at, "session": _current_session_id()}
     relative_url = f"{_EXPORT_ROUTE_PREFIX}{token}"
     download_url = f"{_PUBLIC_URL}{relative_url}" if _PUBLIC_URL else relative_url
     _audit("export_file", True, f"{target} | {size} bytes | expires={int(expires_at)}")
@@ -396,12 +461,13 @@ def export_file(path: str) -> str:
 
 
 @mcp.tool()
-def download_file(url: str, path: str, overwrite: bool = True, timeout: Optional[int] = None) -> str:
+def download_file(url: str, path: str, overwrite: bool = True, timeout: Optional[int] = None, ctx: Context = None) -> str:
     """从 URL 下载文件到指定路径。
 
     path 可以是沙箱相对路径，也可以是后端主机上的任意绝对路径（默认开放模式）。
     不限制 URL 类型或目标主机；需要跨主机读取 QQ/OB11 附件时，可把消息中的 URL 直接传入。
     """
+    _bind_request_session(ctx)
     source = str(url or "").strip()
     if not source:
         raise ValueError("URL 不能为空")
@@ -411,7 +477,7 @@ def download_file(url: str, path: str, overwrite: bool = True, timeout: Optional
     if os.path.exists(target) and not overwrite:
         raise ValueError(f"目标文件已存在: {path}")
     parent = os.path.dirname(target)
-    os.makedirs(parent or _SANDBOX_ROOTS[0], exist_ok=True)
+    os.makedirs(parent or _default_workspace(), exist_ok=True)
     request = urllib.request.Request(source, headers={"User-Agent": "aiplugin4-mcp-files-exec/1.0"})
     temp_path = None
     total = 0
@@ -446,19 +512,25 @@ def download_file(url: str, path: str, overwrite: bool = True, timeout: Optional
 
 
 @mcp.tool()
-def run_shell(command: str, cwd: Optional[str] = None, timeout: Optional[int] = None) -> str:
+def run_shell(command: str, cwd: Optional[str] = None, timeout: Optional[int] = None, ctx: Context = None) -> str:
     """在沙箱内执行 shell 命令并返回输出。
 
     带命令拦截（危险命令直接拒绝）、超时强制终止、输出截断与审计。
     cwd 必须位于沙箱目录内；timeout 默认 30 秒，最大 300 秒。
     """
+    _bind_request_session(ctx)
     reason = _intercept(command)
     if reason:
         _audit("run_shell", False, f"{command} | 拦截: {reason}")
         raise ValueError(f"命令被拦截：{reason}")
-    workdir = _resolve(cwd) if cwd else _SANDBOX_ROOTS[0]
-    if not os.path.isdir(workdir):
-        raise ValueError(f"工作目录不存在: {workdir}")
+    if cwd:
+        workdir = _resolve(cwd)
+        if not os.path.isdir(workdir):
+            raise ValueError(f"工作目录不存在: {workdir}")
+    else:
+        # 默认工作目录可能是尚未创建过的会话工作区（首次调用前无文件操作）
+        workdir = _default_workspace()
+        os.makedirs(workdir, exist_ok=True)
     timeout = timeout or DEFAULT_TIMEOUT
     timeout = max(1, min(int(timeout), 300))
     result = _exec_command(command, workdir, timeout)
@@ -482,6 +554,7 @@ def main() -> None:
         f"[mcp-files-exec] 沙箱根目录: {_SANDBOX_ROOTS}\n"
         f"[mcp-files-exec] 命令白名单: {_ALLOWED_PREFIXES or '(未启用，使用危险规则拦截)'}\n"
         f"[mcp-files-exec] 外部路径访问: {'开启' if _ALLOW_EXTERNAL_PATHS else '关闭'}；危险命令拦截: {'关闭' if _ALLOW_DANGEROUS_COMMANDS else '开启'}\n"
+        f"[mcp-files-exec] 会话工作区: 请求头 {_SESSION_HEADER} 携带会话 ID 时，相对路径/默认 cwd 落到 沙箱根/sessions/<清洗后的会话ID>；无会话回退共享根\n"
         f"[mcp-files-exec] 审计日志: {_AUDIT_LOG}",
         file=sys.stderr,
         flush=True,
