@@ -1,0 +1,9 @@
+{
+  "name": "media-fetch",
+  "description": "媒体接口中转：代插件请求音频/图片接口，把二进制响应转成 base64 JSON（配合插件「后端 → 媒体转base64」）",
+  "type": "python",
+  "entry": "mediafetch.py",
+  "deps": "requirements.txt",
+  "port": 46679,
+  "version": "1.0.0"
+}
