@@ -16,6 +16,21 @@
       ]
     },
     {
+      "name": "media-fetch",
+      "description": "媒体接口中转：代插件请求音频/图片接口，把二进制响应转成 base64 JSON（海豹 goja 读不了二进制）",
+      "type": "python",
+      "entry": "mediafetch.py",
+      "deps": "requirements.txt",
+      "port": 46679,
+      "version": "1.0.0",
+      "source": "https://raw.githubusercontent.com/error2913/aiplugin4-backends/shop/backends/media-fetch",
+      "files": [
+        "backend.json",
+        "requirements.txt",
+        "mediafetch.py"
+      ]
+    },
+    {
       "name": "mcp-files-exec",
       "description": "MCP 后端：AI 直接读写任意路径、下载文件与执行命令（可选恢复沙箱限制）；按 AI 会话隔离默认工作区（相对路径/默认 cwd 落到会话目录，无会话时维持共享沙箱根）",
       "type": "python",

@@ -2,6 +2,10 @@
 
 标题格式为 `## <版本号>`，release 工作流按标签版本号读取对应段落作为发布说明；日常更新以「Unreleased」汇总，发版前改成版本号并补日期。
 
+## Unreleased
+
+- 新增 `media-fetch` 后端（默认端口 46679）：媒体接口中转，代插件请求音频/图片接口并把**二进制响应转成 base64 JSON**。海豹的 JS 引擎是 goja，其 fetch 只有 `text()`/`json()`，没有 `arrayBuffer()`/`bytes()`，而 `text()` 会按 UTF-8 解码把原始字节替换成 U+FFFD 永久损坏——因此「整个响应体即音频/图片」的接口（OpenAI 兼容 `/audio/speech`、百度短文本合成 `tsn.baidu.com/text2audio`、阿里 CosyVoice 等）在插件里原本无法使用。该后端把这一步搬到 Python（能无损拿到 `response.content`），请求的 method/headers/body 全部由插件透传、本服务不掺和业务语义；上游返回 JSON 时原样交回（插件按 `data_path` 取数），返回二进制时给 `{base64, contentType, upstreamStatus, bytes}`，并带回上游状态码以便插件识别鉴权/余额错误。另提供 `/health` 探活。
+
 ## 0.11.15 - 2026-09-03
 
 - ob11-core-bridge 升级到 1.1.0：协议端实时事件（message/notice/request/meta）不再转发给核心，改为“海豹直连协议端收发 + 桥只做核心 API 中转与 `run_core_command` 指令注入/捕获”的双连接冗余部署，避免同一事件双份进入海豹导致重复处理；`/healthz` 新增 `droppedProtocolEvents` 计数
