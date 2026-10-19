@@ -131,7 +131,7 @@
       "entry": "imagehost.py",
       "deps": "requirements.txt",
       "port": 46680,
-      "version": "1.0.1",
+      "version": "1.0.2",
       "source": "https://raw.githubusercontent.com/error2913/aiplugin4-backends/shop/backends/image-host",
       "files": [
         "backend.json",
