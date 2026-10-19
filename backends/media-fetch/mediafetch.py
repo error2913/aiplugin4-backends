@@ -120,12 +120,16 @@ def fetch_as_base64():
         })
 
     # 上游返回二进制：这里是整个服务存在的理由 —— base64 无损带回
-    return jsonify({
+    payload = {
         "base64": base64.b64encode(raw).decode("ascii"),
         "contentType": content_type,
         "upstreamStatus": status,
         "bytes": len(raw),
-    })
+    }
+    if status >= 400:
+        # 供插件构造 ApiError（错误分类/展示上游原文）；老插件忽略该字段
+        payload["bodyText"] = raw.decode("utf-8", errors="replace")[:2000]
+    return jsonify(payload)
 
 
 @app.route("/health", methods=["GET"])
