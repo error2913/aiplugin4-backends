@@ -1,5 +1,6 @@
 # coding: utf-8
 
+import base64
 import datetime
 import io
 import logging
@@ -158,16 +159,21 @@ async def get_chart_url(request: Request, background_tasks: BackgroundTasks):
         temp_filepath = os.path.join(TEMP_DIR, temp_filename)
         
         # 保存图片到临时目录
+        buf_bytes = buf.getvalue()
         with open(temp_filepath, "wb") as f:
-            f.write(buf.getvalue())
-            
+            f.write(buf_bytes)
+
         # 添加后台任务，清理过期文件
         background_tasks.add_task(cleanup_temp_files)
 
-        # 返回临时图片 URL
+        # 返回临时图片 URL（兼容旧插件）+ base64（新插件落本地图：token 不进 URL、不依赖 URL 可达）
         base_url = str(request.base_url)
         image_url = f"{base_url}temp_images/{temp_filename}"
-        return JSONResponse(content={"image_url": image_url})
+        return JSONResponse(content={
+            "image_url": image_url,
+            "base64": base64.b64encode(buf_bytes).decode("ascii"),
+            "content_type": "image/png",
+        })
         
     except HTTPException:
         raise
