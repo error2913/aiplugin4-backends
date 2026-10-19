@@ -1,0 +1,1820 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>图床 · 相册</title>
+<script>
+/* 主题在首帧前应用，避免闪白 */
+(function () {
+  try {
+    var mode = localStorage.getItem('ih-theme') || 'auto';
+    var dark = mode === 'dark' || (mode === 'auto' && window.matchMedia('(prefers-color-scheme: dark)').matches);
+    document.documentElement.dataset.theme = dark ? 'dark' : 'light';
+    document.documentElement.dataset.mode = mode;
+  } catch (e) { /* 隐私模式忽略 */ }
+})();
+</script>
+<style>
+*,*::before,*::after{box-sizing:border-box}
+
+/* ---------- 主题变量 ---------- */
+:root,[data-theme=light]{
+  --bg:#f4f6f9; --panel:#ffffff; --panel2:#f8fafc;
+  --bd:#e4e7ec; --bd2:#eef0f3;
+  --tx:#1f2937; --mut:#6b7280;
+  --accent:#2563eb; --accent-d:#1d4ed8; --focus:rgba(37,99,235,.14);
+  --soft:#eff6ff; --soft-bd:#dbeafe;
+  --chip-bg:#f2f4f7; --chip-tx:#475467;
+  --thumb-bg:#e9edf2; --bar:rgba(255,255,255,.9);
+  --shadow:rgba(16,24,40,.07);
+  --danger:#b42318; --danger-bd:#fecdca; --danger-bg:#fef3f2;
+  --keep:#1d4ed8;
+  --toast-bg:#111827; --toast-tx:#ffffff;
+  --r:14px;
+}
+[data-theme=dark]{
+  --bg:#0d1015; --panel:#161a21; --panel2:#1c222c;
+  --bd:#262d38; --bd2:#2b3340;
+  --tx:#e7eaf0; --mut:#98a2b3;
+  --accent:#60a5fa; --accent-d:#3b82f6; --focus:rgba(96,165,250,.25);
+  --soft:#16243b; --soft-bd:#1e3a5f;
+  --chip-bg:#1f252f; --chip-tx:#c6cdd9;
+  --thumb-bg:#0f141a; --bar:rgba(22,26,33,.9);
+  --shadow:rgba(0,0,0,.5);
+  --danger:#f97066; --danger-bd:#4a2622; --danger-bg:#2a1715;
+  --keep:#93c5fd;
+  --toast-bg:#e7eaf0; --toast-tx:#111827;
+}
+html,body{height:100%}
+body{margin:0;background:var(--bg);color:var(--tx);font:14px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;-webkit-font-smoothing:antialiased;transition:background .18s,color .18s}
+.hidden{display:none!important}
+/* 原生 hidden 属性会被 .qlist/.dropovl 的 display:flex 覆盖，这里强制生效 */
+[hidden]{display:none!important}
+.muted{color:var(--mut);font-size:13px;line-height:1.7;margin:8px 0 0}
+
+/* ---------- 通用控件 ---------- */
+button{font:inherit;height:34px;padding:0 12px;border:1px solid var(--bd);border-radius:9px;background:var(--panel);color:var(--tx);cursor:pointer;white-space:nowrap;transition:background .15s,border-color .15s,color .15s}
+button:hover:not(:disabled){background:var(--panel2)}
+button:disabled{opacity:.55;cursor:default}
+button.primary{background:var(--accent);border-color:var(--accent);color:#fff}
+button.primary:hover:not(:disabled){background:var(--accent-d)}
+button.ghost{height:28px;padding:0 10px;font-size:12.5px;color:var(--mut);background:none;border-color:transparent}
+button.ghost:hover:not(:disabled){color:var(--tx);background:var(--panel2);border-color:var(--bd)}
+input[type=text],input[type=password],select{height:34px;min-width:0;padding:0 10px;font:inherit;color:var(--tx);background:var(--panel);border:1px solid var(--bd);border-radius:9px;outline:none;transition:border-color .15s,box-shadow .15s,background .18s}
+input::placeholder,textarea::placeholder{color:var(--mut)}
+input:focus,select:focus,textarea:focus{border-color:var(--accent);box-shadow:0 0 0 3px var(--focus)}
+select option{background:var(--panel);color:var(--tx)}
+
+/* ---------- 登录 / 提示 ---------- */
+.center{min-height:100vh;display:flex;align-items:center;justify-content:center;padding:24px}
+.stack{width:min(400px,100%);display:flex;flex-direction:column;gap:10px;align-items:center}
+.panel{width:100%;padding:30px 28px;text-align:center;background:var(--panel);border:1px solid var(--bd);border-radius:18px;box-shadow:0 12px 40px var(--shadow);transition:background .18s,border-color .18s}
+.panel h1{margin:0;font-size:18px;font-weight:650}
+.login{display:flex;flex-direction:column;gap:10px;text-align:left}
+.login h1,.login .muted{text-align:center}
+.login .muted{margin:0 0 6px}
+.login button{height:38px;margin-top:2px;font-weight:600}
+.themeRow{display:flex;justify-content:center}
+.err{min-height:18px;margin:2px 0 0;text-align:center;font-size:13px;color:var(--danger)}
+
+/* ---------- 顶栏与画廊 ---------- */
+.topbar{position:sticky;top:0;z-index:10;display:flex;flex-wrap:wrap;align-items:center;gap:8px;padding:10px 20px;background:var(--bar);border-bottom:1px solid var(--bd);box-shadow:0 1px 2px var(--shadow);backdrop-filter:blur(10px);transition:background .18s,border-color .18s}
+.brand{margin-right:4px;font-size:15px;font-weight:700;letter-spacing:.3px}
+#searchWrap{flex:1 1 200px;max-width:340px}
+#tagWrap{flex:0 0 158px}
+.spacer{flex:1 1 0}
+.searchwrap{position:relative;display:inline-flex;align-items:center;min-width:0}
+.searchwrap>input{width:100%;padding-right:26px}
+.clr{position:absolute;right:3px;top:50%;transform:translateY(-50%);width:20px;height:20px;padding:0;display:inline-flex;align-items:center;justify-content:center;font-size:14px;line-height:1;color:var(--mut);background:none;border:0;border-radius:50%}
+.clr:hover:not(:disabled){background:var(--bd2);color:var(--tx)}
+#themeBtn{min-width:104px;color:var(--mut)}
+.wrap{max-width:1320px;margin:0 auto;padding:20px}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:14px}
+.card{position:relative;display:flex;flex-direction:column;overflow:hidden;background:var(--panel);border:1px solid var(--bd);border-radius:var(--r);box-shadow:0 1px 2px var(--shadow);transition:box-shadow .18s,transform .18s,background .18s,border-color .18s}
+.card:hover{box-shadow:0 10px 28px var(--shadow);transform:translateY(-2px)}
+.card.sel{border-color:var(--accent);box-shadow:0 0 0 3px var(--focus),0 10px 28px var(--shadow)}
+.card.batch .thumb{cursor:pointer}
+.thumb{display:block;aspect-ratio:1/1;overflow:hidden;background:var(--thumb-bg)}
+.thumb img{display:block;width:100%;height:100%;object-fit:cover}
+.body{display:flex;flex:1;flex-direction:column;gap:8px;padding:11px 12px 12px}
+.titlerow{display:flex;align-items:flex-start;gap:6px}
+.name{flex:1;min-width:0;height:auto;padding:0;overflow:hidden;border:0;background:none;font-size:14px;font-weight:600;text-align:left;text-overflow:ellipsis;white-space:nowrap}
+.name:hover:not(:disabled){background:none;color:var(--accent);text-decoration:underline}
+.rename{width:100%;height:28px;font-size:13px}
+.badge{flex:none;padding:0 7px;font-size:11px;line-height:18px;white-space:nowrap;border:1px solid transparent;border-radius:999px}
+.badge.plugin{background:var(--chip-bg);border-color:var(--bd);color:var(--chip-tx)}
+.badge.manual{background:var(--soft);border-color:var(--soft-bd);color:var(--keep)}
+.badge.trash{background:var(--danger-bg);border-color:var(--danger-bd);color:var(--danger)}
+
+/* ---------- 批量选择 ---------- */
+.pick{position:absolute;top:8px;left:8px;z-index:3;display:none;align-items:center;justify-content:center;width:24px;height:24px;background:var(--panel);border:1px solid var(--bd);border-radius:7px;box-shadow:0 2px 8px var(--shadow);cursor:pointer}
+.card.batch .pick{display:flex}
+.pick input{width:15px;height:15px;margin:0;accent-color:var(--accent);cursor:pointer}
+.card.sel .pick{border-color:var(--accent)}
+
+.tabs{display:inline-flex;padding:2px;background:var(--panel2);border:1px solid var(--bd);border-radius:9px}
+.tabs.compact .tab{padding:0 8px;font-size:12px}
+.tab{height:28px;padding:0 10px;font-size:12.5px;color:var(--mut);background:none;border:0;border-radius:7px}
+.tab:hover:not(:disabled){background:var(--bd2);color:var(--tx)}
+.tab.on{background:var(--panel);color:var(--tx);font-weight:600;box-shadow:0 1px 2px var(--shadow)}
+.topbar.tagsmode #searchWrap,.topbar.tagsmode #tagWrap,
+.topbar.tagsmode #origin,.topbar.tagsmode #selectBtn{display:none!important}
+.pop .chips{max-height:120px;overflow:auto}
+.tagbar{display:flex;align-items:center;gap:10px;margin:0 0 16px}
+#tagsWrap{flex:0 1 280px}
+.tagsgrid{display:flex;flex-wrap:wrap;gap:8px;padding-bottom:8px}
+.tagcard{display:inline-flex;align-items:center;gap:8px;height:34px;padding:0 13px;font-size:13px;color:var(--tx);background:var(--panel);border:1px solid var(--bd);border-radius:999px;cursor:pointer;transition:border-color .15s,background .15s}
+.tagcard:hover{border-color:var(--accent);background:var(--panel2)}
+.tagcard .cnt{font-size:12px;color:var(--mut)}
+.tagcard .dot{width:6px;height:6px;border-radius:50%;background:var(--accent)}
+/* 加标签：内联输入 + 可选已有标签 */
+.taginwrap{display:flex;flex-wrap:wrap;flex-basis:100%;align-items:center;gap:6px}
+.tagrow{display:inline-flex;align-items:center;gap:5px}
+/* 加号用两根 CSS 方条画，避免字体字形上下不对称 */
+.addbtn{position:relative;width:26px;height:26px;padding:0;flex:none;font-size:0;line-height:0;color:#fff;background:var(--accent);border:1px solid var(--accent);border-radius:8px}
+.addbtn::before,.addbtn::after{content:'';position:absolute;left:50%;top:50%;background:currentColor;border-radius:1px;transform:translate(-50%,-50%)}
+.addbtn::before{width:12px;height:2px}
+.addbtn::after{width:2px;height:12px}
+.addbtn:disabled{color:var(--mut);background:var(--panel);border-color:var(--bd);opacity:.55;cursor:default}
+.addbtn:hover:not(:disabled){background:var(--accent-d)}
+.tagsugg{display:flex;flex-wrap:wrap;gap:6px;flex-basis:100%;margin-top:2px;max-height:96px;overflow:auto}
+.tagsugg:empty{display:none}
+.suggchip{height:24px;padding:0 9px;font-size:12px;color:var(--chip-tx);background:var(--chip-bg);border:1px solid var(--bd2);border-radius:999px}
+.suggchip:hover:not(:disabled){border-color:var(--accent);color:var(--accent)}
+.suggempty{font-size:12px;color:var(--mut)}
+.selbar{display:flex;flex-wrap:wrap;align-items:center;gap:8px;width:100%}
+.selinfo{font-size:13px;font-weight:600;margin-right:4px}
+.topbar.batching > :not(#selBar){display:none!important}
+body.queue-up .queue{bottom:76px}
+body.queue-up .qreopen{bottom:76px}
+
+/* ---------- 标签 ---------- */
+.chips{display:flex;flex-wrap:wrap;gap:5px}
+.chip{display:inline-flex;align-items:center;gap:2px;height:22px;padding:0 4px 0 8px;font-size:12px;color:var(--chip-tx);background:var(--chip-bg);border:1px solid var(--bd2);border-radius:999px}
+.chip button{display:inline-flex;align-items:center;justify-content:center;width:16px;height:16px;padding:0;font-size:14px;line-height:1;color:var(--mut);background:none;border:0;border-radius:50%}
+.chip button:hover:not(:disabled){background:var(--bd);color:var(--danger)}
+button.chip.add{padding:0 8px;font-size:12px;color:var(--keep);background:var(--soft);border:1px dashed var(--soft-bd)}
+button.chip.add:hover:not(:disabled){background:var(--panel2);border-color:var(--accent)}
+button.chip.tagpick{padding:0 9px;gap:4px;cursor:pointer}
+button.chip.tagpick:hover:not(:disabled){color:var(--danger);border-color:var(--danger-bd);background:var(--danger-bg)}
+.tagin{width:112px;height:22px;padding:0 9px;font:inherit;font-size:12px;color:var(--tx);background:var(--panel);border:1px solid var(--accent);border-radius:999px;outline:none;box-shadow:0 0 0 3px var(--focus)}
+
+/* ---------- 来源 / 元信息 / 操作 ---------- */
+.src{display:flex;flex-direction:column;gap:3px;font-size:12px;color:var(--mut)}
+.srcline{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+button.more{align-self:flex-start;height:auto;padding:0;font-size:12px;color:var(--accent);background:none;border:0}
+button.more:hover:not(:disabled){background:none;text-decoration:underline}
+.meta{padding-top:8px;font-size:12px;color:var(--mut);border-top:1px solid var(--bd2)}
+.acts{display:flex;flex-wrap:wrap;gap:8px;margin-top:auto}
+.acts button{height:30px;padding:0 10px;font-size:12.5px}
+.acts .keep{color:var(--keep);background:var(--soft);border-color:var(--soft-bd)}
+.acts .keep:hover:not(:disabled){background:var(--panel2)}
+.acts .danger{color:var(--danger);border-color:var(--danger-bd)}
+.acts .danger:hover:not(:disabled){background:var(--danger-bg)}
+.msg{padding:56px 0;text-align:center;font-size:14px;color:var(--mut)}
+.foot{display:flex;flex-direction:column;align-items:center;gap:8px;padding:24px 0 40px}
+.foot button{min-width:140px}
+.note{font-size:12px;color:var(--mut)}
+
+/* ---------- 底部批量操作条 ---------- */
+.batchbar{position:fixed;left:50%;bottom:18px;z-index:65;display:flex;flex-wrap:wrap;align-items:center;justify-content:center;gap:6px;max-width:calc(100vw - 40px);padding:8px 10px;background:var(--bar);border:1px solid var(--bd);border-radius:12px;box-shadow:0 10px 30px var(--shadow);backdrop-filter:blur(10px)}
+.batchbar button{height:30px;padding:0 10px;font-size:12.5px}
+.batchbar .danger{color:var(--danger);border-color:var(--danger-bd)}
+.batchbar .danger:hover:not(:disabled){background:var(--danger-bg)}
+.batchgroup{display:flex;flex-wrap:wrap;align-items:center;justify-content:center;gap:6px}
+.batchgroup[hidden]{display:none!important}
+.batchprog{font-size:12px;color:var(--mut);font-variant-numeric:tabular-nums;padding:0 4px}
+.batchprog:empty{display:none}
+
+/* ---------- 悬浮弹层（批量标签） ---------- */
+.pop{position:fixed;left:50%;bottom:76px;z-index:75;transform:translateX(-50%);width:min(440px,calc(100vw - 28px));padding:14px;background:var(--panel);border:1px solid var(--bd);border-radius:14px;box-shadow:0 18px 50px var(--shadow);animation:pop .16s ease-out}
+.pophead{margin:0 0 8px;font-size:13.5px;font-weight:600}
+.popnote{margin:0 0 8px;font-size:12px;color:var(--mut);line-height:1.6}
+.pop .chips{margin:0 0 9px}
+.pop input.popin{width:100%;height:34px;margin:0 0 9px}
+.popfoot{display:flex;justify-content:flex-end;gap:8px}
+
+/* ---------- 上传队列 ---------- */
+.queue{position:fixed;left:18px;bottom:18px;z-index:70;display:flex;flex-direction:column;width:min(320px,calc(100vw - 36px));max-height:44vh;overflow:hidden;background:var(--panel);border:1px solid var(--bd);border-radius:12px;box-shadow:0 14px 40px var(--shadow);transition:bottom .18s}
+.qhead{display:flex;align-items:center;gap:6px;padding:8px 10px;background:var(--panel2);border-bottom:1px solid var(--bd)}
+.qtitle{font-size:13px;font-weight:600}
+.qcount{margin-right:auto;font-size:12px;color:var(--mut);font-variant-numeric:tabular-nums}
+.qhead button{height:24px;padding:0 7px;font-size:12px}
+.qlist{display:flex;flex-direction:column;gap:6px;padding:6px 10px 8px;overflow:auto}
+.qrow{display:flex;align-items:center;gap:8px;min-width:0;font-size:12.5px}
+.qname{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.qst{flex:none;font-size:11.5px;color:var(--mut)}
+.qrow.done .qst{color:var(--keep)}
+.qrow.failed .qst{color:var(--danger)}
+.qrow button{height:22px;padding:0 7px;font-size:11.5px}
+.qreopen{position:fixed;left:18px;bottom:18px;z-index:69;height:32px;padding:0 12px;font-size:12.5px;color:var(--tx);background:var(--panel);border:1px solid var(--bd);border-radius:10px;box-shadow:0 8px 24px var(--shadow);transition:bottom .18s}
+
+/* ---------- 拖拽覆盖层 ---------- */
+.dropovl{position:fixed;inset:0;z-index:88;display:flex;align-items:center;justify-content:center;padding:24px;background:rgba(8,10,14,.35);backdrop-filter:blur(2px);pointer-events:none;animation:fade .12s ease-out}
+.dropbox{padding:24px 30px;font-size:16px;font-weight:600;text-align:center;color:var(--tx);background:var(--panel);border:2px dashed var(--accent);border-radius:16px;box-shadow:0 20px 60px var(--shadow)}
+
+/* ---------- toast / 确认框 ---------- */
+.toast{position:fixed;right:18px;bottom:18px;z-index:80;display:flex;align-items:center;gap:10px;max-width:min(380px,80vw);padding:10px 14px;font-size:13px;color:var(--toast-tx);background:var(--toast-bg);border-radius:10px;box-shadow:0 10px 30px rgba(0,0,0,.28);opacity:0;transform:translateY(8px);pointer-events:none;transition:opacity .2s,transform .2s}
+.toast.show{opacity:1;transform:none;pointer-events:auto}
+.toast-act{flex:none;height:24px;padding:0 8px;font-size:12px;color:var(--toast-tx);background:transparent;border:1px solid currentColor;border-radius:6px}
+.toast-act:hover:not(:disabled){background:rgba(127,127,127,.18)}
+.ovl{position:fixed;inset:0;z-index:90;display:flex;align-items:center;justify-content:center;padding:24px;background:rgba(8,10,14,.45);backdrop-filter:blur(2px);animation:fade .15s ease-out}
+.dlg{width:min(380px,100%);padding:22px 22px 18px;background:var(--panel);border:1px solid var(--bd);border-radius:16px;box-shadow:0 24px 60px rgba(0,0,0,.35);animation:pop .16s ease-out}
+.dlg.wide{width:min(480px,100%)}
+.dlgtitle{margin:0 0 8px;font-size:16px;font-weight:650}
+.dlghint{margin:0 0 10px;font-size:12.5px;color:var(--mut);line-height:1.6}
+.dlgmsg{margin:0 0 18px;font-size:14px;line-height:1.65;color:var(--tx);word-break:break-word}
+.dlgmsg strong{font-weight:650}
+.dlg input[type=text]{width:100%;height:36px;margin:0 0 16px}
+.dlg textarea.dlgta{display:block;width:100%;min-height:120px;padding:9px 10px;margin:0 0 16px;font:inherit;font-size:13px;line-height:1.6;color:var(--tx);background:var(--panel);border:1px solid var(--bd);border-radius:9px;outline:none;resize:vertical;transition:border-color .15s,box-shadow .15s}
+.dlgrow{display:flex;justify-content:flex-end;gap:8px}
+.dlgrow button{min-width:74px}
+.dlgrow .danger{color:#fff;background:var(--danger);border-color:var(--danger)}
+.dlgrow .danger:hover:not(:disabled){filter:brightness(1.08)}
+@keyframes fade{from{opacity:0}to{opacity:1}}
+@keyframes pop{from{opacity:0;transform:translateY(6px) scale(.98)}to{opacity:1;transform:none}}
+@media (max-width:720px){
+  body.queue-up .queue{bottom:150px;max-height:30vh}
+  body.queue-up .qreopen{bottom:150px}
+  .batchbar{max-width:calc(100vw - 24px)}
+  .pop{bottom:150px}
+}
+@media (max-width:600px){.topbar{padding:10px 12px}.wrap{padding:14px 12px}#searchWrap{flex-basis:100%;max-width:none;order:10}#themeBtn{min-width:0}}
+</style>
+</head>
+<body>
+<section id="notice" class="center hidden">
+  <div class="stack">
+    <div class="panel">
+      <h1>WebUI 未启用</h1>
+      <p class="muted">WebUI 未启用：后端未设置 AIPLUGIN4_IMAGE_HOST_PASSWORD</p>
+    </div>
+    <div class="themeRow"><button class="ghost" data-theme-btn type="button">外观：跟随系统</button></div>
+  </div>
+</section>
+
+<section id="login" class="center hidden">
+  <div class="stack">
+    <form id="loginForm" class="panel login">
+      <h1>登录图床</h1>
+      <p class="muted">请输入访问密码以查看图库。</p>
+      <input id="password" type="password" placeholder="密码" autocomplete="current-password" required>
+      <button id="loginBtn" class="primary" type="submit">登录</button>
+      <p id="loginErr" class="err"></p>
+    </form>
+    <div class="themeRow"><button class="ghost" data-theme-btn type="button">外观：跟随系统</button></div>
+  </div>
+</section>
+
+<section id="gallery" class="hidden">
+  <header class="topbar" id="topbar">
+    <span class="brand">图床</span>
+    <div class="tabs" role="group" aria-label="视图切换">
+      <button id="viewLib" class="tab on" type="button" aria-pressed="true">图库</button>
+      <button id="viewTrash" class="tab" type="button" aria-pressed="false">回收站</button>
+      <button id="viewTags" class="tab" type="button" aria-pressed="false">标签</button>
+    </div>
+    <span class="searchwrap" id="searchWrap">
+      <input id="search" type="text" placeholder="搜索名称 / 标签 / ID…" aria-label="搜索">
+      <button type="button" class="clr" data-for="search" hidden aria-label="清空搜索" title="清空">×</button>
+    </span>
+    <span class="searchwrap" id="tagWrap">
+      <input id="tag" type="text" placeholder="标签筛选（输入即筛）" aria-label="标签筛选">
+      <button type="button" class="clr" data-for="tag" hidden aria-label="清空标签筛选" title="清空">×</button>
+    </span>
+    <div class="tabs compact" id="origin" role="group" aria-label="来源筛选">
+      <button type="button" class="tab on" data-v="">全部</button>
+      <button type="button" class="tab" data-v="plugin">插件抓的</button>
+      <button type="button" class="tab" data-v="manual">手动上传</button>
+    </div>
+    <span class="spacer"></span>
+    <button id="themeBtn" data-theme-btn type="button" title="切换外观">外观：跟随系统</button>
+    <button id="selectBtn" type="button">选择</button>
+    <button id="importBtn" type="button">导入链接</button>
+    <button id="uploadBtn" class="primary" type="button">上传</button>
+    <button id="refreshBtn" type="button">刷新</button>
+    <button id="logoutBtn" type="button">登出</button>
+    <input id="file" type="file" accept="image/*" multiple hidden>
+    <div id="selBar" class="selbar hidden">
+      <span id="selInfo" class="selinfo">已选 0 张</span>
+      <button id="selPage" type="button">全选本页</button>
+      <button id="selAll" type="button">全选全部(共 0)</button>
+      <button id="selCancel" type="button">取消</button>
+    </div>
+  </header>
+  <main class="wrap" id="galleryMain">
+    <div id="msg" class="msg">加载中…</div>
+    <div id="grid" class="grid"></div>
+    <div class="foot">
+      <button id="more" type="button" disabled>加载更多</button>
+      <span id="footNote" class="note"></span>
+    </div>
+  </main>
+  <main id="tagsMain" class="wrap hidden">
+    <div class="tagbar">
+      <span class="searchwrap" id="tagsWrap">
+        <input id="tagsSearch" type="text" placeholder="过滤标签…" aria-label="过滤标签">
+        <button type="button" class="clr" data-for="tagsSearch" hidden aria-label="清空过滤" title="清空">×</button>
+      </span>
+      <span id="tagsInfo" class="note"></span>
+    </div>
+    <div id="tagsGrid" class="tagsgrid"></div>
+    <div id="tagsMsg" class="msg hidden">加载中…</div>
+    <div class="foot">
+      <button id="tagsMore" type="button" disabled>加载更多</button>
+      <span id="tagsNote" class="note"></span>
+    </div>
+  </main>
+</section>
+
+<div id="dropOvl" class="dropovl hidden" aria-hidden="true">
+  <div id="dropText" class="dropbox">松开上传文件</div>
+</div>
+
+<div id="queue" class="queue hidden" role="region" aria-label="上传队列">
+  <div class="qhead">
+    <span class="qtitle">上传队列</span>
+    <span id="qCount" class="qcount">0/0</span>
+    <button id="qRetryAll" class="ghost" type="button">全部重试</button>
+    <button id="qFold" class="ghost" type="button">收起</button>
+    <button id="qClose" class="ghost" type="button" title="关闭面板（不会取消上传）" aria-label="关闭上传队列面板">×</button>
+  </div>
+  <div id="qList" class="qlist"></div>
+</div>
+<button id="qReopen" class="qreopen hidden" type="button">上传队列</button>
+
+<div id="batchActions" class="batchbar hidden" role="toolbar" aria-label="批量操作">
+  <span id="batchProg" class="batchprog" aria-live="polite"></span>
+  <span class="batchgroup" data-view="lib">
+    <button type="button" data-act="tag">加标签</button>
+    <button type="button" data-act="untag">删标签</button>
+    <button type="button" data-act="keep">存图库</button>
+    <button type="button" data-act="unkeep" class="danger">移出图库</button>
+    <button type="button" data-act="copy">复制链接</button>
+    <button type="button" data-act="delete" class="danger">删除</button>
+  </span>
+  <span class="batchgroup" data-view="trash" hidden>
+    <button type="button" data-act="restore">恢复</button>
+    <button type="button" data-act="purge" class="danger">彻底删除</button>
+  </span>
+</div>
+
+<div id="toast" class="toast" role="status" aria-live="polite"></div>
+<script>
+'use strict';
+const $ = (s) => document.querySelector(s);
+const el = (tag, cls) => { const n = document.createElement(tag); if (cls) n.className = cls; return n; };
+const btn = (text, cls, title) => { const b = el('button', cls); b.type = 'button'; b.textContent = text; if (title) b.title = title; return b; };
+const noticeView = $('#notice'), loginView = $('#login'), galleryView = $('#gallery');
+const topbar = $('#topbar');
+const grid = $('#grid'), msgEl = $('#msg'), moreBtn = $('#more'), footNote = $('#footNote'), toastEl = $('#toast');
+const searchInput = $('#search'), tagInput = $('#tag'), originSel = $('#origin');
+const passwordInput = $('#password'), loginErr = $('#loginErr'), loginBtn = $('#loginBtn');
+const fileInput = $('#file'), uploadBtn = $('#uploadBtn'), importBtn = $('#importBtn');
+const viewLib = $('#viewLib'), viewTrash = $('#viewTrash'), viewTags = $('#viewTags');
+const galleryMain = $('#galleryMain'), tagsMain = $('#tagsMain');
+const tagsGrid = $('#tagsGrid'), tagsMsg = $('#tagsMsg'), tagsMore = $('#tagsMore');
+const tagsNote = $('#tagsNote'), tagsSearch = $('#tagsSearch'), tagsInfo = $('#tagsInfo');
+const selectBtn = $('#selectBtn'), selBar = $('#selBar'), selInfo = $('#selInfo');
+const selPage = $('#selPage'), selAll = $('#selAll'), selCancel = $('#selCancel');
+const batchActions = $('#batchActions'), batchProg = $('#batchProg');
+const queueEl = $('#queue'), qCount = $('#qCount'), qList = $('#qList');
+const qRetryAll = $('#qRetryAll'), qFold = $('#qFold'), qClose = $('#qClose'), qReopen = $('#qReopen');
+const dropOvl = $('#dropOvl'), dropText = $('#dropText');
+const state = { q: '', tag: '', origin: '', limit: 24, offset: 0, total: 0, loaded: 0, busy: false, err: '', trash: false, items: new Map(),
+                mode: 'lib', tagsQuery: '', tagsOffset: 0, tagsTotal: 0, tagsLoaded: 0, tagsBusy: false };
+const cardViews = new Map();
+const batch = { active: false, allMatching: false, ids: new Set(), filter: null, expected: 0, busy: false };
+
+/* ---------------- 外观切换 ---------------- */
+const THEME_KEY = 'ih-theme';
+const THEME_MODES = [
+  { id: 'auto', label: '跟随系统' },
+  { id: 'light', label: '浅色' },
+  { id: 'dark', label: '深色' },
+];
+const darkQuery = window.matchMedia('(prefers-color-scheme: dark)');
+function currentMode() {
+  try { return localStorage.getItem(THEME_KEY) || 'auto'; } catch (e) { return 'auto'; }
+}
+function resolveDark(mode) { return mode === 'dark' || (mode === 'auto' && darkQuery.matches); }
+function applyTheme(mode) {
+  document.documentElement.dataset.theme = resolveDark(mode) ? 'dark' : 'light';
+  document.documentElement.dataset.mode = mode;
+  const label = '外观：' + ((THEME_MODES.find((m) => m.id === mode) || THEME_MODES[0]).label);
+  document.querySelectorAll('[data-theme-btn]').forEach((b) => {
+    b.textContent = label;
+    b.title = '点击切换：跟随系统 → 浅色 → 深色';
+  });
+}
+function cycleTheme() {
+  const order = THEME_MODES.map((m) => m.id);
+  const next = order[(order.indexOf(currentMode()) + 1) % order.length];
+  try { localStorage.setItem(THEME_KEY, next); } catch (e) { /* 忽略 */ }
+  applyTheme(next);
+}
+document.querySelectorAll('[data-theme-btn]').forEach((b) => b.addEventListener('click', cycleTheme));
+darkQuery.addEventListener('change', () => applyTheme(currentMode()));
+applyTheme(currentMode());
+
+function show(view) { [noticeView, loginView, galleryView].forEach((v) => v.classList.toggle('hidden', v !== view)); }
+let toastTimer = 0;
+let toastActionBtn = null;
+function clearToastAction() {
+  if (toastActionBtn) { toastActionBtn.remove(); toastActionBtn = null; }
+}
+function toast(text) {
+  clearTimeout(toastTimer);
+  clearToastAction();
+  toastEl.textContent = text;
+  toastEl.classList.add('show');
+  toastTimer = setTimeout(() => toastEl.classList.remove('show'), 3000);
+}
+function toastWithUndo(text, onUndo) {
+  clearTimeout(toastTimer);
+  clearToastAction();
+  toastEl.textContent = '';
+  const span = el('span');
+  span.textContent = text;
+  const undo = btn('撤销', 'toast-act');
+  toastActionBtn = undo;
+  undo.addEventListener('click', () => {
+    clearTimeout(toastTimer);
+    toastEl.classList.remove('show');
+    clearToastAction();
+    onUndo();
+  });
+  toastEl.append(span, undo);
+  toastEl.classList.add('show');
+  toastTimer = setTimeout(() => toastEl.classList.remove('show'), 30000);
+}
+async function api(path, opts) {
+  const init = Object.assign({ credentials: 'same-origin' }, opts || {});
+  if (init.body && !(init.body instanceof FormData)) {
+    init.headers = Object.assign({ 'Content-Type': 'application/json' }, init.headers || {});
+    init.body = JSON.stringify(init.body);
+  }
+  let res;
+  try { res = await fetch(path, init); } catch (e) { throw new Error('网络请求失败'); }
+  let data = null;
+  try { data = await res.json(); } catch (e) { data = null; }
+  if (res.status === 401 && !galleryView.classList.contains('hidden')) showLogin();
+  if (!res.ok) {
+    const err = new Error((data && data.error) || ('HTTP ' + res.status));
+    err.status = res.status;
+    err.code = (data && data.error) || '';
+    err.data = data;
+    throw err;
+  }
+  return data;
+}
+
+/* ---------------- 确认框（替代浏览器 confirm） ---------------- */
+function strong(text) {
+  const s = el('strong');
+  s.textContent = String(text);
+  return s;
+}
+function askConfirm(message, okText, danger, opts) {
+  opts = opts || {};
+  return new Promise((resolve) => {
+    const ovl = el('div', 'ovl'), dlg = el('div', 'dlg');
+    dlg.setAttribute('role', 'dialog'); dlg.setAttribute('aria-modal', 'true');
+    const msg = el('p', 'dlgmsg');
+    if (message && message.nodeType) msg.appendChild(message); else msg.textContent = String(message == null ? '' : message);
+    const row = el('div', 'dlgrow');
+    const no = btn('取消'), yes = btn(okText || '确定', danger ? 'danger' : 'primary');
+    let input = null;
+    if (opts.requireText) {
+      input = el('input');
+      input.type = 'text';
+      input.autocomplete = 'off';
+      input.placeholder = '输入「' + opts.requireText + '」以继续';
+      input.setAttribute('aria-label', input.placeholder);
+      yes.disabled = true;
+      input.addEventListener('input', () => { yes.disabled = input.value.trim() !== opts.requireText; });
+    }
+    let closed = false;
+    function done(value) {
+      if (closed) return; closed = true;
+      document.removeEventListener('keydown', onKey, true);
+      ovl.remove(); resolve(value);
+    }
+    function onKey(e) {
+      if (e.isComposing) return;
+      if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); done(false); }
+      else if (e.key === 'Enter' && !yes.disabled) { e.preventDefault(); e.stopPropagation(); done(true); }
+    }
+    no.addEventListener('click', () => done(false));
+    yes.addEventListener('click', () => done(true));
+    ovl.addEventListener('click', (e) => { if (e.target === ovl) done(false); });
+    document.addEventListener('keydown', onKey, true);
+    row.append(no, yes);
+    dlg.append(msg);
+    if (input) dlg.appendChild(input);
+    dlg.appendChild(row);
+    ovl.appendChild(dlg);
+    document.body.appendChild(ovl);
+    setTimeout(() => (input || yes).focus(), 0);
+  });
+}
+
+function fmtSize(n) {
+  if (n == null || isNaN(n)) return '-';
+  if (n < 1024) return n + ' B';
+  if (n < 1048576) return (n / 1024).toFixed(1) + ' KB';
+  return (n / 1048576).toFixed(1) + ' MB';
+}
+function fmtTime(ms) {
+  if (!ms) return '-';
+  const d = new Date(ms), p = (n) => String(n).padStart(2, '0');
+  return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate()) + ' ' + p(d.getHours()) + ':' + p(d.getMinutes());
+}
+async function patch(id, body) {
+  try { await api('/api/image/' + encodeURIComponent(id), { method: 'PATCH', body }); return true; }
+  catch (e) { if (e.status !== 401) toast('操作失败：' + e.message); return false; }
+}
+function tagChip(it, tag) {
+  const chip = el('span', 'chip'), label = el('span');
+  label.textContent = tag;
+  const x = btn('×');
+  x.title = '移除标签'; x.setAttribute('aria-label', '移除标签 ' + tag);
+  x.addEventListener('click', async () => {
+    if (!(await patch(it.id, { remove_tags: [tag] }))) return;
+    chip.remove(); it.tags = (it.tags || []).filter((v) => v !== tag);
+  });
+  chip.append(label, x);
+  return chip;
+}
+
+/* 卡片内联加标签：输入框 + 加号，也可点已有标签 */
+function startAddTag(it, chips, addBtn) {
+  const applied = new Set(it.tags || []);
+  const wrap = el('span', 'taginwrap');
+  const row = el('span', 'tagrow');
+  const input = el('input', 'tagin');
+  input.type = 'text';
+  input.placeholder = '输入或选择标签';
+  input.maxLength = 40;
+  input.setAttribute('aria-label', '新标签');
+  const plus = btn('+', 'addbtn', '添加这个标签');
+  plus.disabled = true;
+  row.append(input, plus);
+  const sugg = el('div', 'tagsugg');
+  wrap.append(row, sugg);
+  addBtn.replaceWith(wrap);
+  input.focus();
+  let closed = false;
+  const sync = () => { plus.disabled = !input.value.trim(); };
+  function close() {
+    if (closed) return;
+    closed = true;
+    if (wrap.isConnected) wrap.replaceWith(addBtn);
+  }
+  function refreshSugg() {
+    renderTagSugg(sugg, input.value, applied, (tag) => addTag(tag));
+  }
+  async function addTag(tag) {
+    const v = String(tag || '').trim();
+    if (!v) { sync(); return; }
+    if (applied.has(v)) {
+      toast('已有该标签');
+      input.value = '';
+      sync();
+      refreshSugg();
+      return;
+    }
+    if (!(await patch(it.id, { add_tags: [v] }))) return;
+    applied.add(v);
+    it.tags = (it.tags || []).concat(v);
+    const chipEl = tagChip(it, v);
+    if (wrap.isConnected) chips.insertBefore(chipEl, wrap);
+    else chips.appendChild(chipEl);
+    input.value = '';
+    refreshSugg();
+    sync();
+    if (!closed) input.focus();
+  }
+  plus.addEventListener('mousedown', (e) => e.preventDefault());  // 防止输入框先失焦
+  plus.addEventListener('click', () => addTag(input.value));
+  input.addEventListener('input', () => { refreshSugg(); sync(); });
+  input.addEventListener('keydown', (e) => {
+    if (e.isComposing) return;
+    if (e.key === 'Enter') { e.preventDefault(); addTag(input.value); }
+    else if (e.key === 'Escape') { e.preventDefault(); close(); }
+  });
+  input.addEventListener('blur', () => close());
+  refreshSugg();
+  sync();
+}
+
+function srcLine(s) {
+  const row = el('div', 'srcline');
+  const parts = [s.platform === 'manual' ? '手动' : (s.platform || '未知')];
+  if (s.group_id) parts.push('群 ' + s.group_id);
+  if (s.user_id) parts.push('用户 ' + s.user_id);
+  row.textContent = parts.join(' · ') + ' · ' + fmtTime(s.at);
+  return row;
+}
+function startRename(it, oldBtn) {
+  const input = el('input', 'rename');
+  input.type = 'text'; input.value = it.name || ''; input.maxLength = 200;
+  oldBtn.replaceWith(input); input.focus(); input.select();
+  let done = false;
+  async function finish(save) {
+    if (done) return; done = true;
+    const v = input.value.trim();
+    input.replaceWith(oldBtn);
+    if (!save || !v || v === (it.name || '')) return;
+    if (await patch(it.id, { name: v })) { it.name = v; oldBtn.textContent = v; }
+  }
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); finish(true); }
+    else if (e.key === 'Escape') { e.preventDefault(); finish(false); }
+  });
+  input.addEventListener('blur', () => finish(true));
+}
+
+/* ---------------- 批量选择 ---------------- */
+function isSelected(id) {
+  if (!batch.active) return false;
+  return batch.allMatching ? state.items.has(id) : batch.ids.has(id);
+}
+function selectedCount() {
+  if (!batch.active) return 0;
+  return batch.allMatching ? batch.expected : batch.ids.size;
+}
+function setSelected(id, on) {
+  if (!batch.active) return;
+  if (batch.allMatching) {
+    if (on) return;
+    batch.allMatching = false;
+    batch.ids = new Set(state.items.keys());
+    toast('已取消全选，仅保留当前勾选');
+  }
+  if (on) batch.ids.add(id); else batch.ids.delete(id);
+  renderSelection();
+}
+function toggleSelected(id) { setSelected(id, !isSelected(id)); }
+function syncCards() {
+  cardViews.forEach((view, id) => {
+    const on = isSelected(id);
+    view.card.classList.toggle('sel', on);
+    view.check.checked = on;
+  });
+}
+function renderSelection() {
+  if (!batch.active) {
+    batchActions.classList.add('hidden');
+    document.body.classList.remove('queue-up');
+    return;
+  }
+  const n = selectedCount();
+  selInfo.textContent = '已选 ' + n + ' 张' + (batch.allMatching ? '（筛选结果）' : '');
+  selAll.textContent = '全选全部(共 ' + state.total + ')';
+  selPage.disabled = batch.busy || state.loaded === 0;
+  selAll.disabled = batch.busy || !state.total;
+  selCancel.disabled = batch.busy;
+  const showBar = n > 0;
+  batchActions.classList.toggle('hidden', !showBar);
+  document.body.classList.toggle('queue-up', showBar);
+  batchActions.querySelectorAll('.batchgroup').forEach((g) => {
+    g.hidden = g.getAttribute('data-view') !== (state.trash ? 'trash' : 'lib');
+  });
+  batchActions.querySelectorAll('button').forEach((b) => { b.disabled = batch.busy; });
+  syncCards();
+}
+function enterBatch() {
+  if (batch.active) return;
+  batch.active = true;
+  batch.allMatching = false;
+  batch.ids.clear();
+  batch.filter = null;
+  batch.expected = 0;
+  topbar.classList.add('batching');
+  selBar.classList.remove('hidden');
+  cardViews.forEach((view) => { view.card.classList.add('batch'); });
+  renderSelection();
+}
+function exitBatch() {
+  if (!batch.active) return;
+  batch.active = false;
+  batch.allMatching = false;
+  batch.ids.clear();
+  batch.filter = null;
+  batch.expected = 0;
+  topbar.classList.remove('batching');
+  selBar.classList.add('hidden');
+  closePop();
+  cardViews.forEach((view) => {
+    view.card.classList.remove('batch', 'sel');
+    view.check.checked = false;
+  });
+  renderSelection();
+  batchProg.textContent = '';
+}
+function chunkArray(arr, size) {
+  const out = [];
+  for (let i = 0; i < arr.length; i += size) out.push(arr.slice(i, i + size));
+  return out;
+}
+
+function makeCard(it) {
+  const isTrash = state.trash || !!it.deleted_at;
+  const card = el('article', 'card');
+  card.dataset.id = it.id;
+
+  const pick = el('label', 'pick');
+  const check = el('input');
+  check.type = 'checkbox';
+  check.setAttribute('aria-label', '选择 ' + (it.name || it.id));
+  pick.appendChild(check);
+  card.appendChild(pick);
+
+  const link = el('a', 'thumb'), img = el('img');
+  link.href = it.url; link.target = '_blank'; link.rel = 'noopener';
+  img.loading = 'lazy'; img.alt = it.name || it.id; img.src = it.thumb_url || it.url;
+  let fellBack = false;
+  img.addEventListener('error', () => { if (!fellBack && it.thumb_url && it.url) { fellBack = true; img.src = it.url; } });
+  link.appendChild(img); card.appendChild(link);
+
+  const body = el('div', 'body'), titleRow = el('div', 'titlerow');
+  const nameBtn = btn(it.name || it.id, 'name', '点击重命名');
+  nameBtn.addEventListener('click', () => startRename(it, nameBtn));
+  const badge = el('span', 'badge ' + (isTrash ? 'trash' : (it.origin === 'manual' ? 'manual' : 'plugin')));
+  badge.textContent = isTrash ? '回收站' : (it.origin === 'manual' ? '手动上传' : '插件抓的');
+  titleRow.append(nameBtn, badge);
+
+  const chips = el('div', 'chips');
+  // 标签气泡有上限：最多显示 8 个，其余折叠成 "+N"，避免单张图几十个标签把卡片撑爆
+  const MAX_CARD_TAGS = 8;
+  const cardTags = it.tags || [];
+  for (const t of cardTags.slice(0, MAX_CARD_TAGS)) chips.appendChild(tagChip(it, t));
+  if (cardTags.length > MAX_CARD_TAGS) {
+    const rest = cardTags.slice(MAX_CARD_TAGS);
+    const more = el('span', 'chip');
+    more.textContent = '+' + rest.length;
+    more.title = '更多标签：' + rest.join('、');
+    chips.appendChild(more);
+  }
+  const addTag = btn('+ 标签', 'chip add');
+  addTag.addEventListener('click', () => startAddTag(it, chips, addTag));
+  chips.appendChild(addTag);
+
+  const src = el('div', 'src'), sources = it.sources || [];
+  if (sources.length) {
+    src.appendChild(srcLine(sources[0]));
+    if (sources.length > 1) {
+      const rest = el('div');
+      rest.hidden = true;
+      for (let i = 1; i < sources.length; i++) rest.appendChild(srcLine(sources[i]));
+      const toggle = btn('+' + (sources.length - 1), 'more', '展开其余来源');
+      toggle.addEventListener('click', () => { rest.hidden = !rest.hidden; toggle.textContent = rest.hidden ? '+' + (sources.length - 1) : '收起'; });
+      src.append(rest, toggle);
+    }
+  } else src.textContent = '无来源记录';
+
+  const meta = el('div', 'meta');
+  meta.textContent = [String(it.format || '?').toUpperCase(), fmtSize(it.size), fmtTime(it.created_at)].join(' · ');
+
+  body.append(titleRow, chips, src, meta);
+
+  if (!isTrash) {
+    const acts = el('div', 'acts');
+    if (it.origin === 'plugin') {
+      const keep = btn('收进图库', 'keep', '收进图库后，这张图片将不会被自动清理');
+      keep.addEventListener('click', async () => {
+        if (!(await patch(it.id, { origin: 'manual' }))) return;
+        it.origin = 'manual';
+        badge.className = 'badge manual'; badge.textContent = '手动上传';
+        keep.remove(); toast('已收进图库');
+      });
+      acts.appendChild(keep);
+    }
+    const del = btn('删除', 'danger');
+    del.addEventListener('click', async () => {
+      if (!(await askConfirm('确定删除「' + (it.name || it.id) + '」？此操作不可撤销。', '删除', true))) return;
+      try {
+        await api('/api/image/' + encodeURIComponent(it.id), { method: 'DELETE' });
+        card.remove();
+        state.items.delete(it.id);
+        cardViews.delete(it.id);
+        state.loaded = Math.max(0, state.loaded - 1); state.total = Math.max(0, state.total - 1);
+        if (!grid.children.length) state.loaded = 0;
+        if (batch.active) { batch.ids.delete(it.id); renderSelection(); }
+        renderFoot(); toast('已删除');
+      } catch (e) { if (e.status !== 401) toast('删除失败：' + e.message); }
+    });
+    acts.appendChild(del);
+    body.appendChild(acts);
+  }
+  card.appendChild(body);
+
+  cardViews.set(it.id, { card, check, it });
+  check.addEventListener('change', () => setSelected(it.id, check.checked));
+  card.addEventListener('click', (e) => {
+    if (!batch.active) return;
+    if (e.target.closest('.pick')) return;
+    e.preventDefault();
+    e.stopPropagation();
+    toggleSelected(it.id);
+  }, true);
+  if (batch.active) card.classList.add('batch');
+  if (isSelected(it.id)) { card.classList.add('sel'); check.checked = true; }
+  return card;
+}
+
+function renderFoot() {
+  if (state.loaded > 0) msgEl.hidden = true;
+  else {
+    msgEl.hidden = false;
+    msgEl.textContent = state.err ? '加载失败：' + state.err : (state.trash ? '回收站是空的' : '还没有图片');
+  }
+  const left = state.total - state.loaded;
+  if (left > 0) { moreBtn.textContent = '加载更多'; moreBtn.disabled = false; }
+  else { moreBtn.textContent = '已全部加载'; moreBtn.disabled = true; }
+  footNote.textContent = state.total ? '已加载 ' + state.loaded + ' / 共 ' + state.total + ' 张' : '';
+}
+let reqSeq = 0;
+async function load(append) {
+  if (append && state.busy) return;
+  const seq = ++reqSeq;
+  state.busy = true; state.err = '';
+  const offset = append ? state.offset : 0;
+  if (!append) {
+    state.offset = 0; state.loaded = 0; state.total = 0;
+    state.items.clear();
+    cardViews.clear();
+    grid.textContent = ''; msgEl.hidden = false; msgEl.textContent = '加载中…'; moreBtn.disabled = true;
+  } else { moreBtn.textContent = '加载中…'; moreBtn.disabled = true; }
+  const qs = new URLSearchParams({ q: state.q, tag: state.tag, origin: state.origin, limit: String(state.limit), offset: String(offset) });
+  if (state.trash) qs.set('trash', '1');
+  try {
+    const data = await api('/api/list?' + qs.toString());
+    if (seq !== reqSeq) return;
+    const items = (data && data.items) || [];
+    for (const it of items) {
+      state.items.set(it.id, it);
+      grid.appendChild(makeCard(it));
+    }
+    state.total = (data && data.total) || 0;
+    state.loaded += items.length;
+    state.offset = offset + state.limit;
+    if (!items.length && state.loaded < state.total) state.total = state.loaded;
+    if (batch.active) renderSelection();
+  } catch (e) {
+    if (seq === reqSeq && e.status !== 401) { state.err = e.message; toast('加载失败：' + e.message); }
+  } finally {
+    if (seq === reqSeq) { state.busy = false; renderFoot(); }
+  }
+}
+function refresh() {
+  if (state.mode === 'tags') {
+    state.tagsQuery = tagsSearch.value.trim();
+    loadTags(false);
+    return;
+  }
+  state.q = searchInput.value.trim(); state.tag = tagInput.value.trim(); state.origin = selectedOrigin;
+  load(false);
+}
+function showLogin() {
+  exitBatch();
+  show(loginView); loginErr.textContent = ''; passwordInput.value = '';
+  setTimeout(() => passwordInput.focus(), 0);
+}
+function enterGallery() { show(galleryView); load(false); }
+function setView(trash) { setMode(trash ? 'trash' : 'lib'); }
+function setMode(mode) {
+  exitBatch();
+  state.mode = mode;
+  state.trash = mode === 'trash';
+  const isTags = mode === 'tags';
+  viewLib.classList.toggle('on', mode === 'lib');
+  viewTrash.classList.toggle('on', mode === 'trash');
+  viewTags.classList.toggle('on', isTags);
+  viewLib.setAttribute('aria-pressed', String(mode === 'lib'));
+  viewTrash.setAttribute('aria-pressed', String(mode === 'trash'));
+  viewTags.setAttribute('aria-pressed', String(isTags));
+  topbar.classList.toggle('tagsmode', isTags);
+  galleryMain.classList.toggle('hidden', isTags);
+  tagsMain.classList.toggle('hidden', !isTags);
+  if (isTags) loadTags(false); else load(false);
+}
+
+/* ---------------- 标签清单 ---------------- */
+const TAG_PAGE = 120;
+let tagsSeq = 0;
+function makeTagCard(t) {
+  const b = el('button', 'tagcard');
+  b.type = 'button';
+  b.title = '按此标签筛选图库';
+  const dot = el('span', 'dot');
+  dot.setAttribute('aria-hidden', 'true');
+  const name = el('span');
+  name.textContent = t.tag;
+  const cnt = el('span', 'cnt');
+  cnt.textContent = '×' + t.count;
+  b.append(dot, name, cnt);
+  b.addEventListener('click', () => {
+    state.tag = t.tag;
+    tagInput.value = t.tag;
+    if (clearSync.has(tagInput)) clearSync.get(tagInput)();
+    setMode('lib');
+  });
+  return b;
+}
+async function loadTags(append) {
+  if (append && state.tagsBusy) return;
+  const seq = ++tagsSeq;
+  state.tagsBusy = true;
+  const offset = append ? state.tagsOffset : 0;
+  if (!append) {
+    state.tagsOffset = 0; state.tagsLoaded = 0; state.tagsTotal = 0;
+    tagsGrid.textContent = '';
+    tagsMsg.classList.remove('hidden');
+    tagsMsg.textContent = '加载中…';
+    tagsMore.disabled = true;
+  } else {
+    tagsMore.textContent = '加载中…';
+    tagsMore.disabled = true;
+  }
+  const qs = new URLSearchParams({
+    q: state.tagsQuery || '', limit: String(TAG_PAGE), offset: String(offset),
+  });
+  try {
+    const data = await api('/api/tags?' + qs.toString());
+    if (seq !== tagsSeq) return;
+    const tags = (data && data.tags) || [];
+    for (const t of tags) tagsGrid.appendChild(makeTagCard(t));
+    state.tagsTotal = (data && data.total) || 0;
+    state.tagsLoaded += tags.length;
+    state.tagsOffset = offset + TAG_PAGE;
+    tagsInfo.textContent = state.tagsQuery ? '过滤：' + state.tagsQuery : '';
+  } catch (e) {
+    if (seq === tagsSeq && e.status !== 401) {
+      tagsMsg.textContent = '加载失败：' + e.message;
+      toast('加载标签失败：' + e.message);
+    }
+  } finally {
+    if (seq === tagsSeq) {
+      state.tagsBusy = false;
+      const empty = state.tagsLoaded === 0;
+      tagsMsg.classList.toggle('hidden', !empty);
+      if (empty) tagsMsg.textContent = state.tagsQuery ? '没有匹配的标签' : '还没有任何标签';
+      const left = state.tagsTotal - state.tagsLoaded;
+      tagsMore.textContent = left > 0 ? '加载更多' : '已全部加载';
+      tagsMore.disabled = left <= 0;
+      tagsNote.textContent = state.tagsTotal
+        ? '已加载 ' + state.tagsLoaded + ' / 共 ' + state.tagsTotal + ' 个标签' : '';
+    }
+  }
+}
+
+/* ---------------- 批量请求 ---------------- */
+const BATCH_CHUNK = 500;
+function mergeBatch(agg, res) {
+  if (!res) return;
+  if (typeof res.requested === 'number') agg.requested += res.requested;
+  if (typeof res.affected === 'number') agg.affected += res.affected;
+  if (typeof res.skipped === 'number') agg.skipped += res.skipped;
+  if (typeof res.refs_affected === 'number') agg.refs_affected += res.refs_affected;
+  if (Array.isArray(res.changed_ids)) agg.changed_ids.push.apply(agg.changed_ids, res.changed_ids);
+  if (Array.isArray(res.failed)) agg.failed.push.apply(agg.failed, res.failed);
+  if (typeof res.cursor === 'number') agg.cursor = res.cursor;
+  if (res.ok === false) agg.ok = false;
+}
+function handleBatchError(e, label) {
+  if (!e || e.status === 401) return;
+  const d = e.data || {};
+  if (e.code === 'count_mismatch') {
+    toast('数量已变化（预期 ' + (d.expected == null ? '?' : d.expected) + '，实际 ' + (d.actual == null ? '?' : d.actual) + '），请刷新后重试');
+  } else if (e.status === 413) {
+    toast('匹配数量 ' + (d.count == null ? '' : d.count) + ' 超过上限 ' + (d.max == null ? '' : d.max) + '，请缩小筛选范围');
+  } else {
+    toast(label + '失败：' + e.message);
+  }
+}
+async function runBatch(action, extra, label) {
+  if (!batch.active || batch.busy) return null;
+  const known = Array.from(batch.ids);
+  if (!batch.allMatching && !known.length) return null;
+  batch.busy = true;
+  renderSelection();
+  batchProg.textContent = '';
+  const agg = { ok: true, action: action, requested: 0, affected: 0, skipped: 0, refs_affected: 0, changed_ids: [], failed: [], cursor: 0 };
+  const total = known.length;
+  let handled = 0;
+  try {
+    if (batch.allMatching) {
+      batchProg.textContent = '处理中…';
+      const body = Object.assign({ action: action }, extra || {}, {
+        filter: Object.assign({}, batch.filter),
+        expected_count: batch.expected,
+      });
+      mergeBatch(agg, await api('/api/batch', { method: 'POST', body: body }));
+    } else {
+      for (const ids of chunkArray(known, BATCH_CHUNK)) {
+        batchProg.textContent = '处理中 ' + handled + '/' + total;
+        const body = Object.assign({}, extra || {}, { action: action, ids: ids });
+        mergeBatch(agg, await api('/api/batch', { method: 'POST', body: body }));
+        handled += ids.length;
+        batchProg.textContent = '处理中 ' + handled + '/' + total;
+      }
+    }
+    return agg;
+  } catch (e) {
+    handleBatchError(e, label);
+    return null;
+  } finally {
+    batch.busy = false;
+    batchProg.textContent = '';
+    renderSelection();
+  }
+}
+async function undoBatch(action, ids) {
+  try {
+    for (const part of chunkArray(ids, BATCH_CHUNK)) {
+      await api('/api/batch', { method: 'POST', body: { action: action, ids: part } });
+    }
+    toast('已撤销');
+    if (!batch.busy && !batch.active) load(false);
+  } catch (e) {
+    if (e.status !== 401) toast('撤销失败：' + e.message);
+  }
+}
+
+/* ---------------- 弹层 ---------------- */
+let popEl = null, popCleanup = null;
+function closePop() {
+  if (popCleanup) { popCleanup(); popCleanup = null; }
+  if (popEl) { popEl.remove(); popEl = null; }
+}
+function openPop(build) {
+  closePop();
+  const pop = el('div', 'pop');
+  pop.setAttribute('role', 'dialog');
+  build(pop);
+  document.body.appendChild(pop);
+  popEl = pop;
+  function onDown(e) {
+    if (!popEl) return;
+    if (popEl.contains(e.target) || (e.target.closest && e.target.closest('#batchActions'))) return;
+    closePop();
+  }
+  function onKey(e) {
+    if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); closePop(); }
+  }
+  setTimeout(() => document.addEventListener('pointerdown', onDown, true), 0);
+  document.addEventListener('keydown', onKey, true);
+  popCleanup = () => {
+    document.removeEventListener('pointerdown', onDown, true);
+    document.removeEventListener('keydown', onKey, true);
+  };
+}
+
+let tagsCache = null;
+async function getTags() {
+  if (tagsCache) return tagsCache;
+  try {
+    const data = await api('/api/tags?limit=200');
+    tagsCache = ((data && data.tags) || []).slice().sort((a, b) => (b.count || 0) - (a.count || 0));
+  } catch (e) {
+    tagsCache = [];
+  }
+  return tagsCache;
+}
+function renderTagSugg(box, query, exclude, onPick, limit) {
+  const q = (query || '').trim().toLowerCase();
+  const MAX = limit || 24;
+  getTags().then((tags) => {
+    box.textContent = '';
+    const matched = tags
+      .filter((t) => !exclude.has(t.tag))
+      .filter((t) => !q || t.tag.toLowerCase().includes(q));
+    const shown = matched.slice(0, MAX);
+    if (!shown.length) {
+      const empty = el('span', 'suggempty');
+      if (q) {
+        empty.textContent = '没有匹配的已有标签，点 + 新建「' + (query || '').trim() + '」';
+      } else if (exclude.size) {
+        empty.textContent = '这张图已包含全部已有标签，可直接输入新标签后点 +';
+      } else {
+        empty.textContent = '还没有可用标签，直接输入新标签后点 +';
+      }
+      box.appendChild(empty);
+      return;
+    }
+    for (const t of shown) {
+      const c = btn(t.tag + ' ×' + t.count, 'suggchip', '点击添加「' + t.tag + '」');
+      // mousedown 阻止默认行为 → 输入框不失焦，点击才能生效
+      c.addEventListener('mousedown', (e) => e.preventDefault());
+      c.addEventListener('click', () => onPick(t.tag));
+      box.appendChild(c);
+    }
+    if (matched.length > shown.length) {
+      const more = el('span', 'suggempty');
+      more.textContent = '还有 ' + (matched.length - shown.length) + ' 个，继续输入可缩小范围';
+      box.appendChild(more);
+    }
+  });
+}
+function openAddTagPop() {
+  const pending = new Set();
+  openPop((pop) => {
+    const head = el('div', 'pophead');
+    head.textContent = '为选中的 ' + selectedCount() + ' 张图片添加标签';
+    pop.appendChild(head);
+
+    const chips = el('div', 'chips');
+    pop.appendChild(chips);
+
+    let okBtn = null;
+    let plusBtn = null;
+    let input = null;
+
+    function sync() {
+      if (!input) return;
+      if (plusBtn) plusBtn.disabled = !input.value.trim();
+      if (okBtn) okBtn.disabled = pending.size === 0;
+    }
+    function renderPending() {
+      chips.textContent = '';
+      pending.forEach((t) => {
+        const chip = el('span', 'chip'), label = el('span');
+        label.textContent = t;
+        const x = btn('×');
+        x.title = '移除待添加标签';
+        x.addEventListener('click', () => { pending.delete(t); renderPending(); });
+        chip.append(label, x);
+        chips.appendChild(chip);
+      });
+      sync();
+    }
+
+    const row = el('div', 'tagrow');
+    input = el('input', 'popin');
+    input.type = 'text';
+    input.placeholder = '输入新标签';
+    input.maxLength = 40;
+    input.setAttribute('aria-label', '待添加的标签');
+    plusBtn = btn('+', 'addbtn', '加入待添加列表');
+    plusBtn.disabled = true;
+    row.append(input, plusBtn);
+
+    const sugg = el('div', 'tagsugg');
+    function commit(tag) {
+      const v = String(tag || '').trim();
+      if (!v) { sync(); return; }
+      pending.add(v);
+      input.value = '';
+      renderPending();
+      refreshSugg();
+      sync();
+      input.focus();
+    }
+    const refreshSugg = () => renderTagSugg(sugg, input.value, pending, (tag) => commit(tag));
+    input.addEventListener('input', () => { refreshSugg(); sync(); });
+    input.addEventListener('keydown', (e) => {
+      if (e.isComposing) return;
+      if (e.key === 'Enter') { e.preventDefault(); commit(input.value); }
+      else if (e.key === 'Escape') { e.preventDefault(); closePop(); }
+    });
+    plusBtn.addEventListener('mousedown', (e) => e.preventDefault());
+    plusBtn.addEventListener('click', () => commit(input.value));
+
+    pop.append(row, sugg);
+    renderPending();
+    refreshSugg();
+
+    const foot = el('div', 'popfoot');
+    const cancel = btn('取消', 'ghost');
+    cancel.addEventListener('click', closePop);
+    okBtn = btn('确定', 'primary');
+    okBtn.disabled = true;
+    okBtn.addEventListener('click', async () => {
+      if (!pending.size) { input.focus(); return; }
+      const res = await runBatch('tag', { add_tags: Array.from(pending) }, '加标签');
+      if (!res) return;
+      const n = typeof res.affected === 'number' ? res.affected : selectedCount();
+      tagsCache = null;
+      closePop();
+      toast('已为 ' + n + ' 张图片添加标签');
+      exitBatch();
+      load(false);
+    });
+    foot.append(cancel, okBtn);
+    pop.appendChild(foot);
+    setTimeout(() => input.focus(), 0);
+  });
+}
+function tagUnion() {
+  const map = new Map();
+  for (const id of batch.ids) {
+    const it = state.items.get(id);
+    if (!it) continue;
+    for (const t of it.tags || []) map.set(t, (map.get(t) || 0) + 1);
+  }
+  return map;
+}
+async function doUntag(tags) {
+  const res = await runBatch('untag', { remove_tags: tags }, '删标签');
+  if (!res) return;
+  tagsCache = null;
+  closePop();
+  toast('已移除标签');
+  exitBatch();
+  load(false);
+}
+function openUntagPop() {
+  const union = tagUnion();
+  openPop((pop) => {
+    const head = el('div', 'pophead');
+    head.textContent = '移除标签';
+    pop.appendChild(head);
+    const note = el('p', 'popnote');
+    pop.appendChild(note);
+    if (batch.allMatching) {
+      note.textContent = '当前为「全选全部」：请输入要移除的标签（统计仅覆盖已加载的图片）。';
+      const input = el('input', 'popin');
+      input.type = 'text';
+      input.placeholder = '输入要移除的标签，或点下面的已有标签';
+      input.maxLength = 40;
+      input.setAttribute('aria-label', '要移除的标签');
+      const sugg = el('div', 'tagsugg');
+      const refreshSugg = () => renderTagSugg(sugg, input.value, new Set(), async (tag) => {
+        await doUntag([tag]);
+      });
+      input.addEventListener('input', refreshSugg);
+      const submit = async () => {
+        const v = input.value.trim();
+        if (!v) { toast('请输入标签'); input.focus(); return; }
+        await doUntag([v]);
+      };
+      input.addEventListener('keydown', (e) => {
+        if (e.isComposing) return;
+        if (e.key === 'Enter') { e.preventDefault(); submit(); }
+        else if (e.key === 'Escape') { e.preventDefault(); closePop(); }
+      });
+      pop.append(input, sugg);
+      refreshSugg();
+      const foot = el('div', 'popfoot');
+      const cancel = btn('取消', 'ghost');
+      cancel.addEventListener('click', closePop);
+      const ok = btn('确定', 'primary');
+      ok.addEventListener('click', submit);
+      foot.append(cancel, ok);
+      pop.appendChild(foot);
+      setTimeout(() => input.focus(), 0);
+      return;
+    }
+    if (!union.size) {
+      note.textContent = '选中的图片暂无标签。';
+      const foot = el('div', 'popfoot');
+      const close = btn('关闭', 'ghost');
+      close.addEventListener('click', closePop);
+      foot.appendChild(close);
+      pop.appendChild(foot);
+      return;
+    }
+    note.textContent = '统计仅覆盖已加载的图片；点击标签即从所有选中图片中移除。';
+    const chips = el('div', 'chips');
+    const MAX_UNION = 60;
+    let listed = 0;
+    union.forEach((count, tag) => {
+      if (listed >= MAX_UNION) return;
+      listed++;
+      const chip = btn(tag + ' · ' + count, 'chip tagpick', '从所有选中图片移除标签 ' + tag);
+      chip.addEventListener('click', () => doUntag([tag]));
+      chips.appendChild(chip);
+    });
+    if (union.size > MAX_UNION) {
+      const rest = el('span', 'suggempty');
+      rest.textContent = '还有 ' + (union.size - MAX_UNION) + ' 个标签未列出（可用上方筛选缩小范围）';
+      chips.appendChild(rest);
+    }
+    pop.appendChild(chips);
+    const foot = el('div', 'popfoot');
+    const cancel = btn('取消', 'ghost');
+    cancel.addEventListener('click', closePop);
+    foot.appendChild(cancel);
+    pop.appendChild(foot);
+  });
+}
+
+/* ---------------- 批量操作 ---------------- */
+async function doKeep() {
+  const res = await runBatch('keep', {}, '存图库');
+  if (!res) return;
+  const changed = res.changed_ids || [];
+  exitBatch();
+  load(false);
+  if (changed.length) {
+    toastWithUndo('已存进图库 ' + changed.length + ' 张', () => undoBatch('unkeep', changed));
+  } else {
+    toast('已存进图库');
+  }
+}
+async function doUnkeep() {
+  const n = selectedCount();
+  if (!(await askConfirm('将 ' + n + ' 张图片移出图库？移出后可能被自动清理。', '移出图库', true))) return;
+  const res = await runBatch('unkeep', {}, '移出图库');
+  if (!res) return;
+  const changed = res.changed_ids || [];
+  exitBatch();
+  load(false);
+  if (changed.length) {
+    toastWithUndo('已移出图库 ' + changed.length + ' 张', () => undoBatch('keep', changed));
+  } else {
+    toast('已移出图库');
+  }
+}
+async function doDelete() {
+  const dry = await runBatch('delete', { dry_run: true }, '删除预检');
+  if (!dry) return;
+  const requested = typeof dry.requested === 'number' ? dry.requested : selectedCount();
+  const refs = dry.refs_affected || 0;
+  if (!requested) { toast('没有可删除的图片'); return; }
+  const msg = el('span');
+  msg.append('将删除 ', strong(requested), ' 张图片，其中 ', strong(refs), ' 个插件引用会失效（回收站保留 7 天）');
+  const ok = await askConfirm(msg, '删除', true, { requireText: requested > 50 ? '删除' : '' });
+  if (!ok) return;
+  const res = await runBatch('delete', {}, '删除');
+  if (!res) return;
+  const n = typeof res.affected === 'number' ? res.affected : requested;
+  toast('已删除 ' + n + ' 张图片');
+  exitBatch();
+  load(false);
+}
+async function doCopyLinks() {
+  const ids = batch.allMatching ? Array.from(state.items.keys()) : Array.from(batch.ids);
+  if (!ids.length) { toast('没有可复制的链接'); return; }
+  const text = ids.map((id) => location.origin + '/i/' + id).join('\n');
+  try {
+    await navigator.clipboard.writeText(text);
+    toast('已复制 ' + ids.length + ' 个链接');
+  } catch (e) {
+    toast('复制失败：请检查浏览器剪贴板权限');
+  }
+}
+async function doRestore() {
+  const res = await runBatch('restore', {}, '恢复');
+  if (!res) return;
+  const n = typeof res.affected === 'number' ? res.affected : (typeof res.requested === 'number' ? res.requested : 0);
+  toast('已恢复 ' + n + ' 张图片');
+  exitBatch();
+  load(false);
+}
+async function doPurge() {
+  const n = selectedCount();
+  const msg = el('span');
+  msg.append('彻底删除 ', strong(n), ' 张图片？此操作不可恢复。');
+  if (!(await askConfirm(msg, '彻底删除', true))) return;
+  const res = await runBatch('purge', {}, '彻底删除');
+  if (!res) return;
+  const done = typeof res.affected === 'number' ? res.affected : n;
+  toast('已彻底删除 ' + done + ' 张图片');
+  exitBatch();
+  load(false);
+}
+
+/* ---------------- 上传队列 ---------------- */
+const IMG_EXT = new Set(['jpg', 'jpeg', 'jpe', 'jfif', 'png', 'apng', 'gif', 'webp', 'bmp', 'avif', 'svg', 'ico', 'cur', 'heic', 'heif', 'tif', 'tiff', 'jxl']);
+const MAX_UPLOAD = 8 * 1024 * 1024;
+const UPLOAD_ERR = {
+  unsupported_format: '不是支持的图片格式',
+  too_large: '超过 8MB',
+  fetch_failed: '原链接取不到',
+  disk_full: '图床空间已满',
+  unauthorized: '登录已失效',
+};
+const queue = { tasks: [], active: 0, MAX: 2, finished: true, visible: true, folded: false };
+function extOf(name) {
+  const i = String(name || '').lastIndexOf('.');
+  return i >= 0 ? String(name).slice(i + 1).toLowerCase() : '';
+}
+function uploadErrText(err) {
+  const data = (err && err.data) || {};
+  const code = data.error || (err && err.code) || '';
+  let text = UPLOAD_ERR[code] || (typeof data.error === 'string' && data.error ? data.error : '') || (err && err.message) || '上传失败';
+  if (code === 'fetch_failed' && data.upstream_status != null) text += '（HTTP ' + data.upstream_status + '）';
+  return text;
+}
+function precheckTask(task) {
+  if (task.kind !== 'file') return '';
+  if (!IMG_EXT.has(extOf(task.file.name))) return '不是支持的图片格式';
+  if (task.file.size > MAX_UPLOAD) return '超过 8MB';
+  return '';
+}
+function retryTask(task) {
+  const reason = precheckTask(task);
+  if (reason) {
+    task.status = 'failed';
+    task.reason = reason;
+    return false;
+  }
+  task.status = 'queued';
+  task.reason = '';
+  task.counted = false;
+  queue.finished = false;
+  return true;
+}
+function urlName(u) {
+  try {
+    const p = new URL(u).pathname.split('/').filter(Boolean).pop();
+    return p ? decodeURIComponent(p) : u;
+  } catch (e) { return u; }
+}
+function addFiles(files) {
+  const list = Array.from(files || []).filter(Boolean);
+  if (!list.length) return;
+  let added = 0;
+  for (const f of list) {
+    if (typeof f.name !== 'string' || typeof f.size !== 'number') continue;
+    const key = f.name + '\u0000' + f.size + '\u0000' + (f.lastModified || 0);
+    if (queue.tasks.some((t) => t.key === key)) continue;
+    const task = { key: key, kind: 'file', file: f, name: f.name, size: f.size, status: 'queued', reason: '', id: null, counted: false };
+    const reason = precheckTask(task);
+    if (reason) {
+      task.status = 'failed';
+      task.reason = reason;
+    }
+    queue.tasks.push(task);
+    added++;
+  }
+  if (!added) { toast('没有可加入队列的文件'); return; }
+  queue.finished = false;
+  queue.visible = true;
+  renderQueue();
+  pumpQueue();
+}
+function addUrls(text) {
+  const lines = String(text || '').split(/\r?\n/).map((s) => s.trim()).filter(Boolean);
+  if (!lines.length) return 0;
+  let added = 0;
+  for (const u of lines) {
+    const key = 'url\u0000' + u;
+    if (queue.tasks.some((t) => t.key === key)) continue;
+    queue.tasks.push({ key: key, kind: 'url', file: null, url: u, name: urlName(u), size: null, status: 'queued', reason: '', id: null, counted: false });
+    added++;
+  }
+  if (added) {
+    queue.finished = false;
+    queue.visible = true;
+    renderQueue();
+    pumpQueue();
+  }
+  return added;
+}
+function renderQueue() {
+  const has = queue.tasks.length > 0;
+  queueEl.classList.toggle('hidden', !(has && queue.visible));
+  qReopen.classList.toggle('hidden', !(has && !queue.visible));
+  if (!has) {
+    qCount.textContent = '0/0';
+    qList.textContent = '';
+    qReopen.textContent = '上传队列';
+    return;
+  }
+  const settled = queue.tasks.filter((t) => t.status === 'done' || t.status === 'failed').length;
+  qCount.textContent = settled + '/' + queue.tasks.length;
+  qReopen.textContent = '上传队列 ' + settled + '/' + queue.tasks.length;
+  qFold.textContent = queue.folded ? '展开' : '收起';
+  qList.hidden = queue.folded;
+  qList.textContent = '';
+  for (const t of queue.tasks) {
+    const row = el('div', 'qrow ' + t.status);
+    const name = el('span', 'qname');
+    name.textContent = t.name;
+    name.title = t.kind === 'url' ? t.url : t.name;
+    const st = el('span', 'qst');
+    if (t.status === 'queued') st.textContent = '排队中';
+    else if (t.status === 'uploading') st.textContent = '上传中';
+    else if (t.status === 'done') st.textContent = '已上传';
+    else st.textContent = '失败：' + (t.reason || '上传失败');
+    row.append(name, st);
+    if (t.status === 'failed') {
+      const retry = btn('重试', '');
+      retry.title = '重试这一项';
+      retry.addEventListener('click', () => {
+        if (!retryTask(t)) { toast('仍然无法上传：' + t.reason); renderQueue(); return; }
+        renderQueue();
+        pumpQueue();
+      });
+      row.appendChild(retry);
+    }
+    qList.appendChild(row);
+  }
+  qRetryAll.disabled = !queue.tasks.some((t) => t.status === 'failed');
+}
+async function uploadTask(task) {
+  try {
+    let data;
+    if (task.kind === 'url') {
+      data = await api('/api/upload', { method: 'POST', body: { url: task.url, via: 'webui' } });
+    } else {
+      const fd = new FormData();
+      fd.append('file', task.file);
+      fd.append('name', task.file.name.replace(/\.[^.]+$/, ''));
+      data = await api('/api/upload', { method: 'POST', body: fd });
+    }
+    task.status = 'done';
+    task.id = (data && data.id) || null;
+  } catch (e) {
+    task.status = 'failed';
+    task.reason = uploadErrText(e);
+  }
+}
+function maybeFinishQueue() {
+  if (!queue.tasks.length || queue.active > 0) return;
+  if (queue.tasks.some((t) => t.status === 'queued' || t.status === 'uploading')) return;
+  if (queue.finished) return;
+  const round = queue.tasks.filter((t) => !t.counted);
+  queue.finished = true;
+  if (!round.length) return;
+  const ok = round.filter((t) => t.status === 'done').length;
+  const bad = round.filter((t) => t.status === 'failed').length;
+  round.forEach((t) => { t.counted = true; });
+  toast('成功 ' + ok + ' / 失败 ' + bad);
+  if (batch.active) exitBatch();
+  load(false);
+}
+function pumpQueue() {
+  while (queue.active < queue.MAX) {
+    const task = queue.tasks.find((t) => t.status === 'queued');
+    if (!task) break;
+    startTask(task);
+  }
+  renderQueue();
+  maybeFinishQueue();
+}
+function startTask(task) {
+  queue.active++;
+  task.status = 'uploading';
+  task.reason = '';
+  renderQueue();
+  uploadTask(task).catch(() => {}).then(() => {
+    queue.active = Math.max(0, queue.active - 1);
+    renderQueue();
+    pumpQueue();
+  });
+}
+
+/* ---------------- 拖拽 / 粘贴 / 导入链接 ---------------- */
+let dragDepth = 0;
+function hasFileDrag(e) {
+  const dt = e.dataTransfer;
+  if (!dt) return false;
+  return Array.from(dt.types || []).indexOf('Files') !== -1;
+}
+function dragSummary(dt) {
+  let count = 0, size = 0, unknown = false;
+  if (dt && dt.items && dt.items.length) {
+    for (const item of Array.from(dt.items)) {
+      if (item.kind !== 'file') continue;
+      count++;
+      const f = item.getAsFile ? item.getAsFile() : null;
+      if (f && typeof f.size === 'number') size += f.size; else unknown = true;
+    }
+  } else if (dt && dt.files) {
+    const files = Array.from(dt.files);
+    count = files.length;
+    for (const f of files) size += f.size || 0;
+  }
+  return { count: count, size: size, unknown: unknown };
+}
+function setDropText(info) {
+  const base = info.count ? '松开上传 ' + info.count + ' 个文件' : '松开上传文件';
+  dropText.textContent = info.count && !info.unknown ? base + '（' + (info.size / 1048576).toFixed(1) + ' MB）' : base;
+}
+function hideDropOverlay() { dropOvl.classList.add('hidden'); }
+function openImportDialog() {
+  if (document.querySelector('.ovl')) return;
+  const ovl = el('div', 'ovl');
+  const dlg = el('div', 'dlg wide');
+  dlg.setAttribute('role', 'dialog'); dlg.setAttribute('aria-modal', 'true');
+  const title = el('h2', 'dlgtitle');
+  title.textContent = '导入链接';
+  const hint = el('p', 'dlghint');
+  hint.textContent = '每行一个图片链接，将依次加入上传队列。';
+  const ta = el('textarea', 'dlgta');
+  ta.rows = 6;
+  ta.placeholder = 'https://example.com/a.png\nhttps://example.com/b.jpg';
+  ta.setAttribute('aria-label', '图片链接');
+  const row = el('div', 'dlgrow');
+  const no = btn('取消'), yes = btn('加入队列', 'primary');
+  let closed = false;
+  function done() {
+    if (closed) return; closed = true;
+    document.removeEventListener('keydown', onKey, true);
+    ovl.remove();
+  }
+  function submit() {
+    if (!ta.value.trim()) { toast('请输入至少一个链接'); ta.focus(); return; }
+    const added = addUrls(ta.value);
+    done();
+    if (added) toast('已加入 ' + added + ' 个链接');
+    else toast('没有新的链接');
+  }
+  function onKey(e) {
+    if (e.isComposing) return;
+    if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); done(); }
+    else if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); submit(); }
+  }
+  no.addEventListener('click', done);
+  yes.addEventListener('click', submit);
+  ovl.addEventListener('click', (e) => { if (e.target === ovl) done(); });
+  document.addEventListener('keydown', onKey, true);
+  row.append(no, yes);
+  dlg.append(title, hint, ta, row);
+  ovl.appendChild(dlg);
+  document.body.appendChild(ovl);
+  setTimeout(() => ta.focus(), 0);
+}
+
+/* ---------------- 事件绑定 ---------------- */
+let searchTimer = 0;
+searchInput.addEventListener('input', () => {
+  clearTimeout(searchTimer);
+  searchTimer = setTimeout(() => { state.q = searchInput.value.trim(); load(false); }, 300);
+});
+let tagTimer = 0;
+tagInput.addEventListener('input', () => {
+  clearTimeout(tagTimer);
+  tagTimer = setTimeout(() => { state.tag = tagInput.value.trim(); load(false); }, 300);
+});
+tagInput.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') {
+    e.preventDefault();
+    clearTimeout(tagTimer);
+    state.tag = tagInput.value.trim();
+    load(false);
+  }
+});
+/* 输入框一键清空（有内容才显示小叉） */
+const clearSync = new Map();
+document.querySelectorAll('.clr').forEach((b) => {
+  const input = document.getElementById(b.getAttribute('data-for'));
+  if (!input) return;
+  const sync = () => { b.hidden = !input.value; };
+  clearSync.set(input, sync);
+  input.addEventListener('input', sync);
+  b.addEventListener('mousedown', (e) => e.preventDefault());  // 别让输入框先失焦
+  b.addEventListener('click', () => {
+    input.value = '';
+    sync();
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    input.focus();
+  });
+  sync();
+});
+
+let selectedOrigin = '';
+originSel.addEventListener('click', (e) => {
+  const b = e.target.closest('.tab');
+  if (!b || !originSel.contains(b)) return;
+  selectedOrigin = b.getAttribute('data-v') || '';
+  originSel.querySelectorAll('.tab').forEach((x) => x.classList.toggle('on', x === b));
+  refresh();
+});
+$('#refreshBtn').addEventListener('click', refresh);
+moreBtn.addEventListener('click', () => load(true));
+$('#logoutBtn').addEventListener('click', async () => {
+  try { await api('/api/logout', { method: 'POST' }); } catch (e) { /* 忽略 */ }
+  showLogin();
+});
+$('#loginForm').addEventListener('submit', async (e) => {
+  e.preventDefault(); loginErr.textContent = '';
+  loginBtn.disabled = true; loginBtn.textContent = '登录中…';
+  try {
+    await api('/api/login', { method: 'POST', body: { password: passwordInput.value } });
+    passwordInput.value = ''; enterGallery();
+  } catch (err) {
+    loginErr.textContent = err.status === 401 ? '密码错误' : '登录失败：' + err.message;
+  } finally { loginBtn.disabled = false; loginBtn.textContent = '登录'; }
+});
+
+viewLib.addEventListener('click', () => setView(false));
+viewTrash.addEventListener('click', () => setView(true));
+viewTags.addEventListener('click', () => setMode('tags'));
+tagsMore.addEventListener('click', () => loadTags(true));
+let tagsTimer = 0;
+tagsSearch.addEventListener('input', () => {
+  clearTimeout(tagsTimer);
+  tagsTimer = setTimeout(() => {
+    state.tagsQuery = tagsSearch.value.trim();
+    loadTags(false);
+  }, 300);
+});
+selectBtn.addEventListener('click', enterBatch);
+selCancel.addEventListener('click', exitBatch);
+selPage.addEventListener('click', () => {
+  if (!batch.active) return;
+  batch.allMatching = false;
+  batch.ids = new Set(state.items.keys());
+  renderSelection();
+});
+selAll.addEventListener('click', () => {
+  if (!batch.active) return;
+  if (state.trash) {
+    batch.allMatching = false;
+    batch.ids = new Set(state.items.keys());
+    toast('回收站仅能选择已加载的图片');
+    renderSelection();
+    return;
+  }
+  if (!state.total) return;
+  batch.allMatching = true;
+  batch.expected = state.total;
+  batch.filter = { q: state.q, tag: state.tag, origin: state.origin };
+  batch.ids.clear();
+  renderSelection();
+});
+document.addEventListener('keydown', (e) => {
+  if (e.key !== 'Escape' || !batch.active) return;
+  if (batch.busy || document.querySelector('.ovl') || popEl) return;
+  e.preventDefault();
+  exitBatch();
+});
+
+batchActions.addEventListener('click', (e) => {
+  const b = e.target.closest ? e.target.closest('button[data-act]') : null;
+  if (!b || b.disabled) return;
+  const act = b.getAttribute('data-act');
+  if (act === 'tag') openAddTagPop();
+  else if (act === 'untag') openUntagPop();
+  else if (act === 'keep') doKeep();
+  else if (act === 'unkeep') doUnkeep();
+  else if (act === 'delete') doDelete();
+  else if (act === 'copy') doCopyLinks();
+  else if (act === 'restore') doRestore();
+  else if (act === 'purge') doPurge();
+});
+
+uploadBtn.addEventListener('click', () => { fileInput.value = ''; fileInput.click(); });
+fileInput.addEventListener('change', () => {
+  if (fileInput.files && fileInput.files.length) addFiles(fileInput.files);
+  fileInput.value = '';
+});
+importBtn.addEventListener('click', openImportDialog);
+qClose.addEventListener('click', () => { queue.visible = false; renderQueue(); });
+qReopen.addEventListener('click', () => { queue.visible = true; renderQueue(); });
+qFold.addEventListener('click', () => { queue.folded = !queue.folded; renderQueue(); });
+qRetryAll.addEventListener('click', () => {
+  let any = false;
+  queue.tasks.forEach((t) => {
+    if (t.status === 'failed' && retryTask(t)) any = true;
+  });
+  if (!any) { toast('没有可重试的任务'); return; }
+  renderQueue();
+  pumpQueue();
+});
+
+document.addEventListener('dragenter', (e) => {
+  if (galleryView.classList.contains('hidden') || !hasFileDrag(e)) return;
+  e.preventDefault();
+  dragDepth++;
+  setDropText(dragSummary(e.dataTransfer));
+  dropOvl.classList.remove('hidden');
+});
+document.addEventListener('dragover', (e) => {
+  if (galleryView.classList.contains('hidden') || !hasFileDrag(e)) return;
+  e.preventDefault();
+  if (e.dataTransfer) e.dataTransfer.dropEffect = 'copy';
+  if (!dropOvl.classList.contains('hidden')) setDropText(dragSummary(e.dataTransfer));
+});
+document.addEventListener('dragleave', (e) => {
+  if (dropOvl.classList.contains('hidden')) return;
+  dragDepth = Math.max(0, dragDepth - 1);
+  if (!dragDepth) hideDropOverlay();
+});
+document.addEventListener('dragend', () => { dragDepth = 0; hideDropOverlay(); });
+document.addEventListener('drop', (e) => {
+  dragDepth = 0;
+  hideDropOverlay();
+  if (galleryView.classList.contains('hidden')) return;
+  const files = e.dataTransfer && e.dataTransfer.files;
+  if (!files || !files.length) return;
+  e.preventDefault();
+  addFiles(files);
+});
+window.addEventListener('blur', () => { dragDepth = 0; hideDropOverlay(); });
+document.addEventListener('paste', (e) => {
+  if (galleryView.classList.contains('hidden')) return;
+  const files = e.clipboardData && e.clipboardData.files;
+  if (!files || !files.length) return;
+  e.preventDefault();
+  addFiles(files);
+});
+
+async function boot() {
+  try {
+    const s = await api('/api/session');
+    if (s && s.webui === false) { show(noticeView); return; }
+    if (s && s.authed) enterGallery(); else showLogin();
+  } catch (e) { toast('无法连接后端：' + e.message); showLogin(); }
+}
+boot();
+</script>
+</body>
+</html>
