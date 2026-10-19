@@ -43,7 +43,7 @@ ws://127.0.0.1:46880/core
 | `AIPLUGIN4_BRIDGE_PROTOCOL_TOKEN` | 空 | 协议端 token（可选；同时以 access_token 查询参数与 Bearer 头发送） |
 | `AIPLUGIN4_BRIDGE_CORE_TOKEN` | 空 | 核心端（SealDice 连接）token |
 | `AIPLUGIN4_BRIDGE_PLUGIN_PATH` | `/plugin` | 插件控制 WS 路径 |
-| `AIPLUGIN4_BRIDGE_PLUGIN_TOKEN` | 空 | 插件端 WS token（插件以 access_token 查询参数传入） |
+| `AIPLUGIN4_BRIDGE_PLUGIN_TOKEN` | 空 | 插件端 WS token（插件以 access_token 查询参数传入；可直接在启动器卡片「⚙ 配置」里设置） |
 
 ## 插件接入（aiplugin4）
 
@@ -51,6 +51,8 @@ ws://127.0.0.1:46880/core
 
 - **核心桥WS地址**：默认 `ws://127.0.0.1:46880/plugin`
 - **核心桥Token**（可选）：与 `AIPLUGIN4_BRIDGE_PLUGIN_TOKEN` 一致
+
+不需要手工设置环境变量：同名的 `plugin_token` 已加入本后端的 `backend.json` 配置项，可直接在 aiplugin4「后端」页的 ob11-core-bridge 卡片「⚙ 配置」里填写，保存后**重启该后端**生效；它对应的就是插件的「核心桥Token」。留空则不校验。
 
 `run_core_command` 由插件本地注册为 AI 工具，通过 `/plugin` WebSocket 发送 `core_command` 请求：`target`（selfId / messageType / groupId|userId）+ `actor` + `raw_message`（原样注入）或 `command`（结构化，按 `__commandPrefix` 组装）；`capture` 控制 `mode`（`reply_only` / `lane`）、`forward`、`maxMessages`、`settleMs`，另有 `timeoutMs`、`trigger`、`at`。响应为 `core_command_result`，包含 `ok` / `messages` / `completedBy` / `ambiguous` / `forwardedCount` / `interceptedCount`。
 
