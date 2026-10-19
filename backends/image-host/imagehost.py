@@ -46,7 +46,9 @@ VERSION = _read_version()
 HOST = os.environ.get("AIPLUGIN4_BACKEND_HOST") or "127.0.0.1"
 PORT = int(os.environ.get("AIPLUGIN4_BACKEND_PORT") or "46680")
 TOKEN = os.environ.get("AIPLUGIN4_BACKEND_TOKEN") or ""
-PASSWORD = os.environ.get("AIPLUGIN4_IMAGE_HOST_PASSWORD") or ""
+PASSWORD = os.environ.get("AIPLUGIN4_IMAGE_HOST_PASSWORD") or "123456"
+WEBUI_ENABLED = (os.environ.get("AIPLUGIN4_IMAGE_HOST_WEBUI") or "on").strip().lower() \
+    not in ("", "0", "off", "false", "no")
 DATA_DIR = os.environ.get("AIPLUGIN4_IMAGE_HOST_DIR") or os.path.join(ROOT, "data")
 PUBLIC_BASE_URL = (os.environ.get("AIPLUGIN4_IMAGE_HOST_PUBLIC_BASE_URL") or "").rstrip("/")
 ALLOW_HOSTS = [h for h in (os.environ.get("AIPLUGIN4_IMAGE_HOST_ALLOW_HOSTS") or "").split(",")
@@ -512,12 +514,13 @@ def api_delete(bid: str):
 
 @app.get("/api/session")
 def api_session():
-    return jsonify({"authed": _authed(), "webui": bool(PASSWORD), "version": VERSION})
+    return jsonify({"authed": _authed(), "webui": WEBUI_ENABLED and bool(PASSWORD),
+                    "webui_enabled": WEBUI_ENABLED, "version": VERSION})
 
 
 @app.post("/api/login")
 def api_login():
-    if not PASSWORD:
+    if not (WEBUI_ENABLED and PASSWORD):
         raise ApiError("webui_disabled", 404)
     data = request.get_json(silent=True) or {}
     if not hmac.compare_digest(str(data.get("password") or ""), PASSWORD):
@@ -540,8 +543,8 @@ def webui():
     page = os.path.join(ROOT, "webui.html")
     if not os.path.exists(page):
         return "<h1>image-host</h1><p>webui.html 缺失</p>", 200
-    if not PASSWORD:
-        # 没设密码 = WebUI 关闭：直接说明白，别让人对着一个永远登不进的登录页
+    if not (WEBUI_ENABLED and PASSWORD):
+        # 开关关掉 = WebUI 关闭：直接说明白，别让人对着一个永远登不进的登录页
         return (
             "<!doctype html><meta charset='utf-8'><title>image-host</title>"
             "<body style='margin:0;min-height:100vh;display:grid;place-items:center;"
@@ -549,10 +552,10 @@ def webui():
             "<div style='max-width:460px;padding:28px 32px;background:#fff;border:1px solid #e3e6ea;"
             "border-radius:12px;box-shadow:0 4px 16px rgba(0,0,0,.06)'>"
             "<h2 style='margin:0 0 10px;font-size:18px'>WebUI 已关闭</h2>"
-            "<p style='margin:0 0 10px;line-height:1.6;color:#444'>没有设置 WebUI 访问密码"
-            "（<code>AIPLUGIN4_IMAGE_HOST_PASSWORD</code>），所以人看的界面不开放。</p>"
-            "<p style='margin:0 0 10px;line-height:1.6;color:#444'>请在 aiplugin4 的后端管理里"
-            "「⚙ 配置」填一个密码并重启本后端。</p>"
+            "<p style='margin:0 0 10px;line-height:1.6;color:#444'>后端配置里「WebUI 开关」现在是 off。"
+            "把它改成 on（并确认设有访问密码）后重启本后端即可打开。</p>"
+            "<p style='margin:0 0 10px;line-height:1.6;color:#444'>在 aiplugin4 的后端管理里"
+            "选 image-host 点「⚙ 配置」即可修改。</p>"
             "<p style='margin:0;line-height:1.6;color:#666;font-size:13px'>"
             "API 仍可用：<code>/api/*</code> · <code>/i/&lt;id&gt;</code> · <code>/i/&lt;id&gt;/b64</code> · "
             "<code>/t/&lt;id&gt;</code> · <code>/mcp</code></p>"
@@ -571,8 +574,8 @@ def main():
     mcpmod.register(app, store, _token_ok, VERSION)
     if not TOKEN:
         log.warning("未设置 AIPLUGIN4_BACKEND_TOKEN：所有写操作将返回 401")
-    if not PASSWORD:
-        log.warning("未设置 AIPLUGIN4_IMAGE_HOST_PASSWORD：WebUI 已关闭")
+    if not WEBUI_ENABLED:
+        log.info("AIPLUGIN4_IMAGE_HOST_WEBUI=off：WebUI 已关闭（API 与图片分发不受影响）")
     log.info("image-host %s 监听 http://%s:%d  数据目录=%s  容量=%dMB 回收站=%s 天",
              VERSION, HOST, PORT, DATA_DIR, CAP_MB, TRASH_DAYS or "关闭")
     log.info("PUBLIC_BASE_URL=%s（空 = 模型侧不可达，插件应改用 b64 出口）",

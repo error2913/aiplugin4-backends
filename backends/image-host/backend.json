@@ -5,7 +5,7 @@
   "entry": "imagehost.py",
   "deps": "requirements.txt",
   "port": 46680,
-  "version": "1.0.3",
+  "version": "1.0.4",
   "config": {
     "data_dir": {
       "label": "数据目录（SQLite + 原图分片 + 缩略图）",
@@ -14,14 +14,20 @@
       "env": "AIPLUGIN4_IMAGE_HOST_DIR",
       "create_dir": true
     },
-    "webui_password": {
-      "label": "WebUI 访问密码（留空 = 关闭 WebUI，仅保留 API）",
+    "webui_enabled": {
+      "label": "WebUI 开关（on = 打开 / off = 关闭；重启后端生效）",
       "type": "text",
-      "default": "",
+      "default": "on",
+      "env": "AIPLUGIN4_IMAGE_HOST_WEBUI"
+    },
+    "webui_password": {
+      "label": "WebUI 访问密码（默认 123456，建议改掉）",
+      "type": "text",
+      "default": "123456",
       "env": "AIPLUGIN4_IMAGE_HOST_PASSWORD"
     },
     "public_base_url": {
-      "label": "对外地址前缀（如 https://img.example.com；留空 = 模型侧不可达，插件改用 base64 出口）",
+      "label": "对外地址前缀（可选）：填了才返回 https://域名/i/<id> 绝对地址，供 QQ 协议端或模型按链接取图；留空只返回 /i/<id> 相对路径，插件自己拼本机地址或改用 base64",
       "type": "text",
       "default": "",
       "env": "AIPLUGIN4_IMAGE_HOST_PUBLIC_BASE_URL"
@@ -43,36 +49,6 @@
       "type": "number",
       "default": 7,
       "env": "AIPLUGIN4_IMAGE_HOST_TRASH_DAYS"
-    },
-    "change_keep_days": {
-      "label": "变更日志保留天数（插件增量同步用）",
-      "type": "number",
-      "default": 30,
-      "env": "AIPLUGIN4_IMAGE_HOST_CHANGE_KEEP_DAYS"
-    },
-    "thumb_max": {
-      "label": "缩略图最大边（像素）",
-      "type": "number",
-      "default": 512,
-      "env": "AIPLUGIN4_IMAGE_HOST_THUMB_MAX"
-    },
-    "fetch_concurrency": {
-      "label": "外部抓取并发上限",
-      "type": "number",
-      "default": 4,
-      "env": "AIPLUGIN4_IMAGE_HOST_FETCH_CONCURRENCY"
-    },
-    "fetch_timeout": {
-      "label": "抓取超时（连接,读取 秒，如 5,20）",
-      "type": "text",
-      "default": "5,20",
-      "env": "AIPLUGIN4_IMAGE_HOST_FETCH_TIMEOUT"
-    },
-    "allow_hosts": {
-      "label": "抓取域名白名单（逗号分隔；留空 = 只做 IP 级 SSRF 拦截）",
-      "type": "text",
-      "default": "",
-      "env": "AIPLUGIN4_IMAGE_HOST_ALLOW_HOSTS"
     }
   }
 }
