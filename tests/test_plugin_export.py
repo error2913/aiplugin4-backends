@@ -59,6 +59,8 @@ class PluginExportTest(unittest.TestCase):
         stack.enter_context(
             mock.patch.object(launcher, "backend_config", side_effect=lambda b: dict(self.cfg[b.name]))
         )
+        # 图床对外地址留空时自动探测本机 IP：测试里固定成 192.168.1.50，避免依赖 CI 网络环境
+        stack.enter_context(mock.patch.object(launcher, "_detect_lan_ip", return_value="192.168.1.50"))
 
     def test_backend_export(self):
         with ExitStack() as stack:
@@ -80,12 +82,36 @@ class PluginExportTest(unittest.TestCase):
         )
         self.assertEqual(
             config["backends"]["image-host"],
-            {"url": "http://127.0.0.1:46680", "token": "img-token"},
+            {
+                "url": "http://127.0.0.1:46680",
+                "token": "img-token",
+                # 对外地址：图床的 url 只给插件自己用；协议端/模型用 publicUrl（留空时自动探测本机 IP）
+                "publicUrl": "http://192.168.1.50:46680",
+            },
         )
+        self.assertEqual(result["image_host_public"], "192.168.1.50")
         self.assertNotIn("token", config["backends"]["media-fetch"])
         self.assertEqual(result["text"], json.dumps(config, ensure_ascii=False, separators=(",", ":")))
         self.assertEqual(len(result["included"]), 6)
         self.assertEqual(result["warnings"], [])
+
+    def test_backend_export_image_public_host(self):
+        with ExitStack() as stack:
+            self._patched(stack)
+            result = launcher.build_plugin_backend_config("127.0.0.1", None, "img.example.com")
+        self.assertEqual(
+            result["config"]["backends"]["image-host"]["publicUrl"],
+            "http://img.example.com:46680",
+        )
+        self.assertEqual(result["image_host_public"], "img.example.com")
+        self.assertEqual(result["warnings"], [])
+
+    def test_backend_export_image_public_host_loopback_warns(self):
+        with ExitStack() as stack:
+            self._patched(stack)
+            result = launcher.build_plugin_backend_config("127.0.0.1", None, "127.0.0.1")
+        self.assertNotIn("publicUrl", result["config"]["backends"]["image-host"])
+        self.assertTrue(any("图床对外地址" in w for w in result["warnings"]))
 
     def test_backend_export_host_rules(self):
         with ExitStack() as stack:
