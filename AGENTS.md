@@ -7,6 +7,7 @@
 aiplugin4 的配套后端管理仓库：一个 launcher 管理若干 HTTP/MCP 后端服务（流式输出、图片转 base64、用量图表、网页读取、Markdown/HTML 渲染、MCP 文件与命令执行），提供：
 
 - WebUI 管理界面（`webui.py`，纯 Python 标准库，无第三方依赖）
+- 后端 WebUI 反代：后端在 `backend.json` 声明 `webui` 后，卡片出现「🌐 WebUI」按钮，经 launcher 同源 `/ui/<名称>/` 打开后端自带页面（只暴露 launcher 端口）
 - 命令行管理工具（`aibackend`，类似 pm2）
 - 按需安装依赖（Python 后端独立 venv / Node 后端 `node_modules`，不预装全部）
 - 进程守护：异常退出自动拉起，卡片展示运行时长/内存/自动拉起次数
@@ -29,7 +30,7 @@ aibackend help                         # 查看所有命令
 | `webui.py` | Web 管理界面：内嵌 HTML/CSS/JS（`PAGE` 常量）+ 标准库 HTTP 服务 |
 | `aibackend.py` | 命令行工具（复用 launcher 逻辑），彩色 help |
 | `install_cli.py` | 安装 `aibackend` 到 PATH（Windows `.aibackend\bin\aibackend.cmd` / Linux shell 脚本）；launcher 启动时自动调用 `install()` 幂等刷新 |
-| `backends.json` | 后端注册表：`name` / `type` / `entry` / `deps` / `port` / `version` / `source`（raw URL）/ `files` / 可选 `config` schema |
+| `backends.json` | 后端注册表：`name` / `type` / `entry` / `deps` / `port` / `version` / `source`（raw URL）/ `files` / 可选 `config` schema / 可选 `webui` 元数据 |
 | `backends/<名称>/` | 后端程序缓存（源码在独立 `shop` 分支，release 打包用；运行时更新/下载解压到这里，gitignore） |
 | `installed/<名称>/` | 已安装后端运行副本（程序 + 依赖，gitignore，卸载即删） |
 | `data/<名称>/` | 后端数据目录（如 mcp-files-exec 沙箱工作路径；gitignore，打包/更新/卸载都不动） |
@@ -59,6 +60,13 @@ aibackend help                         # 查看所有命令
 
 `md-html-render` 仅提供 **MCP（Streamable HTTP，挂 `/mcp`，每会话一个 McpServer 实例）**，已移除 REST 路由：工具为 `render_markdown` / `render_html`（返回 PNG base64 文本）；token 中间件对 `/mcp` 同样生效。注意 `/mcp` 必须在 `express.json()` 之前注册，让 transport 自行解析原始 body。
 
+### 后端 WebUI（卡片按钮 + `/ui` 反代）
+- 元数据：`backend.json` / `backends.json` 可选 `webui`：`{"path": "/", "title": "图床 WebUI", "proxy": true, "inject_token": false}`；`path` 为后端内入口路径，`proxy=false` 时只给直连，`inject_token=true` 时反代自动携带该后端 token（仅用于没有自身登录入口的 WebUI）。`launcher.normalize_webui()` 统一规范化；`discover_backends()` 优先读已安装清单，缺失时回退注册表但要求「安装版本不低于注册表版本」（旧版前端未适配反代时不提前显示按钮）；`install_backend()` 的注册表兜底键包含 `webui`。
+- 卡片：`/api/backends` 每行带 `webui`；前端仅对「已安装 + 有 webui」显示「🌐 WebUI」按钮，运行中可点，否则禁用。`proxy !== false` 时打开同源 `/ui/<name>/`，否则用浏览器 host + 后端端口直连。
+- 反代：`webui.py` 的 `do_GET/do_POST` 与 `do_HEAD/PUT/PATCH/DELETE/OPTIONS` 进入 `_proxy()`；只允许 `discover_backends()` 中已登记、`Supervisor.is_running()` 为真、且声明了 `webui` 的后端；上游固定 `127.0.0.1:<effective_port>`（`host` 为 `0.0.0.0/::` 时），不接受用户指定 URL（无 SSRF）。流式转发请求/响应，保留 `Content-Length`/`Range`/`ETag`，改写 `Location: /x → /ui/<name>/x` 与 `Set-Cookie` 的 `Path=/ → Path=/ui/<name>/`；`/ui/<name>` 自动 302 补尾斜杠。
+- 鉴权：launcher 的 `/api/*` 仍只认 header token；`/ui/*` 额外接受 HttpOnly cookie `aib_ui`（`Path=/ui`，值 = HMAC(webui token)，换 token 自动失效）。cookie 由任意带 header token 成功的 API 响应顺带下发，浏览器 `window.open` 导航即可携带。launcher 自己的 `X-Token`/`Authorization` 与 `aib_ui` 不会被透给后端。
+- 后端 UI 约定：前端请求必须用相对 URL（或基于 `document.baseURI` 解析），并兼容被挂在 `/ui/<name>/` 子路径；反代会发送 `X-Forwarded-Prefix: /ui/<name>`，后端也可据此自行拼前缀。暂不支持 WebSocket 与 chunked 请求体（大文件上传用带 Content-Length 的 multipart 即可）。
+
 ### 更新（`aibackend update` / WebUI「⬆ 更新」）
 更新不依赖 git：`launcher.update_project()` 查询 GitHub 最新 release（`_latest_release()`），tag 高于本地 `read_version()` 才下载本体包 `aiplugin4-backends-<版本>.zip` 解压覆盖仓库根目录（`_extract_update_zip()` 跳过 `installed/`、`logs/`、`backends/`、`dist/`、`.git/`、`.runtime.json`）；无新版本返回 `updated=False`（前端弹「没有可以更新的」）。后端各自有独立包（`aiplugin4-backends-<后端名>-<版本>.zip`），`launcher.update_backend(name)` 按注册表版本找对应资产下载解压覆盖缓存 `backends/<名称>/`，再走 `install_backend()` 重装到 `installed/` 并同步依赖；资产缺失时回退按 `source` raw URL 逐文件下载。更新检查 `refresh_update_check()` 对比 release tag 与远端 `backends.json` 注册表版本（`_remote_registry()`）。
 
@@ -70,9 +78,10 @@ Git tag `v*` 触发 `.github/workflows/release.yml`：先 checkout `shop` 分支
 
 ## WebUI API
 
-所有 API 均需 WebUI 访问 token（登录页输入，记住一年；请求带 `Authorization: Bearer <token>` 或 `X-Token: <token>`，否则 401）。token 由 `.runtime.json` 的 `webui.token` 提供，`launcher.py webui-token` / `aibackend webui-token` 可查看/修改/重新生成。
+所有 API 均需 WebUI 访问 token（登录页输入，记住一年；请求带 `Authorization: Bearer <token>` 或 `X-Token: <token>`，否则 401）。token 由 `.runtime.json` 的 `webui.token` 提供，`launcher.py webui-token` / `aibackend webui-token` 可查看/修改/重新生成。`/ui/*` 反代页面导航额外接受 cookie `aib_ui`（见上节）。
 
-- `GET /api/backends`：卡片数据（已安装项 + 注册表未安装项，含 `version` / `installed` / `running` / `uptime_secs` / `restarts` / `mem_*` / `deps_ready` / `options`）
+- `GET /api/backends`：卡片数据（已安装项 + 注册表未安装项，含 `version` / `installed` / `running` / `uptime_secs` / `restarts` / `mem_*` / `deps_ready` / `options` / `webui`）
+- `GET|HEAD|POST|PUT|PATCH|DELETE|OPTIONS /ui/<name>/...`：后端 WebUI 反代（仅已安装、运行中且声明 `webui` 的后端；未声明/未运行返回 404/503 HTML）
 - `POST /api/install/<name>`、`POST /api/uninstall/<name>`、`GET /api/setup-log/<name>`：商店安装/卸载/日志轮询（异步）
 - `POST /api/update-backend/<name>`：下载该后端独立 release 包覆盖商店并重装程序与依赖
 - `POST /api/webui-restart`：重启 WebUI（响应先返回，随后由独立进程执行 `launcher.py webui-restart`，用于重新加载后端清单）
@@ -86,6 +95,8 @@ Git tag `v*` 触发 `.github/workflows/release.yml`：先 checkout `shop` 分支
 
 - WebUI 必须保持纯标准库（不引入 webui-requirements.txt）；后端依赖只在各自 venv/node_modules 按需安装，不要手动装。
 - 新增后端 = 新建目录 + `backend.json`（含默认端口）+ 入口脚本读取 `AIPLUGIN4_BACKEND_PORT`；如需 token/监听 IP 支持，按上面六后端的模式接入 `AIPLUGIN4_BACKEND_TOKEN/_HOST`。
+- 新增带 WebUI 的后端：在 `backend.json` 补 `webui`（至少 `path`），前端一律用相对 URL / `document.baseURI` 拼请求，保证既能直连端口、也能经 `/ui/<name>/` 反代；WebUI 路由挂在后端根路径下，不要假设自己独占域名。若后端只给 launcher 反代看，建议文档提示把监听 IP 设为 `127.0.0.1` 以避免额外开放端口（插件同机时 API 仍可用 127.0.0.1）。
+- 弹窗类 UI 用 `.dialog-body` 类承载内容（`flex:1; min-height:0; overflow-y:auto`），不要写死高度，否则配置项/日志一多就滚不动。
 - 新增后端要走「shop 分支源码 + main 注册表」：源码提交到 `shop` 分支的 `backends/<名称>/`，并在 main 的 `backends.json` 注册（`files` 列出所有需要分发的文件、`version`、`source` 指向 `shop` 分支 raw URL）；未注册的后端不会被 WebUI/CLI 发现与安装。
 - 确保不弹黑框：任何在 WebUI/后台（无控制台）进程里执行的子进程调用，Windows 下必须带 `CREATE_NO_WINDOW`——统一用 `launcher._no_window_kwargs()` 注入，新增子进程调用一律走该辅助函数；改完用 `rg -n "subprocess"` 排查所有调用点，逐处确认。更新已改为纯 HTTP 下载，不执行 git。
 - 日志统一 UTF-8：子进程环境加 `PYTHONIOENCODING=utf-8`、`PYTHONUTF8=1`（同 `Supervisor.spawn` 的写法）。

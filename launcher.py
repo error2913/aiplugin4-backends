@@ -27,7 +27,7 @@ import threading
 import time
 import webbrowser
 import zipfile
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 BACKENDS_DIR = os.path.dirname(os.path.abspath(__file__))
 ROOT_DIR = BACKENDS_DIR  # launcher 位于仓库根目录
@@ -64,6 +64,45 @@ class Backend:
     port: int
     version: str
     dir: str
+    webui: dict = field(default_factory=dict)  # 后端自带 WebUI 的元数据（见 normalize_webui）
+
+
+def normalize_webui(raw) -> dict:
+    """规范化 backend.json / 注册表里的 webui 元数据；非法值返回 {}。
+    支持字符串简写（等价于 {"path": "<值>"}）：
+    path=后端内 WebUI 入口路径；title=按钮/标题文案；
+    proxy=False 时不提供 launcher 反代（只给直连）；
+    inject_token=True 时反代自动携带后端 token（仅用于没有自身登录入口的 WebUI）。"""
+    if isinstance(raw, str):
+        raw = {"path": raw}
+    if not isinstance(raw, dict):
+        return {}
+    path = str(raw.get("path") or "/").strip() or "/"
+    if not path.startswith("/"):
+        path = "/" + path
+    meta = {"path": path}
+    title = str(raw.get("title") or "").strip()
+    if title:
+        meta["title"] = title
+    if raw.get("proxy") is False:
+        meta["proxy"] = False
+    if raw.get("inject_token") is True:
+        meta["inject_token"] = True
+    return meta
+
+
+def _registry_webui(registry: dict, installed: dict) -> dict:
+    """已安装清单没写 webui 时，仅在「安装版本不低于注册表版本」时才用注册表兜底：
+    旧版后端前端可能还没适配反代子路径，先等卡片「⬆ 更新」升级后再给按钮，避免点开是坏页面。"""
+    reg = registry.get(installed.get("name")) or {}
+    meta = normalize_webui(reg.get("webui"))
+    if not meta:
+        return {}
+    have = str(installed.get("version") or "")
+    want = str(reg.get("version") or "")
+    if want and (not have or _version_key(have) < _version_key(want)):
+        return {}
+    return meta
 
 
 def load_config() -> dict:
@@ -284,12 +323,15 @@ def configure_webui_token(value=None) -> str:
 def discover_backends() -> list:
     backends = []
     os.makedirs(INSTALLED_DIR, exist_ok=True)
+    registry = {item.get("name"): item for item in load_registry() if item.get("name")}
     for entry in sorted(os.listdir(INSTALLED_DIR)):
         manifest = os.path.join(INSTALLED_DIR, entry, MANIFEST_FILE)
         if not os.path.isfile(manifest):
             continue
         with open(manifest, encoding="utf-8") as f:
             data = json.load(f)
+        # 老版本已安装清单没有 webui 字段时，回退到 main 分支注册表（仅安装版本不低于注册表时）
+        webui = normalize_webui(data.get("webui")) or _registry_webui(registry, data)
         backends.append(Backend(
             name=data["name"],
             description=data.get("description", ""),
@@ -299,6 +341,7 @@ def discover_backends() -> list:
             port=int(data.get("port", 0)),
             version=str(data.get("version", "") or ""),
             dir=os.path.join(INSTALLED_DIR, entry),
+            webui=webui,
         ))
     return backends
 
@@ -1007,7 +1050,7 @@ def install_backend(name: str) -> Backend:
         entry = dict(registry_entry_data or {})
     if registry_entry_data:
         # 注册表作为兜底元数据（缓存清单可能缺 version/source 等字段）
-        for k in ("version", "description", "source", "files"):
+        for k in ("version", "description", "source", "files", "webui"):
             if not entry.get(k) and registry_entry_data.get(k):
                 entry = {**entry, k: registry_entry_data[k]}
     backend_dir = os.path.join(INSTALLED_DIR, name)
@@ -1073,7 +1116,7 @@ def install_backend(name: str) -> Backend:
         except (OSError, ValueError):
             pass
     if registry_entry_data:
-        for k in ("version", "description", "source", "files"):
+        for k in ("version", "description", "source", "files", "webui"):
             if not entry.get(k) and registry_entry_data.get(k):
                 entry = {**entry, k: registry_entry_data[k]}
     with open(os.path.join(backend_dir, MANIFEST_FILE), "w", encoding="utf-8") as f:
@@ -1087,6 +1130,7 @@ def install_backend(name: str) -> Backend:
         port=int(entry.get("port", 0)),
         version=str(entry.get("version", "") or ""),
         dir=backend_dir,
+        webui=normalize_webui(entry.get("webui")),
     )
     print(f"[launcher] 安装后端 {name}，安装依赖...")
     try:

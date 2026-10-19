@@ -2,6 +2,14 @@
 
 标题格式为 `## <版本号>`，release 工作流按标签版本号读取对应段落作为发布说明；日常更新以「Unreleased」汇总，发版前改成版本号并补日期。
 
+## Unreleased
+
+- 后端卡片新增「🌐 WebUI」按钮：后端在 `backend.json` / `backends.json` 声明 `webui`（`path` / `title` / `proxy` / `inject_token`）后，已安装且运行中的卡片会出现按钮，点击在新标签打开后端自带的 WebUI
+- 新增内置反向代理 `/ui/<后端名>/`（纯标准库、流式转发）：只允许本机、已登记、运行中的后端；透传 GET/HEAD/POST/PUT/PATCH/DELETE/OPTIONS，自动处理 `Location` 与 `Set-Cookie` 的 `Path` 改写，支持 Range/206、大文件上传与缩略图流式下载；后端 WebUI 只要使用相对 URL（或以 `document.baseURI` 解析）即可经 launcher 打开，**无需把后端端口暴露到公网**
+- 反代会话鉴权：launcher 登录后由 API 响应下发仅作用于 `/ui` 的 HttpOnly cookie（值由 WebUI token 派生，换 token 自动失效）；launcher 自身 `/api/*` 仍只认 header token，不降级
+- 修复后端卡片「⚙ 配置」弹窗内容区无法上下滚动：弹窗内容区改为可收缩 + `overflow-y:auto`，配置项较多时（如 image-host）可正常滚动到底、底部保存按钮固定可见；日志弹窗同时受益
+- image-host 升级 1.0.6：WebUI 前端改用基于 `document.baseURI` 的相对 URL（直接访问 / 经 launcher 反代都可正常工作），并在 `backend.json` 声明 `webui`，卡片可直接打开图床 WebUI
+
 ## 0.11.21 - 2026-10-19
 
 - image-host 升级到 1.0.5：**移除「对外地址前缀」与「抓取域名白名单」**——接口返回的 `url` / `thumb_url` / `b64_url` 一律是相对路径（`/i/<id>`），插件自己拼后端地址即可；需要公网域名时在**插件侧**配置，后端不再掺和。抓取只保留基础 SSRF 防护（私网 IP、逐跳重定向校验），不做域名白名单。卡片配置收敛为 **6 项**（数据目录 / WebUI 开关 / WebUI 密码 / 容量上限 / 单图上限 / 回收站保留天数）。
