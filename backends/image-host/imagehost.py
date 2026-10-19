@@ -30,7 +30,18 @@ import mcp as mcpmod
 from store import ACTIONS, DiskFull, Store, now_ms
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
-VERSION = "1.0.0"
+
+
+def _read_version() -> str:
+    """版本号以 backend.json 为唯一来源，避免运行期（health/MCP）与注册表不一致。"""
+    try:
+        with open(os.path.join(ROOT, "backend.json"), encoding="utf-8") as f:
+            return str(json.load(f).get("version") or "1.0.0")
+    except Exception:
+        return "1.0.0"
+
+
+VERSION = _read_version()
 
 HOST = os.environ.get("AIPLUGIN4_BACKEND_HOST") or "127.0.0.1"
 PORT = int(os.environ.get("AIPLUGIN4_BACKEND_PORT") or "46680")
