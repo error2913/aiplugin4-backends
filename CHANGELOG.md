@@ -2,6 +2,17 @@
 
 标题格式为 `## <版本号>`，release 工作流按标签版本号读取对应段落作为发布说明；日常更新以「Unreleased」汇总，发版前改成版本号并补日期。
 
+## 0.12.0 - 2026-10-20
+
+- 新增「插件配置导出」：WebUI 工具栏 `📋 复制后端配置` / `📋 复制 MCP 配置` / `👁 预览`，一键生成插件可直接粘贴的 JSON（只含已安装的后端项目；预览可改访问主机、查看纳入/排除项、下载 `.json`；局域网 `http` 下剪贴板 API 不可用时自动降级）。新增 API `GET /api/plugin-config`、`GET /api/mcp-config`，CLI `aibackend plugin-config` / `aibackend mcp-config`（`--host`、`--pretty`）。
+- `backends.json` 新增可选 `pluginConfig` 元数据：`backend`（`scheme`/`path`/`tokenFrom`/`tokenRequired`）与 `mcp`（`path`/`platform`）两组；未声明者不参与导出。后端配置覆盖 stream-output / image-url-to-base64 / media-fetch / usage-chart / image-host / ob11-core-bridge；MCP 配置覆盖 mcp-files-exec / md-html-render / mcp-browser（`md-html-render` 默认 `platform: ["QQ"]`）。
+- **image-url-to-base64 1.0.1**：修复 QQ 官方 bot 图片 URL 中 HTML 转义 `&amp;` 未解码导致上游 400（#3）。只还原 `&amp;` / `&#38;` / `&#x26;`（不破坏 `&notify=1`）；下载加 `(10, 30)` 秒超时；4xx 不再重试；错误区分上游 4xx / 网络错误 / 自身异常，响应带 `upstream_status`，日志与响应不回显完整 URL/rkey。
+- **image-host 1.0.10**：`safe_fetch()` 与重定向 `Location` 同样还原 HTML 实体，修复同一类 QQ 图片 URL 抓取 400。
+- **ob11-core-bridge 1.1.1**：新增「插件控制 WS token」配置项（`plugin_token` → `AIPLUGIN4_BRIDGE_PLUGIN_TOKEN`），可在卡片「⚙ 配置」直接填写，对应插件「后端 → 核心桥Token」，无需手工设环境变量。
+- 新增 `tests/`（标准库 unittest，覆盖后端配置 / MCP 配置导出）与 `docs/插件配置导出方案.md`；README、`docs/后端.md`、`AGENTS.md` 同步。
+- 插件侧（aiplugin4）的「后端配置」JSON 导入与论坛页签拆分尚未实施，等下一版；当前导出的 JSON 已按最终契约冻结。
+- **升级提示**：已安装 image-url-to-base64 / image-host / ob11-core-bridge 的用户，卡片出现「⬆ 更新」后点击更新（或卸载重装）才会拿到本次修复与新配置项。
+
 ## 0.11.26 - 2026-10-19
 
 - image-host 升级到 1.0.9：WebUI 每张图片新增 **「详情」** 弹层，卡片上被截断/放不下的信息一次看全——完整 sha256 ID、格式/MIME、大小（字节）、缩略图大小、创建时间、最后访问时间、回收站状态、原图地址、b64 出口地址、**全部标签**、**全部来源记录**（平台/群/用户/消息 id/会话/时间/原始链接），底部带「复制链接 / 复制 b64 链接 / 复制 ID」。
