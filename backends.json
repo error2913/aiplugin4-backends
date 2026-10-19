@@ -131,7 +131,11 @@
       "entry": "imagehost.py",
       "deps": "requirements.txt",
       "port": 46680,
-      "version": "1.0.5",
+      "version": "1.0.6",
+      "webui": {
+        "path": "/",
+        "title": "图床 WebUI"
+      },
       "source": "https://raw.githubusercontent.com/error2913/aiplugin4-backends/shop/backends/image-host",
       "files": [
         "backend.json",

@@ -13,12 +13,17 @@ aiplugin4 后端管理 Web 界面（纯 Python 标准库，无第三方依赖）
 API 请求需带 Authorization: Bearer <token> 或 X-Token: <token>。
 """
 
+import hashlib
+import hmac
+import html
+import http.client
 import json
 import os
 import subprocess
 import sys
 import threading
 import time
+import urllib.parse
 import webbrowser
 from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -38,6 +43,7 @@ from launcher import (
     effective_webui_token,
     load_registry,
     load_runtime,
+    normalize_webui,
     process_memory,
     remove_backend_dir,
     reset_webui_token,
@@ -49,6 +55,50 @@ from launcher import (
     update_backend,
     update_project,
 )
+
+# 反代 WebUI 的会话 cookie：只在 /ui 前缀下生效，避免把 launcher 自身的 API 鉴权降级成 cookie。
+# 值由 WebUI token 派生，token 一改旧 cookie 立即失效（无需服务端存会话）。
+UI_COOKIE_NAME = "aib_ui"
+UI_COOKIE_PATH = "/ui"
+UI_COOKIE_MAX_AGE = 365 * 24 * 60 * 60
+UI_PREFIX = "/ui/"
+
+
+def _ui_cookie_value(token: str) -> str:
+    return hmac.new(token.encode("utf-8"), b"aiplugin4-backends-ui-v1", hashlib.sha256).hexdigest()
+
+
+def _ui_cookie_header(token: str, secure: bool = False) -> str:
+    parts = [
+        f"{UI_COOKIE_NAME}={_ui_cookie_value(token)}",
+        f"Path={UI_COOKIE_PATH}",
+        "HttpOnly",
+        "SameSite=Lax",
+        f"Max-Age={UI_COOKIE_MAX_AGE}",
+    ]
+    if secure:
+        parts.append("Secure")
+    return "; ".join(parts)
+
+
+def _rewrite_set_cookie(value: str, name: str) -> str:
+    """把后端通过反代下发的 cookie 限制到 /ui/<name>/，并去掉 Domain。"""
+    parts = [p.strip() for p in value.split(";") if p.strip()]
+    out = []
+    has_path = False
+    for part in parts:
+        low = part.lower()
+        if low.startswith("domain="):
+            continue
+        if low.startswith("path="):
+            out.append(f"Path=/ui/{name}/")
+            has_path = True
+            continue
+        out.append(part)
+    if not has_path:
+        out.append(f"Path=/ui/{name}/")
+    return "; ".join(out)
+
 
 PAGE = """<!DOCTYPE html>
 <html lang="zh-CN">
@@ -176,11 +226,17 @@ PAGE = """<!DOCTYPE html>
     width: min(860px, 100%); max-height: 82vh; background: var(--panel); border: 1px solid var(--border);
     border-radius: 14px; display: flex; flex-direction: column; overflow: hidden; box-shadow: 0 24px 60px var(--shadow);
   }
+  .dialog-head, .dialog-foot { flex: 0 0 auto; }
   .dialog-head { display: flex; align-items: center; gap: 10px; padding: 14px 18px; border-bottom: 1px solid var(--border); }
   .dialog-head b { font-size: 14px; }
   .dialog-head .spacer { flex: 1; }
+  /* 弹窗内容区：必须显式允许收缩 + 滚动，否则配置项一多就会被裁掉且滚不动 */
+  .dialog-body {
+    flex: 1 1 auto; min-height: 0; overflow-y: auto; overscroll-behavior: contain;
+    padding: 18px 22px; display: grid; gap: 16px;
+  }
   .dialog pre {
-    margin: 0; padding: 16px 18px; overflow: auto; font-size: 12.5px; line-height: 1.55;
+    margin: 0; padding: 16px 18px; overflow: auto; flex: 1 1 auto; min-height: 0; font-size: 12.5px; line-height: 1.55;
     font-family: Consolas, "Courier New", monospace; color: var(--muted); white-space: pre-wrap; word-break: break-all;
   }
   .close { background: transparent; border: none; font-size: 18px; color: var(--muted); cursor: pointer; padding: 2px 8px; }
@@ -190,6 +246,14 @@ PAGE = """<!DOCTYPE html>
     padding: 11px 16px; font-size: 13px; display: none; box-shadow: 0 12px 32px var(--shadow);
   }
   footer { margin-top: 26px; color: var(--muted); font-size: 12px; text-align: center; opacity: .7; }
+  @media (max-width: 480px) {
+    .modal { padding: 12px; }
+    .dialog { max-height: calc(100vh - 24px); }
+  }
+  @media (max-height: 560px) {
+    .modal { padding: 8px; }
+    .dialog { max-height: calc(100vh - 16px); }
+  }
 </style>
 </head>
 <body>
@@ -264,7 +328,7 @@ PAGE = """<!DOCTYPE html>
       <span class="spacer"></span>
       <button class="close" onclick="closeConfig()">✕</button>
     </div>
-    <div style="padding:18px 22px; display:grid; gap:16px;">
+    <div class="dialog-body">
       <label class="cfg-label">端口
         <input id="cfgPort" class="port" type="number" min="1" max="65535">
       </label>
@@ -279,7 +343,7 @@ PAGE = """<!DOCTYPE html>
       </label>
       <div id="cfgCustom" style="display:grid; gap:16px;"></div>
     </div>
-    <div style="padding:12px 18px; text-align:right; border-top:1px solid var(--border); display:flex; gap:8px; justify-content:flex-end;">
+    <div class="dialog-foot" style="padding:12px 18px; text-align:right; border-top:1px solid var(--border); display:flex; gap:8px; justify-content:flex-end;">
       <button onclick="closeConfig()">取消</button>
       <button class="primary" onclick="saveConfig()">保存</button>
     </div>
@@ -292,7 +356,7 @@ PAGE = """<!DOCTYPE html>
       <span class="spacer"></span>
       <button class="close" onclick="closeToken()">✕</button>
     </div>
-    <div style="padding:18px 22px; display:grid; gap:16px;">
+    <div class="dialog-body">
       <label class="cfg-label">服务器当前 Token（已生效）
         <div class="cfg-row">
           <input id="tokServer" class="port" type="text" readonly spellcheck="false" placeholder="加载中...">
@@ -305,7 +369,7 @@ PAGE = """<!DOCTYPE html>
         </div>
       </label>
     </div>
-    <div style="padding:12px 18px; text-align:right; border-top:1px solid var(--border); display:flex; gap:8px; justify-content:flex-end;">
+    <div class="dialog-foot" style="padding:12px 18px; text-align:right; border-top:1px solid var(--border); display:flex; gap:8px; justify-content:flex-end;">
       <button onclick="closeToken()">取消</button>
       <button class="primary" onclick="saveServerToken()">保存并生效</button>
     </div>
@@ -320,6 +384,7 @@ PAGE = """<!DOCTYPE html>
 let current = null;
 let currentType = 'backend';
 let cfgName = null;
+let backendsByName = {};  // /api/backends 的快照，供 WebUI 按钮取端口/路径
 const installing = new Set();
 const deleting = new Set();
 const updatingBackends = new Set();
@@ -441,6 +506,8 @@ function cycleTheme(){
 }
 async function refresh(){
   const j = await api('/api/backends');
+  backendsByName = {};
+  for (const item of (j.backends || [])) backendsByName[item.name] = item;
   const updMap = (j.updates && j.updates.backends) || {};
   const updSet = new Set();
   for (const k in updMap) if (updMap[k].available) updSet.add(k);
@@ -477,6 +544,11 @@ async function refresh(){
           : b.running
             ? `<button class="danger" onclick="run('${b.name}','stop')">停止</button><button onclick="restartBackend('${b.name}')">重启</button>`
             : `<button class="primary" onclick="run('${b.name}','start')">启动</button>`}
+        ${b.installed && b.webui
+          ? b.running
+            ? `<button class="primary" onclick="openWebui('${b.name}')" title="在新标签打开 ${esc(b.webui.title || 'WebUI')}">🌐 WebUI</button>`
+            : `<button disabled title="后端未运行，启动后可打开 WebUI">🌐 WebUI</button>`
+          : ''}
         ${b.installed ? `<button onclick="openConfig('${b.name}')">配置</button>` : ''}
         ${b.installed && updSet.has(b.name)
           ? updatingBackends.has(b.name)
@@ -535,6 +607,19 @@ async function restartBackend(name){
   await api('/api/restart/' + name, 'POST');
   toast('已重启：' + name);
   refresh();
+}
+function openWebui(name){
+  const b = backendsByName[name];
+  if (!b || !b.webui) return;
+  let url;
+  if (b.webui.proxy !== false){
+    // 走 launcher 同源反代：只暴露 launcher 端口，后端自身的端口不必对外开放
+    url = '/ui/' + encodeURIComponent(name) + '/';
+  } else {
+    const path = b.webui.path || '/';
+    url = location.protocol + '//' + location.hostname + ':' + b.port + path;
+  }
+  window.open(url, '_blank', 'noopener');
 }
 async function updateBackend(name){
   updatingBackends.add(name);
@@ -848,18 +933,58 @@ def run_webui(backends, config, supervisor: Supervisor, host: str = None, port: 
             if not tok:
                 return True
             auth = self.headers.get("Authorization") or ""
-            return auth == f"Bearer {tok}" or (self.headers.get("X-Token") or "") == tok
+            if auth == f"Bearer {tok}" or (self.headers.get("X-Token") or "") == tok:
+                # header 鉴权成功时顺手下发 /ui 前缀的会话 cookie，供 window.open 打开 WebUI 反代时使用
+                self._issue_ui_cookie = True
+                return True
+            if self.path.split("?", 1)[0].startswith(UI_PREFIX):
+                # 只有 /ui 反代接受 cookie；launcher 自己的 /api/* 仍必须带 header token
+                cookie = self.headers.get("Cookie") or ""
+                for item in cookie.split(";"):
+                    key, _, value = item.strip().partition("=")
+                    if key == UI_COOKIE_NAME and hmac.compare_digest(value, _ui_cookie_value(tok)):
+                        return True
+            return False
+
+        def _is_secure_request(self) -> bool:
+            return (self.headers.get("X-Forwarded-Proto") or "").lower() == "https"
+
+        def _ui_cookie(self) -> str:
+            return _ui_cookie_header(getattr(self, "webui_token", ""), self._is_secure_request())
 
         def _json(self, obj, status=200):
             body = json.dumps(obj, ensure_ascii=False).encode("utf-8")
             self.send_response(status)
             self.send_header("Content-Type", "application/json; charset=utf-8")
             self.send_header("Content-Length", str(len(body)))
+            if getattr(self, "_issue_ui_cookie", False) and getattr(self, "webui_token", ""):
+                self.send_header("Set-Cookie", self._ui_cookie())
             self.end_headers()
             self.wfile.write(body)
 
         def _err(self, message, status=500):
             self._json({"ok": False, "message": message}, status)
+
+        def _ui_unauthorized(self):
+            """反代页面是浏览器导航，401 JSON 对用户不友好，返回可点回登录页的 HTML。"""
+            body = (
+                "<!doctype html><meta charset='utf-8'><title>需要登录</title>"
+                "<body style='margin:0;min-height:100vh;display:grid;place-items:center;"
+                "font-family:system-ui,-apple-system,Segoe UI,sans-serif;background:#eef1f6;color:#1f2937'>"
+                "<div style='max-width:420px;padding:28px 32px;background:#fff;border:1px solid #e3e6ea;"
+                "border-radius:12px;box-shadow:0 4px 16px rgba(0,0,0,.06);text-align:center'>"
+                "<h2 style='margin:0 0 10px;font-size:18px'>需要 WebUI 登录</h2>"
+                "<p style='margin:0 0 16px;line-height:1.6;color:#4b5563'>"
+                "请先在 launcher 管理页输入访问 token，再回来打开后端 WebUI。</p>"
+                "<a href='/' style='display:inline-block;padding:9px 18px;border-radius:9px;"
+                "background:#2563eb;color:#fff;text-decoration:none'>返回登录</a>"
+                "</div></body>"
+            ).encode("utf-8")
+            self.send_response(401)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
 
         def _read_json(self) -> dict:
             length = int(self.headers.get("Content-Length") or 0)
@@ -873,8 +998,15 @@ def run_webui(backends, config, supervisor: Supervisor, host: str = None, port: 
             nonlocal backends, by_name
             backends = discover_backends()
             by_name = {b.name: b for b in backends}
+            path_only, _, query = self.path.partition("?")
             if self.path not in ("/", "/icon.png", "/icon-256.png") and not self._authorized():
-                self._err("unauthorized", 401)
+                if path_only.startswith(UI_PREFIX):
+                    self._ui_unauthorized()
+                else:
+                    self._err("unauthorized", 401)
+                return
+            if path_only.startswith(UI_PREFIX):
+                self._proxy("GET", path_only, query)
                 return
             if self.path == "/":
                 body = PAGE.encode("utf-8")
@@ -943,6 +1075,7 @@ def run_webui(backends, config, supervisor: Supervisor, host: str = None, port: 
                         "deps_ready": deps_ready(b),
                         "installed": deps_ready(b),  # 程序 + 依赖都就绪才算已安装
                         "pid": info.get("pid"),
+                        "webui": b.webui or {},
                     })
                 installed_names = {b.name for b in backends}
                 for item in load_registry():
@@ -966,6 +1099,7 @@ def run_webui(backends, config, supervisor: Supervisor, host: str = None, port: 
                         "deps_ready": False,
                         "installed": False,
                         "pid": None,
+                        "webui": normalize_webui(item.get("webui")),
                     })
                 self._json({"ok": True, "backends": rows, "updates": update_check()})
                 return
@@ -1015,6 +1149,10 @@ def run_webui(backends, config, supervisor: Supervisor, host: str = None, port: 
             by_name = {b.name: b for b in backends}
             if not self._authorized():
                 self._err("unauthorized", 401)
+                return
+            path_only, _, query = self.path.partition("?")
+            if path_only.startswith(UI_PREFIX):
+                self._proxy("POST", path_only, query)
                 return
             path = self.path
             try:
@@ -1224,6 +1362,198 @@ def run_webui(backends, config, supervisor: Supervisor, host: str = None, port: 
                 self._err("not found", 404)
             except Exception as e:  # noqa: BLE001
                 self._err(str(e))
+
+        # ---------------------------------------------------------------- 后端 WebUI 反代
+        def do_HEAD(self):
+            self._proxy_method("HEAD")
+
+        def do_PUT(self):
+            self._proxy_method("PUT")
+
+        def do_PATCH(self):
+            self._proxy_method("PATCH")
+
+        def do_DELETE(self):
+            self._proxy_method("DELETE")
+
+        def do_OPTIONS(self):
+            self._proxy_method("OPTIONS")
+
+        def _proxy_method(self, method: str):
+            nonlocal backends, by_name
+            backends = discover_backends()
+            by_name = {b.name: b for b in backends}
+            path_only, _, query = self.path.partition("?")
+            if not self._authorized():
+                if path_only.startswith(UI_PREFIX):
+                    self._ui_unauthorized()
+                else:
+                    self._err("unauthorized", 401)
+                return
+            if path_only.startswith(UI_PREFIX):
+                self._proxy(method, path_only, query)
+            else:
+                self._err("not found", 404)
+
+        def _proxy_error(self, status: int, title: str, detail: str = ""):
+            body = (
+                "<!doctype html><meta charset='utf-8'><title>{0}</title>"
+                "<body style='margin:0;min-height:100vh;display:grid;place-items:center;"
+                "font-family:system-ui,-apple-system,Segoe UI,sans-serif;background:#eef1f6;color:#1f2937'>"
+                "<div style='max-width:460px;padding:28px 32px;background:#fff;border:1px solid #e3e6ea;"
+                "border-radius:12px;box-shadow:0 4px 16px rgba(0,0,0,.06);text-align:center'>"
+                "<h2 style='margin:0 0 10px;font-size:18px'>{1}</h2>"
+                "<p style='margin:0 0 16px;line-height:1.6;color:#4b5563'>{2}</p>"
+                "<a href='/' style='display:inline-block;padding:9px 18px;border-radius:9px;"
+                "background:#2563eb;color:#fff;text-decoration:none'>返回 launcher</a>"
+                "</div></body>"
+            ).format(status, html.escape(title), html.escape(detail))
+            data = body.encode("utf-8")
+            self.send_response(status)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+
+        @staticmethod
+        def _rewrite_location(value: str, name: str, port: int) -> str:
+            """把后端返回的根路径 / 自身绝对地址重写到 /ui/<name>/ 前缀下。"""
+            if not value:
+                return value
+            for origin in (f"http://127.0.0.1:{port}", f"http://localhost:{port}"):
+                if value.lower().startswith(origin):
+                    value = value[len(origin):] or "/"
+                    break
+            if value.startswith("/") and not value.startswith("//") and not value.startswith(UI_PREFIX):
+                return f"/ui/{name}{value}"
+            return value
+
+        def _proxy(self, method: str, path: str, query: str):
+            """把 /ui/<name>/... 反代到 127.0.0.1:<后端端口><path>，流式转发，不缓冲整个响应。"""
+            rest = path[len(UI_PREFIX):]
+            name, _, sub = rest.partition("/")
+            name = urllib.parse.unquote(name)
+            backend = by_name.get(name)
+            if not backend or not backend.webui:
+                self._proxy_error(404, "没有这个带 WebUI 的后端", "该后端未安装、未声明 WebUI，或名称不正确。")
+                return
+            if not supervisor.is_running(name):
+                self._proxy_error(503, "后端未运行", "请先在卡片上启动该后端，再打开它的 WebUI。")
+                return
+            meta = backend.webui
+            if meta.get("proxy") is False:
+                self._proxy_error(403, "该后端未启用 launcher 反代", "请在卡片上直连后端端口打开 WebUI。")
+                return
+            if path == UI_PREFIX + name:
+                # 补尾斜杠，页面里的相对路径才会落在 /ui/<name>/ 下
+                self.send_response(302)
+                self.send_header("Location", f"/ui/{name}/" + (f"?{query}" if query else ""))
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+                return
+            parts = [p for p in urllib.parse.unquote(sub).split("/") if p]
+            if any(p in (".", "..") for p in parts):
+                self._proxy_error(400, "非法路径", "WebUI 反代不接受包含 . 或 .. 的路径。")
+                return
+            if (self.headers.get("Transfer-Encoding") or "").lower() == "chunked":
+                self._proxy_error(411, "不支持的请求体", "WebUI 反代暂不支持 chunked 请求体，请改用带 Content-Length 的请求。")
+                return
+            cfg = backend_config(backend)
+            port = int(cfg["port"])
+            upstream_host = "127.0.0.1" if cfg["host"] in ("0.0.0.0", "::", "") else cfg["host"]
+            base = meta.get("path") or "/"
+            # base 为后端内 WebUI 根路径；请求子路径接在其后（base="/" 时直接拼）
+            upstream_path = "/" + sub if base in ("", "/") else base.rstrip("/") + "/" + sub
+            target = upstream_path + (("?" + query) if query else "")
+            hop_by_hop = {
+                "connection", "keep-alive", "proxy-authenticate", "proxy-authorization",
+                "te", "trailers", "transfer-encoding", "upgrade",
+            }
+            webui_token = getattr(self, "webui_token", "")
+            conn = http.client.HTTPConnection(upstream_host, port, timeout=30)
+            started = False
+            try:
+                body_len = int(self.headers.get("Content-Length") or 0)
+                conn.putrequest(method, target, skip_host=True, skip_accept_encoding=True)
+                sent_backend_token = False
+                for key, value in self.headers.items():
+                    low = key.lower()
+                    if low in hop_by_hop or low in ("host", "content-length"):
+                        continue
+                    # launcher 自己的鉴权头不要透给后端（避免泄露 launcher token）
+                    if webui_token and low == "x-token" and value.strip() == webui_token:
+                        continue
+                    if webui_token and low == "authorization" and value.strip() == f"Bearer {webui_token}":
+                        continue
+                    if low == "cookie":
+                        kept = [
+                            part for part in value.split(";")
+                            if not part.strip().startswith(UI_COOKIE_NAME + "=")
+                        ]
+                        if not kept:
+                            continue
+                        value = ";".join(kept)
+                    if low in ("x-token", "authorization"):
+                        sent_backend_token = True
+                    conn.putheader(key, value)
+                if meta.get("inject_token") and cfg.get("token") and not sent_backend_token:
+                    conn.putheader("X-Token", cfg["token"])
+                conn.putheader("Host", f"{upstream_host}:{port}")
+                forwarded_for = self.headers.get("X-Forwarded-For") or (
+                    self.client_address[0] if self.client_address else ""
+                )
+                if forwarded_for:
+                    conn.putheader("X-Forwarded-For", forwarded_for)
+                conn.putheader("X-Forwarded-Proto", self.headers.get("X-Forwarded-Proto") or "http")
+                if self.headers.get("Host"):
+                    conn.putheader("X-Forwarded-Host", self.headers["Host"])
+                conn.putheader("X-Forwarded-Prefix", f"/ui/{name}")
+                if body_len:
+                    conn.putheader("Content-Length", str(body_len))
+                conn.endheaders()
+                remaining = body_len
+                while remaining > 0:
+                    chunk = self.rfile.read(min(65536, remaining))
+                    if not chunk:
+                        break
+                    conn.send(chunk)
+                    remaining -= len(chunk)
+                resp = conn.getresponse()
+                self.send_response(resp.status)
+                for key, value in resp.getheaders():
+                    low = key.lower()
+                    if low in hop_by_hop or low in ("transfer-encoding", "date", "server"):
+                        continue
+                    if low == "location":
+                        value = self._rewrite_location(value, name, port)
+                    elif low == "set-cookie":
+                        value = _rewrite_set_cookie(value, name)
+                    self.send_header(key, value)
+                if getattr(self, "_issue_ui_cookie", False) and webui_token:
+                    self.send_header("Set-Cookie", self._ui_cookie())
+                self.send_header("Connection", "close")
+                self.end_headers()
+                self.close_connection = True
+                started = True
+                if method != "HEAD":
+                    while True:
+                        chunk = resp.read(65536)
+                        if not chunk:
+                            break
+                        self.wfile.write(chunk)
+            except (BrokenPipeError, ConnectionResetError):
+                pass
+            except Exception as e:  # noqa: BLE001
+                if not started:
+                    try:
+                        self._proxy_error(502, "连接后端失败", str(e))
+                    except Exception:  # noqa: BLE001
+                        pass
+            finally:
+                try:
+                    conn.close()
+                except Exception:  # noqa: BLE001
+                    pass
 
     Handler.webui_token = token
     server = ThreadingHTTPServer((host, port), Handler)

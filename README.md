@@ -31,7 +31,8 @@ git clone https://github.com/error2913/aiplugin4-backends.git && cd aiplugin4-ba
 - 「重启全部」先停止全部，再启动依赖已就绪的后端
 - 右上角「⬆ 更新」更新本体（检测到新版 release 才更新，直接下载压缩包覆盖，不依赖 git）；每个后端在 release 中有独立包、各自版本控制，卡片出现「⬆ 更新」时只更新该后端
 - 卡片显示版本、运行时长、自动拉起次数与内存占用；「卸载」可删除运行副本恢复未安装状态
-- 卡片「⚙ 配置」弹窗可修改端口、访问 token 与监听 IP（默认 `0.0.0.0`），支持一键随机生成 token；token 默认留空 = 不鉴权
+- 卡片「⚙ 配置」弹窗可修改端口、访问 token 与监听 IP（默认 `0.0.0.0`），支持一键随机生成 token；token 默认留空 = 不鉴权；配置项较多时弹窗内容区可上下滚动
+- 后端自带 WebUI 时（在 `backend.json` 声明 `webui`，例如 image-host），运行中的卡片显示「🌐 WebUI」按钮：点击经 launcher 同源反代 `/ui/<名称>/` 打开，**只暴露 launcher 一个端口**；后端可以只监听 `127.0.0.1`，不必为 WebUI 单独开放公网端口
 - 后端进程异常退出会自动拉起
 
 > 按需安装：每个后端只安装自己缺失的依赖，不会预装全部；依赖清单（`requirements.txt` / `package.json`）变化后会自动重新安装。Python 后端使用独立 venv，Node 后端使用各自的 `node_modules`。
