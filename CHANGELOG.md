@@ -2,6 +2,11 @@
 
 标题格式为 `## <版本号>`，release 工作流按标签版本号读取对应段落作为发布说明；日常更新以「Unreleased」汇总，发版前改成版本号并补日期。
 
+## 0.11.24 - 2026-10-19
+
+- 修复后端卡片「配置」里**布尔配置被渲染成文本框、要手输 true/false** 的问题：`backend.json` 中 `type: "boolean"` 现在渲染为**开关**（开/关），`type: "tristate"` 渲染为**自动/开启/关闭**下拉框；保存统一提交 `1`/`0`（三态的空字符串 = 自动），服务端做校验与归一化，`{REPO_ROOT}` 展开时布尔默认值也归一化为 `1`/`0`
+- 配套后端：**mcp-browser 1.0.5**（`browser_headless` 默认改为开、`browser_chromium_sandbox` 改为三态控件）、**image-host 1.0.7**（WebUI 开关改为开关控件、默认开）；mcp-files-exec 的两个布尔项（默认开）无需改程序，新控件直接生效
+
 ## 0.11.23 - 2026-10-19
 
 - 修复 WebUI「⬆ 更新」/「🔄 重启 WebUI」在 **systemd 或前台直接运行**（没有 `logs/webui.pid`）时不生效的问题：旧 WebUI 进程一直占着端口，新进程 `Address already in use` 后退出，页面继续跑旧代码（表现为更新成功但界面/新功能不出现）

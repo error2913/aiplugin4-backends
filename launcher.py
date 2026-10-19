@@ -164,7 +164,9 @@ def save_backend_config(name: str, port=None, token=None, host=None, options: di
 
 
 def _expand_config_value(value) -> str:
-    """展开自定义配置值中的 {REPO_ROOT} 模板为仓库根目录"""
+    """展开自定义配置值中的 {REPO_ROOT} 模板为仓库根目录；bool 归一化为 1/0"""
+    if isinstance(value, bool):
+        return "1" if value else "0"
     return str(value or "").replace("{REPO_ROOT}", ROOT_DIR)
 
 

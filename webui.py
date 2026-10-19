@@ -30,6 +30,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from launcher import (
     _can_open_browser,
+    _expand_config_value,
     _no_window_kwargs,
     DEFAULT_LOG_DIR,
     ROOT_DIR,
@@ -209,6 +210,13 @@ PAGE = """<!DOCTYPE html>
   .cfg-row { display: flex; align-items: center; gap: 8px; }
   .cfg-row .port { flex: 1; width: auto; }
   .cfg-label { font-size: 12.5px; color: var(--muted); display: grid; gap: 6px; }
+  .cfg-switch { display: inline-flex; align-items: center; gap: 8px; cursor: pointer; user-select: none; }
+  .cfg-switch input { appearance: none; -webkit-appearance: none; width: 38px; height: 20px; border-radius: 999px; background: var(--border); position: relative; transition: background .15s; cursor: pointer; margin: 0; flex: none; }
+  .cfg-switch input::after { content: ''; position: absolute; top: 2px; left: 2px; width: 16px; height: 16px; border-radius: 50%; background: #fff; transition: left .15s; }
+  .cfg-switch input:checked { background: var(--blue); }
+  .cfg-switch input:checked::after { left: 20px; }
+  .cfg-switch-txt { font-size: 12.5px; color: var(--text); }
+  select.port { padding-right: 6px; }
   .ops { display: flex; gap: 8px; flex-wrap: wrap; }
   .ops { justify-content: center; }
   .ops button { padding: 6px 12px; font-size: 12.5px; }
@@ -544,7 +552,7 @@ async function refresh(){
           : b.running
             ? `<button class="danger" onclick="run('${b.name}','stop')">停止</button><button onclick="restartBackend('${b.name}')">重启</button>`
             : `<button class="primary" onclick="run('${b.name}','start')">启动</button>`}
-        ${b.installed && b.webui
+        ${b.installed && b.webui && b.webui.path
           ? b.running
             ? `<button class="primary" onclick="openWebui('${b.name}')" title="在新标签打开 ${esc(b.webui.title || 'WebUI')}">🌐 WebUI</button>`
             : `<button disabled title="后端未运行，启动后可打开 WebUI">🌐 WebUI</button>`
@@ -610,7 +618,7 @@ async function restartBackend(name){
 }
 function openWebui(name){
   const b = backendsByName[name];
-  if (!b || !b.webui) return;
+  if (!b || !b.webui || !b.webui.path) return;
   let url;
   if (b.webui.proxy !== false){
     // 走 launcher 同源反代：只暴露 launcher 端口，后端自身的端口不必对外开放
@@ -749,6 +757,16 @@ async function installAllNow(){
   allInstalling = false;
   refresh();
 }
+function cfgTruthy(v){
+  const s = String(v == null ? '' : v).trim().toLowerCase();
+  return ['1','true','yes','on','是','开启'].includes(s);
+}
+function cfgTri(v){
+  const s = String(v == null ? '' : v).trim().toLowerCase();
+  if (['1','true','yes','on'].includes(s)) return '1';
+  if (['0','false','no','off'].includes(s)) return '0';
+  return '';
+}
 async function openConfig(name){
   cfgName = name;
   const j = await api('/api/config/' + name);
@@ -764,13 +782,43 @@ async function openConfig(name){
     const f = schema[key];
     const label = document.createElement('label');
     label.className = 'cfg-label';
-    label.textContent = f.label || key;
-    const input = document.createElement('input');
-    input.className = 'port';
-    input.type = f.type === 'number' ? 'number' : 'text';
-    input.value = opts[key] != null ? opts[key] : (f.default || '');
-    input.dataset.cfgKey = key;
-    label.appendChild(input);
+    const title = document.createElement('span');
+    title.textContent = f.label || key;
+    label.appendChild(title);
+    const cur = opts[key] != null ? opts[key] : f.default;
+    if (f.type === 'boolean'){
+      const wrap = document.createElement('span');
+      wrap.className = 'cfg-switch';
+      const cb = document.createElement('input');
+      cb.type = 'checkbox';
+      cb.dataset.cfgKey = key;
+      cb.dataset.cfgType = 'boolean';
+      cb.checked = cfgTruthy(cur);
+      const txt = document.createElement('span');
+      txt.className = 'cfg-switch-txt';
+      txt.textContent = cb.checked ? '开' : '关';
+      cb.addEventListener('change', () => { txt.textContent = cb.checked ? '开' : '关'; });
+      wrap.append(cb, txt);
+      label.appendChild(wrap);
+    } else if (f.type === 'tristate'){
+      const sel = document.createElement('select');
+      sel.className = 'port';
+      sel.dataset.cfgKey = key;
+      sel.dataset.cfgType = 'tristate';
+      for (const [val, text] of [['', '自动'], ['1', '开启'], ['0', '关闭']]){
+        const o = document.createElement('option');
+        o.value = val; o.textContent = text; sel.appendChild(o);
+      }
+      sel.value = cfgTri(cur);
+      label.appendChild(sel);
+    } else {
+      const input = document.createElement('input');
+      input.className = 'port';
+      input.type = f.type === 'number' ? 'number' : 'text';
+      input.value = cur != null ? cur : '';
+      input.dataset.cfgKey = key;
+      label.appendChild(input);
+    }
     box.appendChild(label);
   }
   document.getElementById('configModal').classList.add('open');
@@ -790,8 +838,11 @@ async function saveConfig(){
   const host = document.getElementById('cfgHost').value.trim() || '0.0.0.0';
   if (!port || port < 1 || port > 65535){ toast('端口必须是 1-65535'); return; }
   const options = {};
-  document.querySelectorAll('#cfgCustom input[data-cfg-key]').forEach(inp => {
-    options[inp.dataset.cfgKey] = inp.value.trim();
+  document.querySelectorAll('#cfgCustom [data-cfg-key]').forEach(el => {
+    const type = el.dataset.cfgType || 'text';
+    if (type === 'boolean') options[el.dataset.cfgKey] = el.checked ? '1' : '0';
+    else if (type === 'tristate') options[el.dataset.cfgKey] = el.value;
+    else options[el.dataset.cfgKey] = el.value.trim();
   });
   await api('/api/config/' + cfgName, 'POST', JSON.stringify({port, token, host, options}));
   toast('配置已保存：' + cfgName + '（重启后端生效）');
@@ -1075,7 +1126,7 @@ def run_webui(backends, config, supervisor: Supervisor, host: str = None, port: 
                         "deps_ready": deps_ready(b),
                         "installed": deps_ready(b),  # 程序 + 依赖都就绪才算已安装
                         "pid": info.get("pid"),
-                        "webui": b.webui or {},
+                        "webui": b.webui or None,
                     })
                 installed_names = {b.name for b in backends}
                 for item in load_registry():
@@ -1099,7 +1150,7 @@ def run_webui(backends, config, supervisor: Supervisor, host: str = None, port: 
                         "deps_ready": False,
                         "installed": False,
                         "pid": None,
-                        "webui": normalize_webui(item.get("webui")),
+                        "webui": normalize_webui(item.get("webui")) or None,
                     })
                 self._json({"ok": True, "backends": rows, "updates": update_check()})
                 return
@@ -1113,7 +1164,7 @@ def run_webui(backends, config, supervisor: Supervisor, host: str = None, port: 
                 schema = backend_custom_config(backend)
                 options = {}
                 for key, field in schema.items():
-                    options[key] = cfg["options"].get(key, field.get("default", ""))
+                    options[key] = cfg["options"].get(key, _expand_config_value(field.get("default", "")))
                 self._json({
                     "ok": True,
                     "port": cfg["port"],
@@ -1259,11 +1310,33 @@ def run_webui(backends, config, supervisor: Supervisor, host: str = None, port: 
                         if key not in raw_options:
                             continue
                         val = str(raw_options[key]).strip()
-                        if field.get("type") == "number" and val:
+                        ftype = field.get("type")
+                        truthy = ("1", "true", "yes", "on", "是", "开启")
+                        if ftype == "number" and val:
                             try:
                                 int(val)
                             except ValueError:
                                 self._err(f"配置项「{field.get('label', key)}」必须是数字", 400)
+                                return
+                        elif ftype == "boolean" and val:
+                            low = val.lower()
+                            if low in truthy:
+                                val = "1"
+                            elif low in ("0", "false", "no", "off", "否", "关闭"):
+                                val = "0"
+                            else:
+                                self._err(f"配置项「{field.get('label', key)}」必须是开/关", 400)
+                                return
+                        elif ftype == "tristate":
+                            low = val.lower()
+                            if low in truthy:
+                                val = "1"
+                            elif low in ("0", "false", "no", "off", "否", "关闭"):
+                                val = "0"
+                            elif low in ("", "auto", "自动"):
+                                val = ""
+                            else:
+                                self._err(f"配置项「{field.get('label', key)}」必须是 自动/开/关", 400)
                                 return
                         if not val:
                             val = str(field.get("default", "") or "")
