@@ -13,6 +13,7 @@ from __future__ import annotations
 import hashlib
 import ipaddress
 import os
+import re
 import socket
 import tempfile
 from urllib.parse import urljoin, urlparse
@@ -21,6 +22,14 @@ import requests
 
 MAX_REDIRECTS = 3
 CHUNK_SIZE = 64 * 1024
+
+# QQ 官方 bot 的图片 URL 来自 JSON/HTML 上下文，& 常被转义成 &amp; 等实体。
+# 这里只还原 & 的几种实体写法，不能用 html.unescape：它会把合法的
+# `&notify=1` 解成 `¬ify=1`，破坏 URL。
+_HTML_AMP_RE = re.compile(r"&(?:amp|#0*38|#x0*26);", re.IGNORECASE)
+# 错误文本脱敏：不回显完整 URL（rkey 敏感）
+_URL_RE = re.compile(r"https?://\S+", re.IGNORECASE)
+_URL_IN_MSG_RE = re.compile(r"(url:\s*)\S+", re.IGNORECASE)
 
 # (magic, format, mime)
 MAGIC_FORMATS = (
@@ -32,6 +41,23 @@ MAGIC_FORMATS = (
 )
 
 ALLOWED_FORMATS = ("png", "jpg", "jpeg", "gif", "webp", "bmp")
+
+
+def decode_url_html_entities(url) -> str:
+    """还原 URL 中 HTML 转义的 &（&amp; / &#38; / &#x26;，支持嵌套）。"""
+    s = str(url or "").strip()
+    for _ in range(3):
+        n = _HTML_AMP_RE.sub("&", s)
+        if n == s:
+            break
+        s = n
+    return s
+
+
+def _redact(text) -> str:
+    """去掉异常文本中的完整 URL / 查询串，避免泄露 rkey。"""
+    out = _URL_RE.sub("<url>", str(text))
+    return _URL_IN_MSG_RE.sub(r"\1<url>", out)
 
 
 class FetchError(Exception):
@@ -79,7 +105,7 @@ def safe_fetch(url: str, *, max_bytes: int, timeout, tmp_dir: str,
 
     :raises FetchError: 分类见 ``FetchError.kind``
     """
-    current = url
+    current = decode_url_html_entities(url)
 
     for _hop in range(MAX_REDIRECTS + 1):
         parsed = urlparse(current)
@@ -95,7 +121,7 @@ def safe_fetch(url: str, *, max_bytes: int, timeout, tmp_dir: str,
             try:
                 ips = _resolve_all(host, port)
             except OSError as exc:
-                raise FetchError("bad_url", reason="dns", detail=str(exc))
+                raise FetchError("bad_url", reason="dns", detail=_redact(exc))
             if not ips:
                 raise FetchError("bad_url", reason="dns")
             for ip in ips:
@@ -106,7 +132,7 @@ def safe_fetch(url: str, *, max_bytes: int, timeout, tmp_dir: str,
             resp = requests.get(current, stream=True, timeout=timeout,
                                 allow_redirects=False)
         except requests.RequestException as exc:
-            raise FetchError("fetch_failed", status=0, detail=str(exc))
+            raise FetchError("fetch_failed", status=0, detail=_redact(exc))
 
         # 手动跳转：下一轮会重做上面的全部校验
         if resp.status_code in (301, 302, 303, 307, 308):
@@ -114,7 +140,7 @@ def safe_fetch(url: str, *, max_bytes: int, timeout, tmp_dir: str,
             resp.close()
             if not location:
                 raise FetchError("bad_url", reason="bad_redirect")
-            current = urljoin(current, location)
+            current = urljoin(current, decode_url_html_entities(location))
             continue
 
         if resp.status_code >= 400:
@@ -140,7 +166,7 @@ def safe_fetch(url: str, *, max_bytes: int, timeout, tmp_dir: str,
             raise
         except Exception as exc:  # 连接中断 / 读超时
             _safe_unlink(tmp_path)
-            raise FetchError("fetch_failed", status=0, detail=str(exc))
+            raise FetchError("fetch_failed", status=0, detail=_redact(exc))
         finally:
             resp.close()
 
