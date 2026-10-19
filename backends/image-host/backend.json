@@ -5,7 +5,7 @@
   "entry": "imagehost.py",
   "deps": "requirements.txt",
   "port": 46680,
-  "version": "1.0.13",
+  "version": "1.0.14",
   "webui": {
     "path": "/",
     "title": "图床 WebUI"

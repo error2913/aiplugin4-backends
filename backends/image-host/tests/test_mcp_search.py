@@ -74,6 +74,7 @@ class TestSearchScope(unittest.TestCase):
         out = text_of(mcp._tool_search(store, {"query": "cat"}))
         self.assertIn("scope=gallery", out)
         self.assertIn("abc", out)
+        self.assertIn("[img:abc]", out)
 
     def test_tool_schema_exposes_scope(self):
         search = next(t for t in mcp.TOOLS if t["name"] == "image_search")

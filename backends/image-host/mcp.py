@@ -27,7 +27,8 @@ TOOLS = [
         "name": "image_search",
         "description": ("搜索私人图库中的图片（按名称、标签、来源元数据）。"
                         "默认只搜长期图库（手动上传/收进图库）；插件自动抓取的图片要传 scope=plugin/all。"
-                        "返回 id / 名称 / 标签 / 来源 / 时间 / URL。"),
+                        "返回 id / 名称 / 标签 / 来源 / 时间 / URL。"
+                        "返回的 id 可直接用 [img:ID] 在回复里发送（插件会转为图床稳定地址）。"),
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -147,7 +148,7 @@ def _tool_search(store, args: dict):
             f"标签: {','.join(it['tags']) or '-'} | "
             f"{src.get('platform') or '-'} 群{src.get('group_id') or '-'} "
             f"用户{src.get('user_id') or '-'} {_fmt_time(src.get('at') or it['created_at'])}{extra} | "
-            f"/i/{it['id']}"
+            f"/i/{it['id']} | [img:{it['id']}]"
         )
     return _text(f"共 {total} 条（scope={scope}），返回 {len(items)} 条（offset={offset}）：\n" + "\n".join(lines))
 
