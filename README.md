@@ -57,7 +57,7 @@ WebUI 工具栏提供两个一键复制按钮，把启动器里**已安装**的�
 - MCP 配置**粘贴会整体替换**「MCP服务器」；如果还手写过其它服务器，请先合并再粘贴。
 - 「👁 预览」可查看格式化 JSON、纳入/排除项与警告，并支持下载 `.json`；局域网 `http://` 下浏览器剪贴板 API 不可用时会自动降级，失败则打开预览手动复制。
 - CLI 等价命令：`aibackend plugin-config` / `aibackend mcp-config`（`--host`、`--pretty`）。
-- `image-host` 的 `/mcp` 需要访问 token，未设置时导出会省略 headers 并给出警告；不需要平台白名单时保持默认即可。
+- `image-host` 的 `/mcp` 需要访问 token：未设置 token 时该条目会被跳过（避免生成必然 401 的服务器），设置 token 并重启 image-host 后重新复制即可；不需要平台白名单时保持默认即可。
 
 JSON 格式与完整设计见 [docs/插件配置导出方案](docs/插件配置导出方案.md)。
 

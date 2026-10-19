@@ -270,23 +270,23 @@ def _export_entries(kind: str, requested_host: str, backends: list = None):
         path = str(meta.get("path") or ("/mcp" if kind == "mcp" else "")).strip()
         url = _join_export_url(scheme, _export_host(backend, cfg, host), cfg["port"], path)
         token = _plugin_token(meta, cfg, "backend" if kind == "mcp" else "")
+        if meta.get("tokenRequired") and not token:
+            # image-host 的写接口与 /mcp 都必须带 token：没 token 时导出了也只会 401，直接跳过
+            excluded.append({"name": name, "reason": "未设置访问 token"})
+            warnings.append(
+                f"{name} 未设置访问 token：{'MCP 接口' if kind == 'mcp' else '写接口'}需要鉴权，已跳过；"
+                "请在卡片「⚙ 配置」设置 token 并重启后端后重新复制"
+            )
+            continue
         if kind == "backend":
             item = {"url": url}
             if token:
                 item["token"] = token
-            elif meta.get("tokenRequired"):
-                warnings.append(
-                    f"{name} 未设置访问 token：插件上传/取图会返回 401，建议在卡片「⚙ 配置」里设置"
-                )
             config["backends"][name] = item
         else:
             item = {"type": "http", "url": url}
             if token:
                 item["headers"] = {"Authorization": f"Bearer {token}"}
-            elif meta.get("tokenRequired"):
-                warnings.append(
-                    f"{name} 未设置访问 token：该后端的 MCP 接口需要鉴权，插件调用会返回 401"
-                )
             platform = meta.get("platform")
             if isinstance(platform, str):
                 platform = [platform]

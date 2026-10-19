@@ -97,12 +97,16 @@ class PluginExportTest(unittest.TestCase):
         self.assertEqual(config["backends"]["ob11-core-bridge"]["url"], "ws://127.0.0.1:46880/plugin")
         self.assertEqual(result["host"], "192.168.1.10")
 
-    def test_backend_export_warns_for_required_token(self):
+    def test_backend_export_skips_required_token(self):
         self.cfg["image-host"]["token"] = ""
         with ExitStack() as stack:
             self._patched(stack)
             result = launcher.build_plugin_backend_config()
-        self.assertNotIn("token", result["config"]["backends"]["image-host"])
+        self.assertNotIn("image-host", result["config"]["backends"])
+        self.assertEqual(
+            {x["name"]: x["reason"] for x in result["excluded"]}["image-host"],
+            "未设置访问 token",
+        )
         self.assertTrue(any("image-host" in w and "token" in w for w in result["warnings"]))
 
     def test_backend_export_uninstalled(self):
@@ -159,12 +163,16 @@ class PluginExportTest(unittest.TestCase):
         self.assertNotIn("version", result["config"])
         self.assertEqual(result["text"], json.dumps(result["config"], ensure_ascii=False, separators=(",", ":")))
 
-    def test_mcp_export_image_host_token_required_warning(self):
+    def test_mcp_export_skips_required_token(self):
         self.cfg["image-host"]["token"] = ""
         with ExitStack() as stack:
             self._patched(stack)
             result = launcher.build_plugin_mcp_config()
-        self.assertNotIn("headers", result["config"]["mcpServers"]["image-host"])
+        self.assertNotIn("image-host", result["config"]["mcpServers"])
+        self.assertEqual(
+            {x["name"]: x["reason"] for x in result["excluded"]}["image-host"],
+            "未设置访问 token",
+        )
         self.assertTrue(any("image-host" in w and "token" in w for w in result["warnings"]))
 
     def test_mcp_export_empty_token_omits_headers(self):
