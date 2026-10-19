@@ -556,6 +556,7 @@ function tagChip(it, tag) {
   x.title = '移除标签'; x.setAttribute('aria-label', '移除标签 ' + tag);
   x.addEventListener('click', async () => {
     if (!(await patch(it.id, { remove_tags: [tag] }))) return;
+    tagsCache = null; tagsCacheAt = 0;
     chip.remove(); it.tags = (it.tags || []).filter((v) => v !== tag);
   });
   chip.append(label, x);
@@ -600,6 +601,7 @@ function startAddTag(it, chips, addBtn) {
       return;
     }
     if (!(await patch(it.id, { add_tags: [v] }))) return;
+    tagsCache = null; tagsCacheAt = 0;
     applied.add(v);
     it.tags = (it.tags || []).concat(v);
     const chipEl = tagChip(it, v);
@@ -618,7 +620,10 @@ function startAddTag(it, chips, addBtn) {
     if (e.key === 'Enter') { e.preventDefault(); addTag(input.value); }
     else if (e.key === 'Escape') { e.preventDefault(); close(); }
   });
-  input.addEventListener('blur', () => close());
+  // 焦点移到建议气泡内不算离开；只有点到编辑器外才收起，避免点已有标签时先 blur 关闭
+  wrap.addEventListener('focusout', (e) => {
+    if (!wrap.contains(e.relatedTarget)) close();
+  });
   refreshSugg();
   sync();
 }
@@ -1000,7 +1005,7 @@ function showLogin() {
   show(loginView); loginErr.textContent = ''; passwordInput.value = '';
   setTimeout(() => passwordInput.focus(), 0);
 }
-function enterGallery() { show(galleryView); load(false); }
+function enterGallery() { tagsCache = null; tagsCacheAt = 0; show(galleryView); load(false); }
 function setView(trash) { setMode(trash ? 'trash' : 'lib'); }
 function setMode(mode) {
   exitBatch();
@@ -1191,13 +1196,18 @@ function openPop(build) {
 }
 
 let tagsCache = null;
-async function getTags() {
-  if (tagsCache) return tagsCache;
+let tagsCacheAt = 0;
+const TAGS_CACHE_TTL = 5000;
+/** 已有标签缓存：空结果不缓存、5 秒过期；登录/401 后由调用方清空，避免「一次 401 永久空列表」 */
+async function getTags(force) {
+  if (!force && tagsCache && tagsCache.length && Date.now() - tagsCacheAt < TAGS_CACHE_TTL) return tagsCache;
   try {
     const data = await api('/api/tags?limit=200');
     tagsCache = ((data && data.tags) || []).slice().sort((a, b) => (b.count || 0) - (a.count || 0));
+    tagsCacheAt = Date.now();
   } catch (e) {
-    tagsCache = [];
+    tagsCache = null;
+    throw e;
   }
   return tagsCache;
 }
@@ -1234,6 +1244,15 @@ function renderTagSugg(box, query, exclude, onPick, limit) {
       more.textContent = '还有 ' + (matched.length - shown.length) + ' 个，继续输入可缩小范围';
       box.appendChild(more);
     }
+  }).catch((e) => {
+    // 401（会话过期）时 api() 会切回登录页；这里给出可重试的提示，避免看起来「没有标签」
+    box.textContent = '';
+    const hint = el('span', 'suggempty');
+    hint.textContent = '已有标签加载失败：' + (e && e.message ? e.message : '网络错误');
+    const retry = btn('重试', 'ghost');
+    retry.addEventListener('mousedown', (ev) => ev.preventDefault());
+    retry.addEventListener('click', () => renderTagSugg(box, query, exclude, onPick, limit));
+    box.append(hint, retry);
   });
 }
 function openAddTagPop() {
