@@ -50,9 +50,6 @@ PASSWORD = os.environ.get("AIPLUGIN4_IMAGE_HOST_PASSWORD") or "123456"
 WEBUI_ENABLED = (os.environ.get("AIPLUGIN4_IMAGE_HOST_WEBUI") or "on").strip().lower() \
     not in ("", "0", "off", "false", "no")
 DATA_DIR = os.environ.get("AIPLUGIN4_IMAGE_HOST_DIR") or os.path.join(ROOT, "data")
-PUBLIC_BASE_URL = (os.environ.get("AIPLUGIN4_IMAGE_HOST_PUBLIC_BASE_URL") or "").rstrip("/")
-ALLOW_HOSTS = [h for h in (os.environ.get("AIPLUGIN4_IMAGE_HOST_ALLOW_HOSTS") or "").split(",")
-               if h.strip()]
 CAP_MB = int(os.environ.get("AIPLUGIN4_IMAGE_HOST_CAP_MB") or "2048")
 MAX_FILE_MB = int(os.environ.get("AIPLUGIN4_IMAGE_HOST_MAX_FILE_MB") or "8")
 THUMB_MAX = int(os.environ.get("AIPLUGIN4_IMAGE_HOST_THUMB_MAX") or "512")
@@ -121,10 +118,6 @@ def _release_store_conn(_exc):
     store.release_conn()
 
 
-def _public(path: str) -> str:
-    return f"{PUBLIC_BASE_URL}{path}" if PUBLIC_BASE_URL else path
-
-
 def _token_ok() -> bool:
     if not TOKEN:
         return False
@@ -164,12 +157,11 @@ def _item(bid: str, fmt: str, size: int, dedup: bool, ref: str):
     row = store.get(bid) or {}
     return {
         "id": bid,
-        "url": _public(f"/i/{bid}"),
-        "b64_url": _public(f"/i/{bid}/b64"),
-        "thumb_url": _public(f"/t/{bid}") if row.get("thumb_path") else None,
+        "url": f"/i/{bid}",
+        "b64_url": f"/i/{bid}/b64",
+        "thumb_url": f"/t/{bid}" if row.get("thumb_path") else None,
         "format": fmt,
         "size": size,
-        "reachable": bool(PUBLIC_BASE_URL),
         "dedup": dedup,
         "ref": ref,
     }
@@ -226,7 +218,6 @@ def api_health():
     return jsonify({
         "ok": True,
         "image_host": True,
-        "public_base_url_set": bool(PUBLIC_BASE_URL),
         "cap_mb": CAP_MB,
         "used_mb": round(stats["used_bytes"] / 1048576, 2),
         "manual_mb": round(stats["manual_bytes"] / 1048576, 2),
@@ -339,7 +330,7 @@ def api_upload():
             try:
                 tmp, sha, size, fmt, mime = fetchmod.safe_fetch(
                     url, max_bytes=MAX_BYTES, timeout=FETCH_TIMEOUT,
-                    tmp_dir=store.tmp, allow_hosts=ALLOW_HOSTS,
+                    tmp_dir=store.tmp,
                     allow_private=DEV_ALLOW_PRIVATE)
             except fetchmod.FetchError as exc:
                 if exc.kind == "bad_url":
@@ -468,9 +459,9 @@ def api_list():
         origin=(request.args.get("origin") or "").strip(),
         limit=limit, offset=offset, trash=trash)
     for item in items:
-        item["url"] = _public(f"/i/{item['id']}")
-        item["thumb_url"] = _public(f"/t/{item['id']}") if item.pop("has_thumb") else None
-        item["b64_url"] = _public(f"/i/{item['id']}/b64")
+        item["url"] = f"/i/{item['id']}"
+        item["thumb_url"] = f"/t/{item['id']}" if item.pop("has_thumb") else None
+        item["b64_url"] = f"/i/{item['id']}/b64"
     return jsonify({"total": total, "limit": limit, "offset": offset, "items": items})
 
 
@@ -578,8 +569,6 @@ def main():
         log.info("AIPLUGIN4_IMAGE_HOST_WEBUI=off：WebUI 已关闭（API 与图片分发不受影响）")
     log.info("image-host %s 监听 http://%s:%d  数据目录=%s  容量=%dMB 回收站=%s 天",
              VERSION, HOST, PORT, DATA_DIR, CAP_MB, TRASH_DAYS or "关闭")
-    log.info("PUBLIC_BASE_URL=%s（空 = 模型侧不可达，插件应改用 b64 出口）",
-             PUBLIC_BASE_URL or "(未配置)")
     if DEV_ALLOW_PRIVATE:
         log.warning("AIPLUGIN4_IMAGE_HOST_DEV_ALLOW_PRIVATE=1：已放开私网抓取，仅限本地测试！")
     app.run(host=HOST, port=PORT, threaded=True)

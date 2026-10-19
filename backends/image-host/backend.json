@@ -5,7 +5,7 @@
   "entry": "imagehost.py",
   "deps": "requirements.txt",
   "port": 46680,
-  "version": "1.0.4",
+  "version": "1.0.5",
   "config": {
     "data_dir": {
       "label": "数据目录（SQLite + 原图分片 + 缩略图）",
@@ -25,12 +25,6 @@
       "type": "text",
       "default": "123456",
       "env": "AIPLUGIN4_IMAGE_HOST_PASSWORD"
-    },
-    "public_base_url": {
-      "label": "对外地址前缀（可选）：填了才返回 https://域名/i/<id> 绝对地址，供 QQ 协议端或模型按链接取图；留空只返回 /i/<id> 相对路径，插件自己拼本机地址或改用 base64",
-      "type": "text",
-      "default": "",
-      "env": "AIPLUGIN4_IMAGE_HOST_PUBLIC_BASE_URL"
     },
     "cap_mb": {
       "label": "图库容量上限（MB，原图+缩略图；超出按 LRU 淘汰，先清回收站）",

@@ -73,22 +73,8 @@ def _resolve_all(host: str, port: int):
     return out
 
 
-def _host_allowed(host: str, allow_hosts) -> bool:
-    host = (host or "").lower().rstrip(".")
-    for rule in allow_hosts:
-        rule = (rule or "").strip().lower().rstrip(".")
-        if not rule:
-            continue
-        if rule.startswith("*."):
-            if host == rule[2:] or host.endswith(rule[1:]):
-                return True
-        elif host == rule:
-            return True
-    return False
-
-
 def safe_fetch(url: str, *, max_bytes: int, timeout, tmp_dir: str,
-               allow_hosts=(), allow_private: bool = False):
+               allow_private: bool = False):
     """下载到临时文件，返回 (tmp_path, sha256_hex, size, format, mime)。
 
     :raises FetchError: 分类见 ``FetchError.kind``
@@ -103,8 +89,6 @@ def safe_fetch(url: str, *, max_bytes: int, timeout, tmp_dir: str,
         host = parsed.hostname
         if not host:
             raise FetchError("bad_url", reason="no_host")
-        if allow_hosts and not _host_allowed(host, allow_hosts):
-            raise FetchError("bad_url", reason="host_not_allowed")
 
         if not allow_private:
             port = parsed.port or (443 if parsed.scheme == "https" else 80)
