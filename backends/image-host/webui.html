@@ -82,7 +82,6 @@ select option{background:var(--panel);color:var(--tx)}
 .topbar{position:sticky;top:0;z-index:10;display:flex;flex-wrap:wrap;align-items:center;gap:8px;padding:10px 20px;background:var(--bar);border-bottom:1px solid var(--bd);box-shadow:0 1px 2px var(--shadow);backdrop-filter:blur(10px);transition:background .18s,border-color .18s}
 .brand{margin-right:4px;font-size:15px;font-weight:700;letter-spacing:.3px}
 #searchWrap{flex:1 1 200px;max-width:340px}
-#tagWrap{flex:0 0 158px}
 .spacer{flex:1 1 0}
 .searchwrap{position:relative;display:inline-flex;align-items:center;min-width:0}
 .searchwrap>input{width:100%;padding-right:26px}
@@ -118,7 +117,7 @@ select option{background:var(--panel);color:var(--tx)}
 .tab{height:28px;padding:0 10px;font-size:12.5px;color:var(--mut);background:none;border:0;border-radius:7px}
 .tab:hover:not(:disabled){background:var(--bd2);color:var(--tx)}
 .tab.on{background:var(--panel);color:var(--tx);font-weight:600;box-shadow:0 1px 2px var(--shadow)}
-.topbar.tagsmode #searchWrap,.topbar.tagsmode #tagWrap,
+.topbar.tagsmode #searchWrap,
 .topbar.tagsmode #origin,.topbar.tagsmode #selectBtn{display:none!important}
 .pop .chips{max-height:120px;overflow:auto}
 .tagbar{display:flex;align-items:center;gap:10px;margin:0 0 16px}
@@ -283,12 +282,8 @@ button.more:hover:not(:disabled){background:none;text-decoration:underline}
       <button id="viewTags" class="tab" type="button" aria-pressed="false">标签</button>
     </div>
     <span class="searchwrap" id="searchWrap">
-      <input id="search" type="text" placeholder="搜索名称 / 标签 / ID…" aria-label="搜索">
+      <input id="search" type="text" placeholder="搜索名称 / 标签 / ID / 群号…" aria-label="搜索">
       <button type="button" class="clr" data-for="search" hidden aria-label="清空搜索" title="清空">×</button>
-    </span>
-    <span class="searchwrap" id="tagWrap">
-      <input id="tag" type="text" placeholder="标签筛选（输入即筛）" aria-label="标签筛选">
-      <button type="button" class="clr" data-for="tag" hidden aria-label="清空标签筛选" title="清空">×</button>
     </span>
     <div class="tabs compact" id="origin" role="group" aria-label="来源筛选">
       <button type="button" class="tab on" data-v="">全部</button>
@@ -376,7 +371,7 @@ const btn = (text, cls, title) => { const b = el('button', cls); b.type = 'butto
 const noticeView = $('#notice'), loginView = $('#login'), galleryView = $('#gallery');
 const topbar = $('#topbar');
 const grid = $('#grid'), msgEl = $('#msg'), moreBtn = $('#more'), footNote = $('#footNote'), toastEl = $('#toast');
-const searchInput = $('#search'), tagInput = $('#tag'), originSel = $('#origin');
+const searchInput = $('#search'), originSel = $('#origin');
 const passwordInput = $('#password'), loginErr = $('#loginErr'), loginBtn = $('#loginBtn');
 const fileInput = $('#file'), uploadBtn = $('#uploadBtn'), importBtn = $('#importBtn');
 const viewLib = $('#viewLib'), viewTrash = $('#viewTrash'), viewTags = $('#viewTags');
@@ -389,7 +384,7 @@ const batchActions = $('#batchActions'), batchProg = $('#batchProg');
 const queueEl = $('#queue'), qCount = $('#qCount'), qList = $('#qList');
 const qRetryAll = $('#qRetryAll'), qFold = $('#qFold'), qClose = $('#qClose'), qReopen = $('#qReopen');
 const dropOvl = $('#dropOvl'), dropText = $('#dropText');
-const state = { q: '', tag: '', origin: '', limit: 24, offset: 0, total: 0, loaded: 0, busy: false, err: '', trash: false, items: new Map(),
+const state = { q: '', origin: '', limit: 24, offset: 0, total: 0, loaded: 0, busy: false, err: '', trash: false, items: new Map(),
                 mode: 'lib', tagsQuery: '', tagsOffset: 0, tagsTotal: 0, tagsLoaded: 0, tagsBusy: false };
 const cardViews = new Map();
 const batch = { active: false, allMatching: false, ids: new Set(), filter: null, expected: 0, busy: false };
@@ -970,7 +965,7 @@ async function load(append) {
     cardViews.clear();
     grid.textContent = ''; msgEl.hidden = false; msgEl.textContent = '加载中…'; moreBtn.disabled = true;
   } else { moreBtn.textContent = '加载中…'; moreBtn.disabled = true; }
-  const qs = new URLSearchParams({ q: state.q, tag: state.tag, origin: state.origin, limit: String(state.limit), offset: String(offset) });
+  const qs = new URLSearchParams({ q: state.q, origin: state.origin, limit: String(state.limit), offset: String(offset) });
   if (state.trash) qs.set('trash', '1');
   try {
     const data = await api('/api/list?' + qs.toString());
@@ -997,7 +992,7 @@ function refresh() {
     loadTags(false);
     return;
   }
-  state.q = searchInput.value.trim(); state.tag = tagInput.value.trim(); state.origin = selectedOrigin;
+  state.q = searchInput.value.trim(); state.origin = selectedOrigin;
   load(false);
 }
 function showLogin() {
@@ -1039,9 +1034,10 @@ function makeTagCard(t) {
   cnt.textContent = '×' + t.count;
   b.append(dot, name, cnt);
   b.addEventListener('click', () => {
-    state.tag = t.tag;
-    tagInput.value = t.tag;
-    if (clearSync.has(tagInput)) clearSync.get(tagInput)();
+    // 只有一个搜索框：点标签卡片 = 把标签名填进搜索框（名称/标签/ID 统一搜）
+    state.q = t.tag;
+    searchInput.value = t.tag;
+    if (clearSync.has(searchInput)) clearSync.get(searchInput)();
     setMode('lib');
   });
   return b;
@@ -1774,19 +1770,6 @@ searchInput.addEventListener('input', () => {
   clearTimeout(searchTimer);
   searchTimer = setTimeout(() => { state.q = searchInput.value.trim(); load(false); }, 300);
 });
-let tagTimer = 0;
-tagInput.addEventListener('input', () => {
-  clearTimeout(tagTimer);
-  tagTimer = setTimeout(() => { state.tag = tagInput.value.trim(); load(false); }, 300);
-});
-tagInput.addEventListener('keydown', (e) => {
-  if (e.key === 'Enter') {
-    e.preventDefault();
-    clearTimeout(tagTimer);
-    state.tag = tagInput.value.trim();
-    load(false);
-  }
-});
 /* 输入框一键清空（有内容才显示小叉） */
 const clearSync = new Map();
 document.querySelectorAll('.clr').forEach((b) => {
@@ -1862,7 +1845,7 @@ selAll.addEventListener('click', () => {
   if (!state.total) return;
   batch.allMatching = true;
   batch.expected = state.total;
-  batch.filter = { q: state.q, tag: state.tag, origin: state.origin };
+  batch.filter = { q: state.q, origin: state.origin };
   batch.ids.clear();
   renderSelection();
 });
