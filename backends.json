@@ -173,7 +173,7 @@
       "entry": "imagehost.py",
       "deps": "requirements.txt",
       "port": 46680,
-      "version": "1.0.11",
+      "version": "1.0.12",
       "pluginConfig": {
         "backend": {
           "scheme": "http",

@@ -2,6 +2,14 @@
 
 标题格式为 `## <版本号>`，release 工作流按标签版本号读取对应段落作为发布说明；日常更新以「Unreleased」汇总，发版前改成版本号并补日期。
 
+## 0.12.7 - 2026-10-20
+
+- image-host 1.0.12：`image_search` 区分长期图库与插件抓取
+  - 默认 `scope=gallery`，只搜 `origin=manual`（WebUI 手动上传 / 「收进图库」的图片）；
+  - 插件自动抓取的图片需显式传 `scope=plugin`（只看抓取）或 `scope=all`（全部）；
+  - 返回值标注 `scope`；图库为空时提示如何查看插件抓取；非法 scope 直接报错；
+  - 新增 `test_mcp_search.py` 覆盖默认/三种 scope/schema。
+
 ## 0.12.6 - 2026-10-20
 
 - image-host 1.0.11：WebUI「加标签」的已有标签气泡修复
