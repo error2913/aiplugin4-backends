@@ -25,6 +25,7 @@ import tarfile
 import tempfile
 import threading
 import time
+import urllib.parse
 import webbrowser
 import zipfile
 from dataclasses import dataclass, field
@@ -205,6 +206,12 @@ def normalize_export_host(host: str) -> str:
     return value
 
 
+def _is_loopback_host(host: str) -> bool:
+    """回环主机：只有本机进程可达，QQ 协议端与模型（尤其云模型）都访问不到"""
+    h = str(host or "").strip().strip("[]").lower()
+    return h in ("localhost", "::1", "0.0.0.0", "::") or h.endswith(".localhost") or h.startswith("127.")
+
+
 def _export_host(backend: Backend, cfg: dict, requested_host: str) -> str:
     """后端监听在具体 IP 时用该 IP；0.0.0.0/::/空 时用请求的主机"""
     host = str(cfg.get("host") or "").strip()
@@ -249,10 +256,43 @@ def _plugin_token(meta: dict, cfg: dict, default_source: str = "") -> str:
     return ""
 
 
-def _export_entries(kind: str, requested_host: str, backends: list = None):
-    """遍历注册表生成导出配置，返回 (config, included, excluded, warnings, host)。
-    kind=backend 生成插件「后端配置」JSON；kind=mcp 生成标准 mcpServers JSON。"""
+def _detect_lan_ip() -> str:
+    """尽力探测本机局域网 IP（UDP connect 只选路由、不实际发包）；失败返回空串。"""
+    try:
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        try:
+            sock.connect(("8.8.8.8", 80))
+            ip = str(sock.getsockname()[0] or "")
+        finally:
+            sock.close()
+        if ip and not ip.startswith("127.") and ip != "0.0.0.0":
+            return ip
+    except OSError:
+        pass
+    try:
+        ip = socket.gethostbyname(socket.gethostname())
+        if ip and not ip.startswith("127.") and ip != "0.0.0.0":
+            return ip
+    except OSError:
+        pass
+    return ""
+
+
+def _export_entries(kind: str, requested_host: str, backends: list = None, image_public_host: str = ""):
+    """遍历注册表生成导出配置，返回 (config, included, excluded, warnings, host, image_public)。
+    kind=backend 生成插件「后端配置」JSON；kind=mcp 生成标准 mcpServers JSON。
+
+    image_public_host：图床对外地址（协议端与模型都能访问的 IP/域名），只用于 image-host 的
+    publicUrl；留空时自动探测本机局域网 IP，探测不到则不导出 publicUrl（插件侧自动降级）。
+    """
     host = normalize_export_host(requested_host)
+    public_hint = ""
+    if kind == "backend":
+        raw_public = str(image_public_host or "").strip()
+        if raw_public:
+            public_hint = normalize_export_host(raw_public)
+        else:
+            public_hint = _detect_lan_ip()
     installed = {b.name: b for b in (backends if backends is not None else discover_backends())}
     included, excluded, warnings = [], [], []
     config = {"version": 1, "backends": {}} if kind == "backend" else {"mcpServers": {}}
@@ -282,6 +322,21 @@ def _export_entries(kind: str, requested_host: str, backends: list = None):
             item = {"url": url}
             if token:
                 item["token"] = token
+            if name == "image-host":
+                # 图床对外地址：QQ 协议端与模型都要访问 /i/<id>；url 可以填回环（只给插件自己用）
+                if public_hint and not _is_loopback_host(public_hint):
+                    item["publicUrl"] = _join_export_url(scheme, public_hint, cfg["port"])
+                elif _is_loopback_host(public_hint):
+                    warnings.append(
+                        f"image-host 的「图床对外地址」是回环地址（{public_hint}）：QQ 协议端与模型都访问不到，"
+                        "未导出 publicUrl（插件会降级为发图本地文件 + 模型内联 base64）；"
+                        "请改成协议端与模型都能访问的 IP 或域名（如 192.168.1.10 或 img.example.com）。"
+                    )
+                else:
+                    warnings.append(
+                        "未探测到本机 IP，未导出 image-host 的 publicUrl（发图/模型取图会降级）；"
+                        "请在上方「图床对外地址」填协议端与模型都能访问的 IP 或域名后重新复制。"
+                    )
             config["backends"][name] = item
         else:
             item = {"type": "http", "url": url}
@@ -294,16 +349,19 @@ def _export_entries(kind: str, requested_host: str, backends: list = None):
                 item["platform"] = [str(p) for p in platform if str(p).strip()]
             config["mcpServers"][name] = item
         included.append({"name": name, "url": url, "token": bool(token)})
-    return config, included, excluded, warnings, host
+    return config, included, excluded, warnings, host, (public_hint if kind == "backend" else "")
 
 
 def build_plugin_backend_config(
-    requested_host: str = PLUGIN_EXPORT_DEFAULT_HOST, backends: list = None
+    requested_host: str = PLUGIN_EXPORT_DEFAULT_HOST, backends: list = None, image_public_host: str = ""
 ) -> dict:
     """生成插件「后端 → 后端配置」的 JSON（只含已安装的后端项目）"""
-    config, included, excluded, warnings, host = _export_entries("backend", requested_host, backends)
+    config, included, excluded, warnings, host, image_public = _export_entries(
+        "backend", requested_host, backends, image_public_host
+    )
     return {
         "host": host,
+        "image_host_public": image_public,
         "config": config,
         "text": json.dumps(config, ensure_ascii=False, separators=(",", ":")),
         "included": included,
@@ -316,7 +374,7 @@ def build_plugin_mcp_config(
     requested_host: str = PLUGIN_EXPORT_DEFAULT_HOST, backends: list = None
 ) -> dict:
     """生成插件「MCP → MCP服务器」的标准 mcpServers JSON（只含已安装的 MCP 项目）"""
-    config, included, excluded, warnings, host = _export_entries("mcp", requested_host, backends)
+    config, included, excluded, warnings, host, _image_public = _export_entries("mcp", requested_host, backends)
     return {
         "host": host,
         "config": config,

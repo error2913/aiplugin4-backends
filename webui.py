@@ -398,10 +398,15 @@ PAGE = """<!DOCTYPE html>
       <button class="close" onclick="closePluginConfig()">✕</button>
     </div>
     <div class="dialog-body">
-      <label class="cfg-label">插件访问主机（后端与插件同机时填 127.0.0.1）
+      <label class="cfg-label">插件访问主机（插件与后端同机时填 127.0.0.1）
         <div class="cfg-row">
           <input id="pcHost" class="port" type="text" spellcheck="false" style="width:200px;" placeholder="127.0.0.1" onchange="reloadPluginConfig()">
           <button class="mini" onclick="reloadPluginConfig()">重新生成</button>
+        </div>
+      </label>
+      <label class="cfg-label">图床对外地址（IP 或域名；QQ 协议端与模型都要能访问，留空自动探测本机 IP）
+        <div class="cfg-row">
+          <input id="pcImageHost" class="port" type="text" spellcheck="false" style="width:200px;" placeholder="如 192.168.1.10 或 img.example.com" onchange="reloadPluginConfig()">
         </div>
       </label>
       <div id="pcInfo" style="font-size:12px; color:var(--muted); white-space:pre-wrap; line-height:1.7; margin-top:10px;"></div>
@@ -470,7 +475,12 @@ function copyText(text){
 async function fetchPluginConfig(kind, host){
   const input = document.getElementById('pcHost');
   const picked = (host || (input && input.value) || localStorage.getItem('plugin_export_host') || '127.0.0.1').trim() || '127.0.0.1';
-  const path = '/api/' + (kind === 'backend' ? 'plugin-config' : 'mcp-config') + '?host=' + encodeURIComponent(picked);
+  let path = '/api/' + (kind === 'backend' ? 'plugin-config' : 'mcp-config') + '?host=' + encodeURIComponent(picked);
+  if (kind === 'backend') {
+    const imgInput = document.getElementById('pcImageHost');
+    const imgHost = ((imgInput && imgInput.value) || localStorage.getItem('plugin_export_image_host') || '').trim();
+    if (imgHost) path += '&image_host=' + encodeURIComponent(imgHost);
+  }
   return await api(path);
 }
 async function copyPluginConfig(kind){
@@ -499,6 +509,7 @@ async function copyPluginConfig(kind){
 function openPluginConfig(kind){
   pluginCfgKind = kind || 'backend';
   document.getElementById('pcHost').value = localStorage.getItem('plugin_export_host') || '127.0.0.1';
+  document.getElementById('pcImageHost').value = localStorage.getItem('plugin_export_image_host') || '';
   document.getElementById('pcPreview').textContent = '';
   document.getElementById('pcInfo').textContent = '';
   document.getElementById('pcWarn').textContent = '';
@@ -517,6 +528,9 @@ async function switchPluginConfig(kind){
 async function reloadPluginConfig(){
   const host = (document.getElementById('pcHost').value || '127.0.0.1').trim() || '127.0.0.1';
   localStorage.setItem('plugin_export_host', host);
+  const imgInput = document.getElementById('pcImageHost');
+  const imgHost = (imgInput && imgInput.value || '').trim();
+  localStorage.setItem('plugin_export_image_host', imgHost);
   try {
     pluginCfgData = await fetchPluginConfig(pluginCfgKind, host);
   } catch (e) {
@@ -525,12 +539,19 @@ async function reloadPluginConfig(){
     return;
   }
   const d = pluginCfgData;
+  // 留空时后端会自动探测本机 IP：把实际使用的对外地址回填到输入框，避免"看到的和复制的不一致"
+  if (pluginCfgKind === 'backend' && d.image_host_public && imgInput && !imgInput.value) {
+    imgInput.value = d.image_host_public;
+  }
   document.getElementById('pcPreview').textContent = JSON.stringify(d.config, null, 2);
   const lines = [];
   if (d.included.length) {
     lines.push('纳入：' + d.included.map(x => x.name + (x.token ? '（含 token）' : '')).join('、'));
   } else {
     lines.push('没有已安装的项目可导出');
+  }
+  if (pluginCfgKind === 'backend') {
+    lines.push('图床对外地址：' + (d.image_host_public || '未配置（发图/模型取图会降级）'));
   }
   if (d.excluded.length) {
     lines.push('未纳入：' + d.excluded.map(x => x.name + '（' + x.reason + '）').join('、'));
@@ -1320,8 +1341,10 @@ def run_webui(backends, config, supervisor: Supervisor, host: str = None, port: 
                 return
             if path_only == "/api/plugin-config":
                 try:
-                    host = urllib.parse.parse_qs(query).get("host", ["127.0.0.1"])[0]
-                    result = build_plugin_backend_config(host)
+                    params = urllib.parse.parse_qs(query)
+                    host = params.get("host", ["127.0.0.1"])[0]
+                    image_host = params.get("image_host", [""])[0]
+                    result = build_plugin_backend_config(host, None, image_host)
                 except ValueError as e:
                     self._err(str(e), 400)
                     return
