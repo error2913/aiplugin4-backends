@@ -2,7 +2,7 @@
 
 标题格式为 `## <版本号>`，release 工作流按标签版本号读取对应段落作为发布说明；日常更新以「Unreleased」汇总，发版前改成版本号并补日期。
 
-## Unreleased
+## 0.11.22 - 2026-10-19
 
 - 后端卡片新增「🌐 WebUI」按钮：后端在 `backend.json` / `backends.json` 声明 `webui`（`path` / `title` / `proxy` / `inject_token`）后，已安装且运行中的卡片会出现按钮，点击在新标签打开后端自带的 WebUI
 - 新增内置反向代理 `/ui/<后端名>/`（纯标准库、流式转发）：只允许本机、已登记、运行中的后端；透传 GET/HEAD/POST/PUT/PATCH/DELETE/OPTIONS，自动处理 `Location` 与 `Set-Cookie` 的 `Path` 改写，支持 Range/206、大文件上传与缩略图流式下载；后端 WebUI 只要使用相对 URL（或以 `document.baseURI` 解析）即可经 launcher 打开，**无需把后端端口暴露到公网**
