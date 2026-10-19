@@ -1657,6 +1657,39 @@ def _sudo(args: list) -> int:
     return 127
 
 
+WEBUI_SERVICE_NAME = "aiplugin4-webui"
+
+
+def webui_service_active() -> bool:
+    """WebUI 是否由 systemd 服务（service-install 注册的 unit）托管；仅 Linux 有效"""
+    if os.name != "posix" or not shutil.which("systemctl"):
+        return False
+    try:
+        return subprocess.call(
+            ["systemctl", "is-active", "--quiet", WEBUI_SERVICE_NAME],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        ) == 0
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def restart_webui_service() -> bool:
+    """systemd 托管时交给 systemctl restart（会结束旧进程并用新代码拉起）；未托管返回 False"""
+    if not webui_service_active():
+        return False
+    print(f"[launcher] 检测到 systemd 服务 {WEBUI_SERVICE_NAME}，使用 systemctl restart")
+    return _sudo(["systemctl", "restart", WEBUI_SERVICE_NAME]) == 0
+
+
+def stop_webui_service() -> bool:
+    """systemd 托管时交给 systemctl stop；未托管返回 False"""
+    if not webui_service_active():
+        return False
+    print(f"[launcher] 检测到 systemd 服务 {WEBUI_SERVICE_NAME}，使用 systemctl stop")
+    return _sudo(["systemctl", "stop", WEBUI_SERVICE_NAME]) == 0
+
+
 def _webui_service_unit() -> str:
     """生成 systemd unit 内容：前台运行 webui（--no-browser），异常自动拉起"""
     exe = shlex.quote(sys.executable)
@@ -2337,11 +2370,15 @@ def main() -> None:
         return
 
     if args.command == "webui-stop":
+        if stop_webui_service():
+            return
         if not stop_webui():
             _kill_stale_webui_on_port(effective_webui_port())
         return
 
     if args.command == "webui-restart":
+        if restart_webui_service():
+            return
         port = effective_webui_port()
         stopped = stop_webui()
         if not stopped:

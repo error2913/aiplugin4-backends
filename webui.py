@@ -479,7 +479,7 @@ async function copyPluginConfig(kind){
     if (!data.included.length) {
       toast(kind === 'backend'
         ? '没有已安装的后端项目可复制（安装后重试；MCP 项目请用「复制 MCP 配置」）'
-        : '没有已安装的 MCP 项目可复制（先安装 mcp-files-exec / md-html-render / mcp-browser）', 6000);
+        : '没有已安装的 MCP 项目可复制（先安装 mcp-files-exec / md-html-render / mcp-browser / image-host）', 6000);
       return;
     }
     const ok = await copyText(data.text);
@@ -489,9 +489,11 @@ async function copyPluginConfig(kind){
       return;
     }
     const n = data.included.length;
-    toast(kind === 'backend'
+    const warnSuffix = (data.warnings && data.warnings.length) ? '；警告：' + data.warnings.join('；') : '';
+    toast((kind === 'backend'
       ? `已复制 ${n} 项后端配置（含 Token）→ 海豹 → 插件设置 → aiplugin4 → 后端 → 后端配置`
-      : `已复制 ${n} 项 MCP 配置 → 海豹 → 插件设置 → aiplugin4 → MCP → MCP服务器（需先开「是否启用MCP」；粘贴会整体替换）`, 7000);
+      : `已复制 ${n} 项 MCP 配置 → 海豹 → 插件设置 → aiplugin4 → MCP → MCP服务器（需先开「是否启用MCP」；粘贴会整体替换）`)
+      + warnSuffix, warnSuffix ? 9000 : 7000);
   } catch (e) { /* api() 已提示错误 */ }
 }
 function openPluginConfig(kind){

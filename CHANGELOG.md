@@ -2,6 +2,14 @@
 
 标题格式为 `## <版本号>`，release 工作流按标签版本号读取对应段落作为发布说明；日常更新以「Unreleased」汇总，发版前改成版本号并补日期。
 
+## 0.12.4 - 2026-10-20
+
+- 后端侧复查修正：
+  - `aibackend webui-restart/stop` 与 `launcher.py webui-restart/stop` 现在**优先识别 systemd 服务 `aiplugin4-webui`**：托管时走 `systemctl restart/stop`，不再“杀进程 + 自己起后台”与 systemd 抢端口/留孤儿进程；按端口清理只作为非 systemd 部署的兜底。
+  - 复制成功 toast 现在会带生成警告（例如 image-host 未设置 token），不再只在「👁 预览」里可见。
+  - 发布 workflow 增加 shop 后端单测（i2b64 / image-host 的 URL HTML 实体解码），与主仓库单测一起作为发版闸门。
+- 复查确认：MCP 导出 4 个后端（含 image-host）、默认不写 `platform`；后端导出 6 个项目；注册表版本与 shop 分支一致。
+
 ## 0.12.3 - 2026-10-20
 
 - 修正「复制 MCP 配置」：

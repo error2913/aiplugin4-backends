@@ -59,9 +59,11 @@ from launcher import (
     load_config,
     process_memory,
     remove_backend_dir,
+    restart_webui_service,
     install_webui_service,
     start_webui_background,
     stop_webui,
+    stop_webui_service,
     uninstall_webui_service,
     update_project,
 )
@@ -421,12 +423,17 @@ def cmd_webui(args):
 
 
 def cmd_webui_stop(args):
+    if stop_webui_service():
+        return
     if not stop_webui():
         # systemd/前台运行没有 logs/webui.pid：按端口结束旧 launcher/webui 进程
         _kill_stale_webui_on_port(effective_webui_port())
 
 
 def cmd_webui_restart(args):
+    if restart_webui_service():
+        # systemd 托管：systemctl restart 会结束旧进程并用新代码拉起，不抢端口
+        return
     port = effective_webui_port()
     stopped = stop_webui()
     if not stopped:
@@ -434,7 +441,7 @@ def cmd_webui_restart(args):
         stopped = _kill_stale_webui_on_port(port)
     time.sleep(0.5)
     if stopped and os.environ.get("INVOCATION_ID"):
-        # systemd 托管：unit 是 Restart=always，结束旧进程后由 systemd 拉起新代码
+        # 由 systemd 直接调起的场景：unit 是 Restart=always，等待 systemd 拉起新代码
         print("[launcher] 检测到 systemd 托管，旧 WebUI 已结束，等待 systemd 自动拉起新进程")
         return
     start_webui_background(open_browser=False)

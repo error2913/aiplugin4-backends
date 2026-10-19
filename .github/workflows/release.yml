@@ -34,6 +34,12 @@ jobs:
       - name: Run unit tests
         run: python3 -m unittest discover -s tests -t . -v
 
+      - name: Run backend unit tests (shop)
+        run: |
+          python3 -m pip install --quiet flask requests pillow imageio
+          python3 -m unittest discover -s shop-src/backends/image-url-to-base64/tests -p "test_url_decode.py" -v
+          python3 -m unittest discover -s shop-src/backends/image-host/tests -p "test_fetch_entities.py" -v
+
       - name: Package backends
         run: python3 launcher.py package
 
