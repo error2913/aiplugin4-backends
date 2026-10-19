@@ -5,7 +5,11 @@
   "entry": "imagehost.py",
   "deps": "requirements.txt",
   "port": 46680,
-  "version": "1.0.5",
+  "version": "1.0.6",
+  "webui": {
+    "path": "/",
+    "title": "图床 WebUI"
+  },
   "config": {
     "data_dir": {
       "label": "数据目录（SQLite + 原图分片 + 缩略图）",

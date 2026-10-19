@@ -449,6 +449,13 @@ function toastWithUndo(text, onUndo) {
   toastEl.classList.add('show');
   toastTimer = setTimeout(() => toastEl.classList.remove('show'), 30000);
 }
+/* 兼容反代前缀：所有请求/资源 URL 都以当前页面为基准解析
+   （直接访问后端端口时 baseURI 是 /，等价于原来的绝对路径；经 launcher /ui/<name>/ 反代时自动带上前缀） */
+function resolveUrl(path) {
+  const raw = String(path == null ? '' : path);
+  if (/^[a-z][a-z0-9+.-]*:/i.test(raw) || raw.startsWith('//')) return raw;
+  return new URL(raw.replace(/^\/+/, ''), document.baseURI).href;
+}
 async function api(path, opts) {
   const init = Object.assign({ credentials: 'same-origin' }, opts || {});
   if (init.body && !(init.body instanceof FormData)) {
@@ -456,7 +463,7 @@ async function api(path, opts) {
     init.body = JSON.stringify(init.body);
   }
   let res;
-  try { res = await fetch(path, init); } catch (e) { throw new Error('网络请求失败'); }
+  try { res = await fetch(resolveUrl(path), init); } catch (e) { throw new Error('网络请求失败'); }
   let data = null;
   try { data = await res.json(); } catch (e) { data = null; }
   if (res.status === 401 && !galleryView.classList.contains('hidden')) showLogin();
@@ -733,10 +740,10 @@ function makeCard(it) {
   card.appendChild(pick);
 
   const link = el('a', 'thumb'), img = el('img');
-  link.href = it.url; link.target = '_blank'; link.rel = 'noopener';
-  img.loading = 'lazy'; img.alt = it.name || it.id; img.src = it.thumb_url || it.url;
+  link.href = resolveUrl(it.url); link.target = '_blank'; link.rel = 'noopener';
+  img.loading = 'lazy'; img.alt = it.name || it.id; img.src = resolveUrl(it.thumb_url || it.url);
   let fellBack = false;
-  img.addEventListener('error', () => { if (!fellBack && it.thumb_url && it.url) { fellBack = true; img.src = it.url; } });
+  img.addEventListener('error', () => { if (!fellBack && it.thumb_url && it.url) { fellBack = true; img.src = resolveUrl(it.url); } });
   link.appendChild(img); card.appendChild(link);
 
   const body = el('div', 'body'), titleRow = el('div', 'titlerow');
@@ -1349,7 +1356,7 @@ async function doDelete() {
 async function doCopyLinks() {
   const ids = batch.allMatching ? Array.from(state.items.keys()) : Array.from(batch.ids);
   if (!ids.length) { toast('没有可复制的链接'); return; }
-  const text = ids.map((id) => location.origin + '/i/' + id).join('\n');
+  const text = ids.map((id) => resolveUrl('i/' + id)).join('\n');
   try {
     await navigator.clipboard.writeText(text);
     toast('已复制 ' + ids.length + ' 个链接');
