@@ -2,8 +2,9 @@
 
 标题格式为 `## <版本号>`，release 工作流按标签版本号读取对应段落作为发布说明；日常更新以「Unreleased」汇总，发版前改成版本号并补日期。
 
-## Unreleased
+## 0.11.16 - 2026-10-19
 
+- 新增 `image-host` 后端（v1.0.0，默认端口 46680）：私人图床 + 图库。按 URL 抓取 QQ 等**短时效图片直链**并落库（sha256 内容寻址、天然哈希去重），对外提供稳定 URL 与 base64 出口，解决「QQ 图床链接过期后模型取不到图」的问题；记录来源（平台/群/用户/消息/会话/时间），支持重命名与标签；内置 WebUI 画廊（密码鉴权；图库 / 回收站 / 标签三视图；批量上传含多选·拖拽·粘贴·URL 导入；批量打标签·删标签·删除·存图库·复制链接，删除前先 `dry_run` 预演真实数量）与 5 个 MCP 工具（`image_search` / `image_rename` / `image_tag` / `image_keep` / `image_tags`）；回收站软删除默认 7 天，容量上限 + LRU 自动淘汰（手动上传/收进图库的图永不自动删），`change_log` 变更日志供插件增量同步。依赖 Flask + requests + Pillow，图片抓取做了 SSRF 加固（scheme/私网/逐跳重定向校验、流式大小限制）。
 - 新增 `media-fetch` 后端（默认端口 46679）：媒体接口中转，代插件请求音频/图片接口并把**二进制响应转成 base64 JSON**。海豹的 JS 引擎是 goja，其 fetch 只有 `text()`/`json()`，没有 `arrayBuffer()`/`bytes()`，而 `text()` 会按 UTF-8 解码把原始字节替换成 U+FFFD 永久损坏——因此「整个响应体即音频/图片」的接口（OpenAI 兼容 `/audio/speech`、百度短文本合成 `tsn.baidu.com/text2audio`、阿里 CosyVoice 等）在插件里原本无法使用。该后端把这一步搬到 Python（能无损拿到 `response.content`），请求的 method/headers/body 全部由插件透传、本服务不掺和业务语义；上游返回 JSON 时原样交回（插件按 `data_path` 取数），返回二进制时给 `{base64, contentType, upstreamStatus, bytes}`，并带回上游状态码以便插件识别鉴权/余额错误。另提供 `/health` 探活。
 
 ## 0.11.15 - 2026-09-03

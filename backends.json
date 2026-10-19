@@ -123,6 +123,25 @@
         "simulate-ws.js",
         "README.md"
       ]
+    },
+    {
+      "name": "image-host",
+      "description": "私人图床 + 图库：按 URL 抓取落库（sha256 哈希去重）、只读分发与 base64 出口、来源/标签/重命名、WebUI 画廊（鉴权）、MCP 工具（搜索/重命名/打标签）",
+      "type": "python",
+      "entry": "imagehost.py",
+      "deps": "requirements.txt",
+      "port": 46680,
+      "version": "1.0.0",
+      "source": "https://raw.githubusercontent.com/error2913/aiplugin4-backends/shop/backends/image-host",
+      "files": [
+        "backend.json",
+        "requirements.txt",
+        "imagehost.py",
+        "store.py",
+        "fetch.py",
+        "mcp.py",
+        "webui.html"
+      ]
     }
   ]
 }
