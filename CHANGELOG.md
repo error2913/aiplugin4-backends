@@ -2,6 +2,12 @@
 
 标题格式为 `## <版本号>`，release 工作流按标签版本号读取对应段落作为发布说明；日常更新以「Unreleased」汇总，发版前改成版本号并补日期。
 
+## 0.12.2 - 2026-10-20
+
+- 修复 `aibackend webui-restart` / `aibackend webui-stop` 在**没有 `logs/webui.pid`**（systemd 托管或前台运行）时不会结束占用 WebUI 端口的旧进程：重启时新进程报 `OSError: [Errno 98] Address already in use`，旧页面继续运行。现在与 `python launcher.py webui-restart` 一致——先按端口找到并结束旧 launcher/webui 进程；检测到 systemd（`INVOCATION_ID`）时交给 systemd 拉起，不抢端口。
+- 新增 `tests/test_aibackend_webui.py` 覆盖「无 pid → 按端口清理」「systemd → 不自行拉起」「webui-stop 同样清理」三种情况。
+- 升级 0.12.1 / 0.12.0 时如遇重启报端口占用：先 `aibackend update` 到 0.12.2，再 `aibackend webui-restart`；若仍失败，手动 `fuser -k <端口>/tcp`（或 `ss -ltnp | grep <端口>` 找 PID 后 kill）再重启。
+
 ## 0.12.1 - 2026-10-20
 
 - **修复 0.12.0 的 WebUI 无法登录**：`webui.py` 内嵌 JS 中的 `join('\n')` 被 Python 三引号字符串提前转义成真实换行，整个 `<script>` 语法错误，输入 token 后页面无反应（也无法从页面点更新）。已改用 `String.fromCharCode(10)`。

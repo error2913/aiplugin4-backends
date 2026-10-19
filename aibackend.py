@@ -45,6 +45,7 @@ from datetime import datetime
 from launcher import (
     ROOT_DIR,
     Supervisor,
+    _kill_stale_webui_on_port,
     build_plugin_backend_config,
     build_plugin_mcp_config,
     configure_webui_host,
@@ -53,6 +54,7 @@ from launcher import (
     deps_ready,
     discover_backends,
     effective_port,
+    effective_webui_port,
     install_backend,
     load_config,
     process_memory,
@@ -417,13 +419,24 @@ def cmd_mcp_config(args):
 def cmd_webui(args):
     start_webui_background(host=args.host, port=args.port, open_browser=not args.no_browser)
 
+
 def cmd_webui_stop(args):
-    stop_webui()
+    if not stop_webui():
+        # systemd/前台运行没有 logs/webui.pid：按端口结束旧 launcher/webui 进程
+        _kill_stale_webui_on_port(effective_webui_port())
 
 
 def cmd_webui_restart(args):
-    stop_webui()
+    port = effective_webui_port()
+    stopped = stop_webui()
+    if not stopped:
+        # systemd/前台运行没有 pid 文件：不结束旧进程的话，新进程会 EADDRINUSE 继续跑旧代码
+        stopped = _kill_stale_webui_on_port(port)
     time.sleep(0.5)
+    if stopped and os.environ.get("INVOCATION_ID"):
+        # systemd 托管：unit 是 Restart=always，结束旧进程后由 systemd 拉起新代码
+        print("[launcher] 检测到 systemd 托管，旧 WebUI 已结束，等待 systemd 自动拉起新进程")
+        return
     start_webui_background(open_browser=False)
 
 
