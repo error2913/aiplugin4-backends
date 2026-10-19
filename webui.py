@@ -37,6 +37,8 @@ from launcher import (
     Supervisor,
     backend_custom_config,
     backend_config,
+    build_plugin_backend_config,
+    build_plugin_mcp_config,
     deps_ready,
     discover_backends,
     effective_webui_port,
@@ -300,6 +302,9 @@ PAGE = """<!DOCTYPE html>
       <button class="primary" onclick="allAct('start')">▶ 启动全部</button>
       <button class="danger" onclick="allAct('stop')">■ 停止全部</button>
       <button onclick="allAct('restart')">🔄 重启全部</button>
+      <button onclick="copyPluginConfig('backend')" title="复制插件「后端配置」JSON，粘贴到 海豹 → 插件设置 → aiplugin4 → 后端 → 后端配置">📋 复制后端配置</button>
+      <button onclick="copyPluginConfig('mcp')" title="复制插件「MCP服务器」JSON，粘贴到 海豹 → 插件设置 → aiplugin4 → MCP → MCP服务器（粘贴会整体替换）">📋 复制 MCP 配置</button>
+      <button onclick="openPluginConfig('backend')" title="预览并下载生成的配置">👁 预览</button>
     </div>
     <div class="bar-right" id="installAllArea"></div>
   </div>
@@ -383,6 +388,33 @@ PAGE = """<!DOCTYPE html>
     </div>
   </div>
 </div>
+<div class="modal" id="pluginConfigModal">
+  <div class="dialog" style="width:min(860px,94vw)">
+    <div class="dialog-head">
+      <b>插件配置</b>
+      <span class="spacer"></span>
+      <button id="pcTabBackend" onclick="switchPluginConfig('backend')">后端配置</button>
+      <button id="pcTabMcp" onclick="switchPluginConfig('mcp')">MCP 配置</button>
+      <button class="close" onclick="closePluginConfig()">✕</button>
+    </div>
+    <div class="dialog-body">
+      <label class="cfg-label">插件访问主机（后端与插件同机时填 127.0.0.1）
+        <div class="cfg-row">
+          <input id="pcHost" class="port" type="text" spellcheck="false" style="width:200px;" placeholder="127.0.0.1" onchange="reloadPluginConfig()">
+          <button class="mini" onclick="reloadPluginConfig()">重新生成</button>
+        </div>
+      </label>
+      <div id="pcInfo" style="font-size:12px; color:var(--muted); white-space:pre-wrap; line-height:1.7; margin-top:10px;"></div>
+      <div id="pcWarn" style="display:none; font-size:12px; color:#e6b450; white-space:pre-wrap; line-height:1.7; margin-top:6px;"></div>
+      <pre id="pcPreview" style="white-space:pre-wrap; word-break:break-all; background:rgba(0,0,0,.22); border:1px solid var(--border); border-radius:8px; padding:12px; margin-top:10px; max-height:46vh; overflow:auto; font-size:12px; line-height:1.55;"></pre>
+    </div>
+    <div class="dialog-foot" style="padding:12px 18px; text-align:right; border-top:1px solid var(--border); display:flex; gap:8px; justify-content:flex-end;">
+      <button onclick="downloadPluginConfig()">下载 .json</button>
+      <button onclick="closePluginConfig()">关闭</button>
+      <button class="primary" onclick="copyPluginConfigText()">复制</button>
+    </div>
+  </div>
+</div>
 <div id="toast"></div>
 <footer style="display:flex; align-items:center; justify-content:space-between;">
   <span>aiplugin4-backends · launcher.py webui</span>
@@ -403,6 +435,8 @@ const TOKEN_TTL_MS = 365 * 24 * 60 * 60 * 1000;  // 登录后记住一年
 let loggedIn = false;
 let updating = false;
 let hideNoDeps = localStorage.getItem('hide_no_deps') === '1';
+let pluginCfgKind = 'backend';
+let pluginCfgData = null;
 function esc(s){ return (s||'').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
 function fmtUptime(s){
   if (s == null) return '—';
@@ -413,6 +447,125 @@ function fmtUptime(s){
   return sec + '秒';
 }
 function toast(msg, ms){ const t=document.getElementById('toast'); t.textContent=msg; t.style.display='block'; clearTimeout(t._h); t._h=setTimeout(()=>t.style.display='none', ms || 3000); }
+function legacyCopyText(text){
+  try {
+    const ta = document.createElement('textarea');
+    ta.value = text;
+    ta.style.position = 'fixed';
+    ta.style.opacity = '0';
+    document.body.appendChild(ta);
+    ta.focus();
+    ta.select();
+    const ok = document.execCommand('copy');
+    document.body.removeChild(ta);
+    return ok;
+  } catch (e) { return false; }
+}
+function copyText(text){
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    return navigator.clipboard.writeText(text).then(() => true).catch(() => legacyCopyText(text));
+  }
+  return Promise.resolve(legacyCopyText(text));
+}
+async function fetchPluginConfig(kind, host){
+  const input = document.getElementById('pcHost');
+  const picked = (host || (input && input.value) || localStorage.getItem('plugin_export_host') || '127.0.0.1').trim() || '127.0.0.1';
+  const path = '/api/' + (kind === 'backend' ? 'plugin-config' : 'mcp-config') + '?host=' + encodeURIComponent(picked);
+  return await api(path);
+}
+async function copyPluginConfig(kind){
+  try {
+    const data = await fetchPluginConfig(kind);
+    if (!data.included.length) {
+      toast(kind === 'backend'
+        ? '没有已安装的后端项目可复制（安装后重试；MCP 项目请用「复制 MCP 配置」）'
+        : '没有已安装的 MCP 项目可复制（先安装 mcp-files-exec / md-html-render / mcp-browser）', 6000);
+      return;
+    }
+    const ok = await copyText(data.text);
+    if (!ok) {
+      openPluginConfig(kind);
+      toast('复制失败，已打开预览，请手动全选复制', 5000);
+      return;
+    }
+    const n = data.included.length;
+    toast(kind === 'backend'
+      ? `已复制 ${n} 项后端配置（含 Token）→ 海豹 → 插件设置 → aiplugin4 → 后端 → 后端配置`
+      : `已复制 ${n} 项 MCP 配置 → 海豹 → 插件设置 → aiplugin4 → MCP → MCP服务器（需先开「是否启用MCP」；粘贴会整体替换）`, 7000);
+  } catch (e) { /* api() 已提示错误 */ }
+}
+function openPluginConfig(kind){
+  pluginCfgKind = kind || 'backend';
+  document.getElementById('pcHost').value = localStorage.getItem('plugin_export_host') || '127.0.0.1';
+  document.getElementById('pcPreview').textContent = '';
+  document.getElementById('pcInfo').textContent = '';
+  document.getElementById('pcWarn').textContent = '';
+  document.getElementById('pluginConfigModal').classList.add('open');
+  switchPluginConfig(pluginCfgKind);
+}
+function closePluginConfig(){ document.getElementById('pluginConfigModal').classList.remove('open'); }
+async function switchPluginConfig(kind){
+  pluginCfgKind = kind === 'mcp' ? 'mcp' : 'backend';
+  const b = document.getElementById('pcTabBackend');
+  const m = document.getElementById('pcTabMcp');
+  if (b) b.className = pluginCfgKind === 'backend' ? 'primary' : '';
+  if (m) m.className = pluginCfgKind === 'mcp' ? 'primary' : '';
+  await reloadPluginConfig();
+}
+async function reloadPluginConfig(){
+  const host = (document.getElementById('pcHost').value || '127.0.0.1').trim() || '127.0.0.1';
+  localStorage.setItem('plugin_export_host', host);
+  try {
+    pluginCfgData = await fetchPluginConfig(pluginCfgKind, host);
+  } catch (e) {
+    pluginCfgData = null;
+    document.getElementById('pcPreview').textContent = '生成失败：' + (e && e.message ? e.message : e);
+    return;
+  }
+  const d = pluginCfgData;
+  document.getElementById('pcPreview').textContent = JSON.stringify(d.config, null, 2);
+  const lines = [];
+  if (d.included.length) {
+    lines.push('纳入：' + d.included.map(x => x.name + (x.token ? '（含 token）' : '')).join('、'));
+  } else {
+    lines.push('没有已安装的项目可导出');
+  }
+  if (d.excluded.length) {
+    lines.push('未纳入：' + d.excluded.map(x => x.name + '（' + x.reason + '）').join('、'));
+  }
+  if (pluginCfgKind === 'backend') {
+    lines.push('提示：MCP 类项目用「复制 MCP 配置」；论坛配置不属于后端项目。');
+  } else {
+    lines.push('注意：粘贴会整体替换「MCP服务器」，手写的其它服务器请先合并。');
+  }
+  document.getElementById('pcInfo').textContent = lines.join('\n');
+  const warn = document.getElementById('pcWarn');
+  if (d.warnings && d.warnings.length) {
+    warn.textContent = d.warnings.join('\n');
+    warn.style.display = 'block';
+  } else {
+    warn.textContent = '';
+    warn.style.display = 'none';
+  }
+}
+async function copyPluginConfigText(){
+  if (!pluginCfgData) return;
+  const ok = await copyText(pluginCfgData.text);
+  if (ok) toast('已复制，去海豹对应配置项粘贴', 3000);
+  else toast('复制失败，请手动全选复制', 5000);
+}
+function downloadPluginConfig(){
+  if (!pluginCfgData) return;
+  const blob = new Blob([pluginCfgData.text], {type: 'application/json'});
+  const a = document.createElement('a');
+  const url = URL.createObjectURL(blob);
+  a.href = url;
+  a.download = (pluginCfgKind === 'backend' ? 'aiplugin4-backend-config' : 'aiplugin4-mcp-config') + '.json';
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
 function getStoredToken(){
   const t = localStorage.getItem('webui_token');
   const exp = Number(localStorage.getItem('webui_token_exp') || 0);
@@ -1088,6 +1241,26 @@ def run_webui(backends, config, supervisor: Supervisor, host: str = None, port: 
                 return
             if self.path == "/api/webui-token":
                 self._json({"ok": True, "token": self.webui_token})
+                return
+            if path_only == "/api/plugin-config":
+                try:
+                    host = urllib.parse.parse_qs(query).get("host", ["127.0.0.1"])[0]
+                    result = build_plugin_backend_config(host)
+                except ValueError as e:
+                    self._err(str(e), 400)
+                    return
+                result["ok"] = True
+                self._json(result)
+                return
+            if path_only == "/api/mcp-config":
+                try:
+                    host = urllib.parse.parse_qs(query).get("host", ["127.0.0.1"])[0]
+                    result = build_plugin_mcp_config(host)
+                except ValueError as e:
+                    self._err(str(e), 400)
+                    return
+                result["ok"] = True
+                self._json(result)
                 return
             if self.path == "/api/backends":
                 rows = []

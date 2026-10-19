@@ -7,6 +7,7 @@ aiplugin4 的配套后端服务：流式输出、图片转 base64、用量图表
 ## 目录
 
 - [快速开始](#快速开始)
+- [插件配置导出](#插件配置导出)
 - [跨平台](#跨平台)
 - [Linux 系统服务](#linux-系统服务)
 - [后端文档](#后端文档)
@@ -33,11 +34,31 @@ git clone https://github.com/error2913/aiplugin4-backends.git && cd aiplugin4-ba
 - 卡片显示版本、运行时长、自动拉起次数与内存占用；「卸载」可删除运行副本恢复未安装状态
 - 卡片「⚙ 配置」弹窗可修改端口、访问 token 与监听 IP（默认 `0.0.0.0`），支持一键随机生成 token；token 默认留空 = 不鉴权；配置项较多时弹窗内容区可上下滚动
 - 后端自带 WebUI 时（在 `backend.json` 声明 `webui`，例如 image-host），运行中的卡片显示「🌐 WebUI」按钮：点击经 launcher 同源反代 `/ui/<名称>/` 打开，**只暴露 launcher 一个端口**；后端可以只监听 `127.0.0.1`，不必为 WebUI 单独开放公网端口
+- 工具栏「📋 复制后端配置」「📋 复制 MCP 配置」一键生成插件配置 JSON，粘贴进海豹即可导入；「👁 预览」可切换查看、修改访问主机、下载 `.json`（详见 [插件配置导出](#插件配置导出)）
 - 后端进程异常退出会自动拉起
 
 > 按需安装：每个后端只安装自己缺失的依赖，不会预装全部；依赖清单（`requirements.txt` / `package.json`）变化后会自动重新安装。Python 后端使用独立 venv，Node 后端使用各自的 `node_modules`。
 
 > 提示：Puppeteer 需要下载 Chromium。下载慢或失败（如国内网络）时，可设置镜像 `PUPPETEER_DOWNLOAD_BASE_URL`（例如 `https://registry.npmmirror.com/-/binary/chrome-for-testing`）后重试。
+
+## 插件配置导出
+
+WebUI 工具栏提供两个一键复制按钮，把启动器里**已安装**的后端转换成插件可直接粘贴的 JSON（安装/端口/Token 变更后重新复制即可）：
+
+| 按钮 | 粘贴到 | 内容 |
+| --- | --- | --- |
+| 📋 复制后端配置 | 海豹 → 插件设置 → aiplugin4 → 后端 → 后端配置 | `{version:1, backends:{...}}`：6 个后端项目的地址 + 图床 / 核心桥 token |
+| 📋 复制 MCP 配置 | 海豹 → 插件设置 → aiplugin4 → MCP → MCP服务器 | 标准 `mcpServers`：3 个 MCP 项目的 `/mcp` 地址 + token header + `platform` |
+
+- 只导出**已安装**（程序 + 依赖就绪）的后端；未安装的不写入，插件侧使用默认值。
+- 论坛配置不属于 aiplugin4-backends，不参与导出；MCP 类项目只进入 MCP 配置，不进入后端配置。
+- 访问主机默认 `127.0.0.1`（后端与插件同机）；插件在另一台机器时在「👁 预览」里改成局域网 IP/域名。后端在卡片里监听具体 IP 时以该 IP 为准。
+- MCP 配置**粘贴会整体替换**「MCP服务器」；如果还手写过其它服务器，请先合并再粘贴。
+- 「👁 预览」可查看格式化 JSON、纳入/排除项与警告，并支持下载 `.json`；局域网 `http://` 下浏览器剪贴板 API 不可用时会自动降级，失败则打开预览手动复制。
+- CLI 等价命令：`aibackend plugin-config` / `aibackend mcp-config`（`--host`、`--pretty`）。
+- 只含已安装项，所以**不包含 image-host 的 MCP 工具**、也不含手写的远程 MCP 服务器。
+
+JSON 格式与完整设计见 [docs/插件配置导出方案](docs/插件配置导出方案.md)。
 
 ## 跨平台
 
@@ -116,6 +137,8 @@ aibackend info stream-output                # 进程详情（pid/时长/内存/�
 aibackend monitor                           # 实时监控面板
 aibackend install-backend mcp-browser       # 安装后端（复制/下载程序 + 安装依赖）
 aibackend uninstall-backend mcp-browser     # 卸载后端（停止并删除运行副本）
+aibackend plugin-config [--host H] [--pretty]  # 输出插件「后端配置」JSON（只含已安装的后端项目）
+aibackend mcp-config [--host H] [--pretty]     # 输出插件「MCP服务器」JSON（只含已安装的 MCP 项目）
 aibackend update                            # 从 GitHub 更新到最新版（手动，不依赖 git）
 aibackend webui                             # 后台启动 Web 管理界面（不占终端）
 aibackend webui-stop                        # 停止后台 WebUI

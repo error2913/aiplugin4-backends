@@ -30,13 +30,15 @@ aibackend help                         # 查看所有命令
 | `webui.py` | Web 管理界面：内嵌 HTML/CSS/JS（`PAGE` 常量）+ 标准库 HTTP 服务 |
 | `aibackend.py` | 命令行工具（复用 launcher 逻辑），彩色 help |
 | `install_cli.py` | 安装 `aibackend` 到 PATH（Windows `.aibackend\bin\aibackend.cmd` / Linux shell 脚本）；launcher 启动时自动调用 `install()` 幂等刷新 |
-| `backends.json` | 后端注册表：`name` / `type` / `entry` / `deps` / `port` / `version` / `source`（raw URL）/ `files` / 可选 `config` schema / 可选 `webui` 元数据 |
+| `backends.json` | 后端注册表：`name` / `type` / `entry` / `deps` / `port` / `version` / `source`（raw URL）/ `files` / 可选 `config` schema / 可选 `webui` 元数据 / 可选 `pluginConfig` 元数据 |
 | `backends/<名称>/` | 后端程序缓存（源码在独立 `shop` 分支，release 打包用；运行时更新/下载解压到这里，gitignore） |
 | `installed/<名称>/` | 已安装后端运行副本（程序 + 依赖，gitignore，卸载即删） |
 | `data/<名称>/` | 后端数据目录（如 mcp-files-exec 沙箱工作路径；gitignore，打包/更新/卸载都不动） |
 | `CHANGELOG.md` | 更新日志：`## <版本号>` 段落，release 与更新弹窗都从这里取 |
 | `VERSION` | 当前版本号（release 时由 tag 写入） |
 | `launcher.json` | 全局配置：`auto_restart`、`restart_backoff_seconds`、`log_dir` |
+| `tests/` | 标准库 unittest；运行 `python -m unittest discover -s tests -t . -v`（当前覆盖插件配置导出） |
+| `docs/插件配置导出方案.md` | 插件配置导出（后端配置 / MCP 配置）的跨仓库契约与插件侧待实施方案 |
 | `webui-requirements.txt` | 可选；不存在则 WebUI 视为纯标准库、跳过安装 |
 
 ## 数据与状态文件（logs/ 与根目录，均 gitignore）
@@ -59,6 +61,9 @@ aibackend help                         # 查看所有命令
 后端读取 `AIPLUGIN4_BACKEND_HOST`（默认 `0.0.0.0`）与 `AIPLUGIN4_BACKEND_TOKEN`（默认空）。token 非空时校验请求头 `Authorization: Bearer <token>` 或 `X-Token: <token>`，否则 401。六个后端均已实现（Flask/FastAPI 中间件、express 中间件、mcp-files-exec 的 ASGI 包装）。
 
 `md-html-render` 仅提供 **MCP（Streamable HTTP，挂 `/mcp`，每会话一个 McpServer 实例）**，已移除 REST 路由：工具为 `render_markdown` / `render_html`（返回 PNG base64 文本）；token 中间件对 `/mcp` 同样生效。注意 `/mcp` 必须在 `express.json()` 之前注册，让 transport 自行解析原始 body。
+
+### 插件配置导出（WebUI 按钮 / CLI）
+`launcher.build_plugin_backend_config()` / `build_plugin_mcp_config()` 遍历 `backends.json` 的 `pluginConfig` 元数据，只导出 `deps_ready()` 为真的后端；端口取 `backend_config()`，主机按「后端具体监听 IP > 请求 host（默认 127.0.0.1）」归一化；token 由 `tokenFrom` 解析（`backend` 或 `options.<key>`；MCP 组默认用后端 token 写 `headers.Authorization`）。WebUI 工具栏提供两个复制按钮 + 预览弹窗，API 为 `/api/plugin-config`、`/api/mcp-config`，CLI 为 `plugin-config` / `mcp-config`。格式与插件侧契约见 `docs/插件配置导出方案.md`。
 
 ### 后端 WebUI（卡片按钮 + `/ui` 反代）
 - 元数据：`backend.json` / `backends.json` 可选 `webui`：`{"path": "/", "title": "图床 WebUI", "proxy": true, "inject_token": false}`；`path` 为后端内入口路径，`proxy=false` 时只给直连，`inject_token=true` 时反代自动携带该后端 token（仅用于没有自身登录入口的 WebUI）。`launcher.normalize_webui()` 统一规范化；`discover_backends()` 优先读已安装清单，缺失时回退注册表但要求「安装版本不低于注册表版本」（旧版前端未适配反代时不提前显示按钮）；`install_backend()` 的注册表兜底键包含 `webui`。
@@ -86,6 +91,8 @@ Git tag `v*` 触发 `.github/workflows/release.yml`：先 checkout `shop` 分支
 - `POST /api/update-backend/<name>`：下载该后端独立 release 包覆盖商店并重装程序与依赖
 - `POST /api/webui-restart`：重启 WebUI（响应先返回，随后由独立进程执行 `launcher.py webui-restart`，用于重新加载后端清单）
 - `GET|POST /api/config/<name>`：查询/保存 {port, token, host}
+- `GET /api/plugin-config?host=127.0.0.1`：生成插件「后端配置」JSON（只含已安装的后端项目）
+- `GET /api/mcp-config?host=127.0.0.1`：生成插件「MCP服务器」标准 `mcpServers` JSON（只含已安装的 MCP 项目）
 - `POST /api/port/<name>`、`/api/port/<name>/reset`：旧版端口接口（写同一份配置，保留兼容）
 - `POST /api/start-all` / `stop-all` / `restart-all` / `start/<name>` / `stop/<name>`
 - `POST /api/update`：更新，返回 `{ok, updated, changelog, output}`
@@ -94,6 +101,8 @@ Git tag `v*` 触发 `.github/workflows/release.yml`：先 checkout `shop` 分支
 ## 开发约定
 
 - WebUI 必须保持纯标准库（不引入 webui-requirements.txt）；后端依赖只在各自 venv/node_modules 按需安装，不要手动装。
+- 新增后端若要参与插件配置导出，在 `backends.json` 条目声明 `pluginConfig`：`backend` 组（`scheme`/`path`/`tokenFrom`/`tokenRequired`）和/或 `mcp` 组（`path`/`platform`）；导出只含 `deps_ready()` 为真的已安装项。MCP 配置粘贴到插件会整体替换「MCP服务器」。
+- 改后端程序必须同时 bump `backends.json` 与 shop 分支 `backend.json` 的版本号，否则卡片不会出现「⬆ 更新」，已安装用户拿不到新代码。
 - 新增后端 = 新建目录 + `backend.json`（含默认端口）+ 入口脚本读取 `AIPLUGIN4_BACKEND_PORT`；如需 token/监听 IP 支持，按上面六后端的模式接入 `AIPLUGIN4_BACKEND_TOKEN/_HOST`。
 - 新增带 WebUI 的后端：在 `backend.json` 补 `webui`（至少 `path`），前端一律用相对 URL / `document.baseURI` 拼请求，保证既能直连端口、也能经 `/ui/<name>/` 反代；WebUI 路由挂在后端根路径下，不要假设自己独占域名。若后端只给 launcher 反代看，建议文档提示把监听 IP 设为 `127.0.0.1` 以避免额外开放端口（插件同机时 API 仍可用 127.0.0.1）。
 - 弹窗类 UI 用 `.dialog-body` 类承载内容（`flex:1; min-height:0; overflow-y:auto`），不要写死高度，否则配置项/日志一多就滚不动。

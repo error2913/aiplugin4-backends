@@ -190,6 +190,139 @@ def effective_port(backend: Backend) -> int:
     return backend_config(backend)["port"]
 
 
+PLUGIN_EXPORT_DEFAULT_HOST = "127.0.0.1"
+
+
+def normalize_export_host(host: str) -> str:
+    """插件配置导出用的访问主机：只接受主机名/IP，不允许协议、路径或空白"""
+    value = str(host or "").strip()
+    if not value:
+        return PLUGIN_EXPORT_DEFAULT_HOST
+    if "://" in value or any(ch in value for ch in "/\\?#") or any(ch.isspace() for ch in value):
+        raise ValueError("访问主机不合法：只填主机名或 IP（如 127.0.0.1、192.168.1.10），不要带协议或路径")
+    if value.count(":") == 1:
+        raise ValueError("访问主机不要带端口：只填主机名或 IP（端口由各后端配置决定）")
+    return value
+
+
+def _export_host(backend: Backend, cfg: dict, requested_host: str) -> str:
+    """后端监听在具体 IP 时用该 IP；0.0.0.0/::/空 时用请求的主机"""
+    host = str(cfg.get("host") or "").strip()
+    if host and host not in ("0.0.0.0", "::", "[::]"):
+        return host
+    return requested_host
+
+
+def _url_host(host: str) -> str:
+    """IPv6 字面量放进 URL 时需要加方括号"""
+    h = str(host or "").strip()
+    if ":" in h and not h.startswith("["):
+        return f"[{h}]"
+    return h
+
+
+def _join_export_url(scheme: str, host: str, port: int, path: str = "") -> str:
+    scheme = (scheme or "http").strip() or "http"
+    suffix = str(path or "").strip()
+    if suffix and not suffix.startswith("/"):
+        suffix = "/" + suffix
+    return f"{scheme}://{_url_host(host)}:{int(port)}{suffix}"
+
+
+def _plugin_meta(entry: dict, kind: str) -> dict:
+    raw = entry.get("pluginConfig")
+    if not isinstance(raw, dict):
+        return {}
+    meta = raw.get(kind)
+    return meta if isinstance(meta, dict) else {}
+
+
+def _plugin_token(meta: dict, cfg: dict, default_source: str = "") -> str:
+    source = str(meta.get("tokenFrom") or default_source).strip()
+    if not source:
+        return ""
+    if source == "backend":
+        return str(cfg.get("token") or "").strip()
+    if source.startswith("options."):
+        key = source[len("options."):].strip()
+        return str((cfg.get("options") or {}).get(key) or "").strip()
+    return ""
+
+
+def _export_entries(kind: str, requested_host: str, backends: list = None):
+    """遍历注册表生成导出配置，返回 (config, included, excluded, warnings, host)。
+    kind=backend 生成插件「后端配置」JSON；kind=mcp 生成标准 mcpServers JSON。"""
+    host = normalize_export_host(requested_host)
+    installed = {b.name: b for b in (backends if backends is not None else discover_backends())}
+    included, excluded, warnings = [], [], []
+    config = {"version": 1, "backends": {}} if kind == "backend" else {"mcpServers": {}}
+    for entry in load_registry():
+        name = str(entry.get("name") or "").strip()
+        meta = _plugin_meta(entry, kind)
+        if not name or not meta:
+            continue
+        backend = installed.get(name)
+        if backend is None or not deps_ready(backend):
+            excluded.append({"name": name, "reason": "未安装"})
+            continue
+        cfg = backend_config(backend)
+        scheme = str(meta.get("scheme") or "http").strip() or "http"
+        path = str(meta.get("path") or ("/mcp" if kind == "mcp" else "")).strip()
+        url = _join_export_url(scheme, _export_host(backend, cfg, host), cfg["port"], path)
+        token = _plugin_token(meta, cfg, "backend" if kind == "mcp" else "")
+        if kind == "backend":
+            item = {"url": url}
+            if token:
+                item["token"] = token
+            elif meta.get("tokenRequired"):
+                warnings.append(
+                    f"{name} 未设置访问 token：插件上传/取图会返回 401，建议在卡片「⚙ 配置」里设置"
+                )
+            config["backends"][name] = item
+        else:
+            item = {"type": "http", "url": url}
+            if token:
+                item["headers"] = {"Authorization": f"Bearer {token}"}
+            platform = meta.get("platform")
+            if isinstance(platform, str):
+                platform = [platform]
+            if isinstance(platform, list) and platform:
+                item["platform"] = [str(p) for p in platform if str(p).strip()]
+            config["mcpServers"][name] = item
+        included.append({"name": name, "url": url, "token": bool(token)})
+    return config, included, excluded, warnings, host
+
+
+def build_plugin_backend_config(
+    requested_host: str = PLUGIN_EXPORT_DEFAULT_HOST, backends: list = None
+) -> dict:
+    """生成插件「后端 → 后端配置」的 JSON（只含已安装的后端项目）"""
+    config, included, excluded, warnings, host = _export_entries("backend", requested_host, backends)
+    return {
+        "host": host,
+        "config": config,
+        "text": json.dumps(config, ensure_ascii=False, separators=(",", ":")),
+        "included": included,
+        "excluded": excluded,
+        "warnings": warnings,
+    }
+
+
+def build_plugin_mcp_config(
+    requested_host: str = PLUGIN_EXPORT_DEFAULT_HOST, backends: list = None
+) -> dict:
+    """生成插件「MCP → MCP服务器」的标准 mcpServers JSON（只含已安装的 MCP 项目）"""
+    config, included, excluded, warnings, host = _export_entries("mcp", requested_host, backends)
+    return {
+        "host": host,
+        "config": config,
+        "text": json.dumps(config, ensure_ascii=False, separators=(",", ":")),
+        "included": included,
+        "excluded": excluded,
+        "warnings": warnings,
+    }
+
+
 def effective_webui_port() -> int:
     """WebUI 管理界面端口：优先 .runtime.json 中的覆盖值；首次运行随机生成五位数端口（10000-65535，
     避开已收录后端的端口）并保存，之后保持稳定"""
@@ -1936,6 +2069,12 @@ def main() -> None:
     port_p = sub.add_parser("port", help="查看/修改后端端口（重启后端生效）")
     port_p.add_argument("name")
     port_p.add_argument("value", nargs="?", help="新端口(1-65535)，或 reset 恢复默认")
+    plugin_cfg_p = sub.add_parser("plugin-config", help="输出插件「后端配置」JSON（只含已安装的后端项目）")
+    plugin_cfg_p.add_argument("--host", default=PLUGIN_EXPORT_DEFAULT_HOST, help="插件访问用的主机名/IP（默认 127.0.0.1）")
+    plugin_cfg_p.add_argument("--pretty", action="store_true", help="缩进输出")
+    mcp_cfg_p = sub.add_parser("mcp-config", help="输出插件「MCP服务器」JSON（只含已安装的 MCP 项目）")
+    mcp_cfg_p.add_argument("--host", default=PLUGIN_EXPORT_DEFAULT_HOST, help="插件访问用的主机名/IP（默认 127.0.0.1）")
+    mcp_cfg_p.add_argument("--pretty", action="store_true", help="缩进输出")
     start_p = sub.add_parser("start", help="启动后端（首次自动创建 venv 并安装依赖）")
     start_p.add_argument("names", nargs="*")
     start_p.add_argument("--all", action="store_true", help="启动全部后端")
@@ -1980,6 +2119,24 @@ def main() -> None:
             print(f"[launcher] 未知后端: {', '.join(missing)}（可用: {', '.join(by_name)}）")
             sys.exit(1)
         return [by_name[n] for n in names]
+
+    if args.command in ("plugin-config", "mcp-config"):
+        try:
+            result = (build_plugin_backend_config(args.host) if args.command == "plugin-config"
+                      else build_plugin_mcp_config(args.host))
+        except ValueError as e:
+            print(f"[launcher] {e}", file=sys.stderr)
+            sys.exit(1)
+        print(json.dumps(
+            result["config"],
+            ensure_ascii=False,
+            indent=2 if args.pretty else None,
+            separators=None if args.pretty else (",", ":"),
+        ))
+        if not result["included"]:
+            label = "后端" if args.command == "plugin-config" else "MCP"
+            print(f"[launcher] 没有已安装的{label}项目可导出", file=sys.stderr)
+        return
 
     if args.command == "list":
         for backend in backends:

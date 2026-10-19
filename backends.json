@@ -7,7 +7,12 @@
       "entry": "urltobase64.py",
       "deps": "requirements.txt",
       "port": 46678,
-      "version": "1.0.0",
+      "version": "1.0.1",
+      "pluginConfig": {
+        "backend": {
+          "scheme": "http"
+        }
+      },
       "source": "https://raw.githubusercontent.com/error2913/aiplugin4-backends/shop/backends/image-url-to-base64",
       "files": [
         "backend.json",
@@ -23,6 +28,11 @@
       "deps": "requirements.txt",
       "port": 46679,
       "version": "1.0.0",
+      "pluginConfig": {
+        "backend": {
+          "scheme": "http"
+        }
+      },
       "source": "https://raw.githubusercontent.com/error2913/aiplugin4-backends/shop/backends/media-fetch",
       "files": [
         "backend.json",
@@ -38,6 +48,11 @@
       "deps": "requirements.txt",
       "port": 3910,
       "version": "1.0.7",
+      "pluginConfig": {
+        "mcp": {
+          "path": "/mcp"
+        }
+      },
       "source": "https://raw.githubusercontent.com/error2913/aiplugin4-backends/shop/backends/mcp-files-exec",
       "files": [
         "backend.json",
@@ -53,6 +68,14 @@
       "deps": "package.json",
       "port": 37632,
       "version": "1.1.0",
+      "pluginConfig": {
+        "mcp": {
+          "path": "/mcp",
+          "platform": [
+            "QQ"
+          ]
+        }
+      },
       "source": "https://raw.githubusercontent.com/error2913/aiplugin4-backends/shop/backends/md-html-render",
       "files": [
         "backend.json",
@@ -68,6 +91,11 @@
       "deps": "requirements.txt",
       "port": 3010,
       "version": "1.0.0",
+      "pluginConfig": {
+        "backend": {
+          "scheme": "http"
+        }
+      },
       "source": "https://raw.githubusercontent.com/error2913/aiplugin4-backends/shop/backends/stream-output",
       "files": [
         "backend.json",
@@ -83,6 +111,11 @@
       "deps": "requirements.txt",
       "port": 3009,
       "version": "1.0.0",
+      "pluginConfig": {
+        "backend": {
+          "scheme": "http"
+        }
+      },
       "source": "https://raw.githubusercontent.com/error2913/aiplugin4-backends/shop/backends/usage-chart",
       "files": [
         "backend.json",
@@ -98,6 +131,11 @@
       "deps": "package.json",
       "port": 8921,
       "version": "1.0.5",
+      "pluginConfig": {
+        "mcp": {
+          "path": "/mcp"
+        }
+      },
       "source": "https://raw.githubusercontent.com/error2913/aiplugin4-backends/shop/backends/mcp-browser",
       "files": [
         "backend.json",
@@ -113,7 +151,14 @@
       "entry": "bridge.js",
       "deps": "package.json",
       "port": 46880,
-      "version": "1.1.0",
+      "version": "1.1.1",
+      "pluginConfig": {
+        "backend": {
+          "scheme": "ws",
+          "path": "/plugin",
+          "tokenFrom": "options.plugin_token"
+        }
+      },
       "source": "https://raw.githubusercontent.com/error2913/aiplugin4-backends/shop/backends/ob11-core-bridge",
       "files": [
         "backend.json",
@@ -131,7 +176,14 @@
       "entry": "imagehost.py",
       "deps": "requirements.txt",
       "port": 46680,
-      "version": "1.0.9",
+      "version": "1.0.10",
+      "pluginConfig": {
+        "backend": {
+          "scheme": "http",
+          "tokenFrom": "backend",
+          "tokenRequired": true
+        }
+      },
       "webui": {
         "path": "/",
         "title": "图床 WebUI"

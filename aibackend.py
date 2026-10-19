@@ -19,6 +19,8 @@
   aibackend install-backend <后端名>    安装后端（下载程序 + 安装依赖）
   aibackend uninstall-backend <后端名>  卸载后端（停止并删除程序与依赖）
   aibackend update                     从 GitHub 更新到最新版
+  aibackend plugin-config [--host H] [--pretty]  输出插件「后端配置」JSON
+  aibackend mcp-config [--host H] [--pretty]     输出插件「MCP服务器」JSON
   aibackend webui                      后台启动 Web 管理界面（不占终端）
   aibackend webui-stop                 停止后台 WebUI
   aibackend webui-restart              重启后台 WebUI（重新加载后端清单）
@@ -33,6 +35,7 @@
 """
 
 import argparse
+import json
 import os
 import subprocess
 import sys
@@ -42,6 +45,8 @@ from datetime import datetime
 from launcher import (
     ROOT_DIR,
     Supervisor,
+    build_plugin_backend_config,
+    build_plugin_mcp_config,
     configure_webui_host,
     configure_webui_port,
     configure_webui_token,
@@ -70,6 +75,8 @@ COMMANDS = [
     ("monitor", "实时监控面板"),
     ("install-backend", "安装后端（下载程序 + 安装依赖）"),
     ("uninstall-backend", "卸载后端（停止并删除程序与依赖）"),
+    ("plugin-config", "输出插件「后端配置」JSON（只含已安装的后端项目）"),
+    ("mcp-config", "输出插件「MCP服务器」JSON（只含已安装的 MCP 项目）"),
     ("update", "从 GitHub 更新到最新版"),
     ("webui", "后台启动 Web 管理界面（不占终端）"),
     ("webui-stop", "停止后台 WebUI"),
@@ -376,9 +383,39 @@ def cmd_update(args):
     print("提示：若更新了 launcher/webui，请重启对应进程后生效")
 
 
+def _print_plugin_config(result, pretty=False):
+    print(json.dumps(
+        result["config"],
+        ensure_ascii=False,
+        indent=2 if pretty else None,
+        separators=None if pretty else (",", ":"),
+    ))
+    for warning in result["warnings"]:
+        print(f"警告: {warning}", file=sys.stderr)
+    if not result["included"]:
+        print("没有已安装的项目可导出（先安装对应后端）", file=sys.stderr)
+
+
+def cmd_plugin_config(args):
+    try:
+        result = build_plugin_backend_config(args.host)
+    except ValueError as e:
+        print(str(e))
+        sys.exit(1)
+    _print_plugin_config(result, args.pretty)
+
+
+def cmd_mcp_config(args):
+    try:
+        result = build_plugin_mcp_config(args.host)
+    except ValueError as e:
+        print(str(e))
+        sys.exit(1)
+    _print_plugin_config(result, args.pretty)
+
+
 def cmd_webui(args):
     start_webui_background(host=args.host, port=args.port, open_browser=not args.no_browser)
-
 
 def cmd_webui_stop(args):
     stop_webui()
@@ -556,6 +593,13 @@ def build_parser():
 
     sub.add_parser("monitor", help="实时监控面板")
 
+    plugin_cfg_p = sub.add_parser("plugin-config", help="输出插件「后端配置」JSON（只含已安装的后端项目）")
+    plugin_cfg_p.add_argument("--host", default="127.0.0.1", help="插件访问用的主机名/IP（默认 127.0.0.1）")
+    plugin_cfg_p.add_argument("--pretty", action="store_true", help="缩进输出")
+    mcp_cfg_p = sub.add_parser("mcp-config", help="输出插件「MCP服务器」JSON（只含已安装的 MCP 项目）")
+    mcp_cfg_p.add_argument("--host", default="127.0.0.1", help="插件访问用的主机名/IP（默认 127.0.0.1）")
+    mcp_cfg_p.add_argument("--pretty", action="store_true", help="缩进输出")
+
     install_b_p = sub.add_parser("install-backend", help="安装后端（下载程序 + 安装依赖）")
     install_b_p.add_argument("name")
     sub.add_parser("uninstall-backend", help="卸载后端（停止并删除程序与依赖）").add_argument("name")
@@ -605,6 +649,10 @@ def main(argv=None):
         cmd_info(args, supervisor)
     elif args.command == "monitor":
         cmd_monitor(args, supervisor)
+    elif args.command == "plugin-config":
+        cmd_plugin_config(args)
+    elif args.command == "mcp-config":
+        cmd_mcp_config(args)
     elif args.command == "install-backend":
         cmd_install_backend(args)
     elif args.command == "uninstall-backend":
