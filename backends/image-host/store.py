@@ -655,10 +655,11 @@ class Store:
             tags_map.setdefault(t["id"], []).append(t["tag"])
         src_map: dict[str, list] = {}
         for s in con.execute(
-                f"SELECT id, platform, group_id, user_id, message_id, at FROM ref "
-                f"WHERE id IN ({marks}) ORDER BY at DESC", ids):
+                f"SELECT id, platform, group_id, user_id, message_id, session_id, at, raw_url "
+                f"FROM ref WHERE id IN ({marks}) ORDER BY at DESC", ids):
             src_map.setdefault(s["id"], []).append(
-                {k: s[k] for k in ("platform", "group_id", "user_id", "message_id", "at")})
+                {k: s[k] for k in ("platform", "group_id", "user_id", "message_id",
+                                   "session_id", "at", "raw_url")})
 
         items = []
         for row in rows:
@@ -669,7 +670,9 @@ class Store:
                 "tags": tags_map.get(bid, []),
                 "origin": row["origin"],
                 "format": row["format"],
+                "mime": row["mime"],
                 "size": row["size"],
+                "thumb_size": row["thumb_size"] or 0,
                 "created_at": row["created_at"],
                 "last_access_at": row["last_access_at"],
                 "deleted_at": row["deleted_at"],

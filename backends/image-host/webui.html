@@ -188,11 +188,18 @@ button.more:hover:not(:disabled){background:none;text-decoration:underline}
 .batchprog:empty{display:none}
 
 /* ---------- 悬浮弹层（批量标签） ---------- */
-.pop{position:fixed;left:50%;bottom:76px;z-index:75;transform:translateX(-50%);width:min(440px,calc(100vw - 28px));padding:14px;background:var(--panel);border:1px solid var(--bd);border-radius:14px;box-shadow:0 18px 50px var(--shadow);animation:pop .16s ease-out}
+.pop{position:fixed;left:50%;bottom:76px;z-index:75;transform:translateX(-50%);width:min(440px,calc(100vw - 28px));max-height:calc(100vh - 140px);overflow:auto;padding:14px;background:var(--panel);border:1px solid var(--bd);border-radius:14px;box-shadow:0 18px 50px var(--shadow);animation:pop .16s ease-out}
 .pophead{margin:0 0 8px;font-size:13.5px;font-weight:600}
 .popnote{margin:0 0 8px;font-size:12px;color:var(--mut);line-height:1.6}
 .pop .chips{margin:0 0 9px}
 .pop input.popin{width:100%;height:34px;margin:0 0 9px}
+/* 图片详情 */
+.dgrid{display:grid;grid-template-columns:84px 1fr;gap:5px 10px;margin:0 0 10px;font-size:12.5px}
+.dgrid dt{color:var(--mut)}
+.dgrid dd{margin:0;word-break:break-all;line-height:1.55}
+.mono{font-family:ui-monospace,Consolas,monospace;font-size:12px;word-break:break-all;color:var(--mut)}
+.dsrc{display:flex;flex-direction:column;gap:6px;max-height:160px;overflow:auto;margin:0 0 10px}
+.dsrcrow{padding:6px 8px;background:var(--panel2);border-radius:8px;font-size:12.5px;line-height:1.6;word-break:break-all}
 .popfoot{display:flex;justify-content:flex-end;gap:8px}
 
 /* ---------- 上传队列 ---------- */
@@ -624,6 +631,105 @@ function srcLine(s) {
   row.textContent = parts.join(' · ') + ' · ' + fmtTime(s.at);
   return row;
 }
+
+/* ---------------- 图片详情 ---------------- */
+function copyText(text, okMsg) {
+  if (!text) { toast('没有可复制的内容'); return; }
+  try {
+    navigator.clipboard.writeText(text).then(
+      () => toast(okMsg),
+      () => toast('复制失败：请检查浏览器剪贴板权限')
+    );
+  } catch (_e) {
+    toast('复制失败：请检查浏览器剪贴板权限');
+  }
+}
+function openDetail(it) {
+  const isTrash = !!it.deleted_at;
+  openPop((pop) => {
+    const head = el('div', 'pophead');
+    head.textContent = it.name || '未命名图片';
+    pop.appendChild(head);
+
+    const note = el('div', 'popnote');
+    note.textContent = [
+      isTrash ? '回收站' : (it.origin === 'manual' ? '手动上传' : '插件抓的'),
+      '引用 ' + (it.ref_count || 0) + ' 条',
+      (it.format ? String(it.format).toUpperCase() : '未知格式'),
+      fmtSize(it.size),
+    ].join(' · ');
+    pop.appendChild(note);
+
+    const dl = el('dl', 'dgrid');
+    const addRow = (label, value, mono) => {
+      const dt = el('dt'); dt.textContent = label;
+      const dd = el('dd'); if (mono) dd.classList.add('mono');
+      dd.textContent = value || '—';
+      dl.append(dt, dd);
+    };
+    addRow('图片 ID', it.id, true);
+    addRow('格式 / MIME', [String(it.format || '?').toUpperCase(), it.mime || ''].filter(Boolean).join(' / '));
+    addRow('大小', fmtSize(it.size) + '（' + (it.size || 0) + ' 字节）');
+    addRow('缩略图', it.thumb_url
+      ? fmtSize(it.thumb_size || 0) + '（' + (it.thumb_size || 0) + ' 字节）'
+      : '无（小图不生成缩略图）');
+    addRow('创建时间', fmtTime(it.created_at));
+    addRow('最后访问', fmtTime(it.last_access_at));
+    addRow('回收站', it.deleted_at ? fmtTime(it.deleted_at) : '否');
+    addRow('原图地址', it.url ? resolveUrl(it.url) : '', true);
+    addRow('b64 出口', it.b64_url ? resolveUrl(it.b64_url) : '', true);
+    pop.appendChild(dl);
+
+    const tags = it.tags || [];
+    const tagNote = el('div', 'popnote');
+    tagNote.textContent = '标签（' + tags.length + '）';
+    pop.appendChild(tagNote);
+    const chips = el('div', 'chips');
+    if (tags.length) {
+      tags.forEach((t) => { const c = el('span', 'chip'); c.textContent = t; chips.appendChild(c); });
+    } else chips.textContent = '（无）';
+    pop.appendChild(chips);
+
+    const sources = it.sources || [];
+    const srcNote = el('div', 'popnote');
+    srcNote.textContent = '来源记录（' + sources.length + ' 条）';
+    pop.appendChild(srcNote);
+    const srcList = el('div', 'dsrc');
+    if (!sources.length) srcList.textContent = '（无来源记录）';
+    sources.forEach((s) => {
+      const row = el('div', 'dsrcrow');
+      const line = el('div');
+      line.textContent = [
+        s.platform === 'manual' ? '手动' : (s.platform || '未知'),
+        s.group_id ? '群 ' + s.group_id : '',
+        s.user_id ? '用户 ' + s.user_id : '',
+        s.message_id ? '消息 ' + s.message_id : '',
+        s.session_id ? '会话 ' + s.session_id : '',
+        fmtTime(s.at),
+      ].filter(Boolean).join(' · ');
+      row.appendChild(line);
+      if (s.raw_url) {
+        const u = el('div', 'mono');
+        u.textContent = s.raw_url;
+        row.appendChild(u);
+      }
+      srcList.appendChild(row);
+    });
+    pop.appendChild(srcList);
+
+    const foot = el('div', 'popfoot');
+    const cUrl = btn('复制链接');
+    cUrl.addEventListener('click', () => copyText(it.url ? resolveUrl(it.url) : '', '已复制原图链接'));
+    const cB64 = btn('复制 b64 链接');
+    cB64.addEventListener('click', () => copyText(it.b64_url ? resolveUrl(it.b64_url) : '', '已复制 b64 链接'));
+    const cId = btn('复制 ID');
+    cId.addEventListener('click', () => copyText(it.id, '已复制图片 ID'));
+    const close = btn('关闭', 'primary');
+    close.addEventListener('click', closePop);
+    foot.append(cUrl, cB64, cId, close);
+    pop.appendChild(foot);
+  });
+}
 function startRename(it, oldBtn) {
   const input = el('input', 'rename');
   input.type = 'text'; input.value = it.name || ''; input.maxLength = 200;
@@ -787,8 +893,12 @@ function makeCard(it) {
 
   body.append(titleRow, chips, src, meta);
 
+  // 详情：卡片上放不下的信息（完整 ID / 字节数 / 全部标签 / 全部来源 / 链接）在这里看
+  const acts = el('div', 'acts');
+  const detail = btn('详情', 'ghost', '查看完整信息：ID、大小、标签、全部来源、链接');
+  detail.addEventListener('click', () => openDetail(it));
+  acts.appendChild(detail);
   if (!isTrash) {
-    const acts = el('div', 'acts');
     if (it.origin === 'plugin') {
       const keep = btn('收进图库', 'keep', '收进图库后，这张图片将不会被自动清理');
       keep.addEventListener('click', async () => {
@@ -814,8 +924,8 @@ function makeCard(it) {
       } catch (e) { if (e.status !== 401) toast('删除失败：' + e.message); }
     });
     acts.appendChild(del);
-    body.appendChild(acts);
   }
+  body.appendChild(acts);
   card.appendChild(body);
 
   cardViews.set(it.id, { card, check, it });
