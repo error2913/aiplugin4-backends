@@ -540,6 +540,24 @@ def webui():
     page = os.path.join(ROOT, "webui.html")
     if not os.path.exists(page):
         return "<h1>image-host</h1><p>webui.html 缺失</p>", 200
+    if not PASSWORD:
+        # 没设密码 = WebUI 关闭：直接说明白，别让人对着一个永远登不进的登录页
+        return (
+            "<!doctype html><meta charset='utf-8'><title>image-host</title>"
+            "<body style='margin:0;min-height:100vh;display:grid;place-items:center;"
+            "font-family:system-ui,-apple-system,Segoe UI,sans-serif;color:#222;background:#f6f7f9'>"
+            "<div style='max-width:460px;padding:28px 32px;background:#fff;border:1px solid #e3e6ea;"
+            "border-radius:12px;box-shadow:0 4px 16px rgba(0,0,0,.06)'>"
+            "<h2 style='margin:0 0 10px;font-size:18px'>WebUI 已关闭</h2>"
+            "<p style='margin:0 0 10px;line-height:1.6;color:#444'>没有设置 WebUI 访问密码"
+            "（<code>AIPLUGIN4_IMAGE_HOST_PASSWORD</code>），所以人看的界面不开放。</p>"
+            "<p style='margin:0 0 10px;line-height:1.6;color:#444'>请在 aiplugin4 的后端管理里"
+            "「⚙ 配置」填一个密码并重启本后端。</p>"
+            "<p style='margin:0;line-height:1.6;color:#666;font-size:13px'>"
+            "API 仍可用：<code>/api/*</code> · <code>/i/&lt;id&gt;</code> · <code>/i/&lt;id&gt;/b64</code> · "
+            "<code>/t/&lt;id&gt;</code> · <code>/mcp</code></p>"
+            "</div></body>"
+        ), 200
     resp = send_file(page, mimetype="text/html")
     # 前端改版后必须让浏览器拿到最新 HTML，不做缓存
     resp.headers["Cache-Control"] = "no-store, must-revalidate"
