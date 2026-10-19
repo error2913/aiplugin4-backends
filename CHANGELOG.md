@@ -2,6 +2,12 @@
 
 标题格式为 `## <版本号>`，release 工作流按标签版本号读取对应段落作为发布说明；日常更新以「Unreleased」汇总，发版前改成版本号并补日期。
 
+## 0.11.23 - 2026-10-19
+
+- 修复 WebUI「⬆ 更新」/「🔄 重启 WebUI」在 **systemd 或前台直接运行**（没有 `logs/webui.pid`）时不生效的问题：旧 WebUI 进程一直占着端口，新进程 `Address already in use` 后退出，页面继续跑旧代码（表现为更新成功但界面/新功能不出现）
+- 重启逻辑现在会在拿不到 pid 文件时，通过 `ss`（Linux，失败回退 `/proc`）或 `netstat -ano`（Windows）找到监听 WebUI 端口的进程，校验命令行包含 `launcher.py` / `webui.py` 后再结束，避免误杀其他服务；systemd 托管时由 `Restart=always` 拉起新代码，手动/前台部署则自行拉起新进程
+- 修复后，systemd 部署下直接点「🔄 重启 WebUI」或更新后的自动重启即可加载新代码，不再需要手动登录服务器处理端口占用
+
 ## 0.11.22 - 2026-10-19
 
 - 后端卡片新增「🌐 WebUI」按钮：后端在 `backend.json` / `backends.json` 声明 `webui`（`path` / `title` / `proxy` / `inject_token`）后，已安装且运行中的卡片会出现按钮，点击在新标签打开后端自带的 WebUI

@@ -109,6 +109,7 @@ Git tag `v*` 触发 `.github/workflows/release.yml`：先 checkout `shop` 分支
 ## 常用排查
 
 - 后端起不来：看 `logs/<name>.log`；依赖没装完看 WebUI 安装日志（`/api/setup-log/<name>`）。
+- 更新/重启后 WebUI 仍是旧代码：systemd 或前台启动时没有 `logs/webui.pid`，旧进程会一直占用 WebUI 端口（`logs/webui.log` 里 `Address already in use`）。`launcher.py webui-restart` 会自动用 `ss`/`/proc`（Linux）或 `netstat -ano`（Windows）找到并结束命令行含 `launcher.py`/`webui.py` 的旧进程；仍失败时可手动 `sudo fuser -k <端口>/tcp` 或 `sudo systemctl restart aiplugin4-webui`。
 - 端口被占/生效的是旧值：`.runtime.json` 里 `config/<name>.port` 覆盖默认端口，改完需重启后端。
 - WebUI 黑框：后台场景子进程缺 `CREATE_NO_WINDOW`。更新是纯 HTTP 下载（不跑 git），不应有黑框；若出现说明新增了子进程调用且漏了该标志。
 - aibackend 命令失效：重新跑 `python install_cli.py`（改 shim 生成逻辑后必须重装）。
