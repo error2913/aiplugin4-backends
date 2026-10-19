@@ -35,6 +35,7 @@ git clone https://github.com/error2913/aiplugin4-backends.git && cd aiplugin4-ba
 - 卡片「⚙ 配置」弹窗可修改端口、访问 token 与监听 IP（默认 `0.0.0.0`），支持一键随机生成 token；token 默认留空 = 不鉴权；配置项较多时弹窗内容区可上下滚动
 - 后端自带 WebUI 时（在 `backend.json` 声明 `webui`，例如 image-host），运行中的卡片显示「🌐 WebUI」按钮：点击经 launcher 同源反代 `/ui/<名称>/` 打开，**只暴露 launcher 一个端口**；后端可以只监听 `127.0.0.1`，不必为 WebUI 单独开放公网端口
 - 工具栏「📋 复制后端配置」「📋 复制 MCP 配置」一键生成插件配置 JSON，粘贴进海豹即可导入；「👁 预览」可切换查看、修改访问主机、下载 `.json`（详见 [插件配置导出](#插件配置导出)）
+- 管理页脚本异常（输入 token 后无反应、按钮点不动）时，可打开 `/safe` **安全模式**：输入 WebUI token 后直接「更新本体 / 重启 WebUI」，不依赖主页面脚本；页脚也有「安全模式」入口
 - 后端进程异常退出会自动拉起
 
 > 按需安装：每个后端只安装自己缺失的依赖，不会预装全部；依赖清单（`requirements.txt` / `package.json`）变化后会自动重新安装。Python 后端使用独立 venv，Node 后端使用各自的 `node_modules`。

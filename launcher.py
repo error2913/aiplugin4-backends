@@ -1973,8 +1973,48 @@ def _write_archives(zip_out: str, tar_out: str, files: list) -> None:
             tf.add(path, arcname)
 
 
+def _validate_webui_scripts() -> None:
+    """发布前校验 WebUI 内嵌脚本：从**运行期** PAGE / SAFE_PAGE 提取 <script>，
+    交给 node --check。能发现 Python 三引号字符串提前转义（如 0.12.0 的 join('\\n')）
+    导致的整段脚本语法错误；发布流程必须经过此校验。"""
+    import re
+
+    import webui as webui_module
+
+    scripts = []
+    for label, html in (("webui.PAGE", webui_module.PAGE), ("webui.SAFE_PAGE", getattr(webui_module, "SAFE_PAGE", ""))):
+        found = re.findall(r"<script>(.*?)</script>", html or "", re.S)
+        if not found:
+            raise RuntimeError(f"{label} 中没有 <script>，拒绝打包")
+        scripts.extend(found)
+    node = shutil.which("node")
+    if not node:
+        print("[launcher] 警告：未安装 node，跳过 WebUI 内嵌脚本语法校验", file=sys.stderr)
+        return
+    fd, path = tempfile.mkstemp(suffix=".js")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write("\n".join(scripts))
+        proc = subprocess.run(
+            [node, "--check", path],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+        )
+        if proc.returncode != 0:
+            raise RuntimeError("WebUI 内嵌 JS 语法错误，拒绝打包：\n" + (proc.stderr or ""))
+    finally:
+        try:
+            os.unlink(path)
+        except OSError:
+            pass
+    print("[launcher] WebUI 内嵌脚本语法校验通过")
+
+
 def package_backends() -> list:
     """打包本体（全部仓库文件）与每个后端独立包（backends/<名称>/，版本取各自 backend.json），返回产物列表"""
+    _validate_webui_scripts()
     version = read_version()
     out_dir = os.path.join(ROOT_DIR, "dist")
     os.makedirs(out_dir, exist_ok=True)

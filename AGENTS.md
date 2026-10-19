@@ -91,6 +91,7 @@ Git tag `v*` 触发 `.github/workflows/release.yml`：先 checkout `shop` 分支
 - `POST /api/update-backend/<name>`：下载该后端独立 release 包覆盖商店并重装程序与依赖
 - `POST /api/webui-restart`：重启 WebUI（响应先返回，随后由独立进程执行 `launcher.py webui-restart`，用于重新加载后端清单）
 - `GET|POST /api/config/<name>`：查询/保存 {port, token, host}
+- `GET /safe`：安全模式页（公开页面；操作仍要 WebUI token），用于主页面脚本损坏时更新/重启 WebUI
 - `GET /api/plugin-config?host=127.0.0.1`：生成插件「后端配置」JSON（只含已安装的后端项目）
 - `GET /api/mcp-config?host=127.0.0.1`：生成插件「MCP服务器」标准 `mcpServers` JSON（只含已安装的 MCP 项目）
 - `POST /api/port/<name>`、`/api/port/<name>/reset`：旧版端口接口（写同一份配置，保留兼容）
@@ -103,6 +104,7 @@ Git tag `v*` 触发 `.github/workflows/release.yml`：先 checkout `shop` 分支
 - WebUI 必须保持纯标准库（不引入 webui-requirements.txt）；后端依赖只在各自 venv/node_modules 按需安装，不要手动装。
 - 新增后端若要参与插件配置导出，在 `backends.json` 条目声明 `pluginConfig`：`backend` 组（`scheme`/`path`/`tokenFrom`/`tokenRequired`）和/或 `mcp` 组（`path`/`platform`）；导出只含 `deps_ready()` 为真的已安装项。MCP 配置粘贴到插件会整体替换「MCP服务器」。
 - 改后端程序必须同时 bump `backends.json` 与 shop 分支 `backend.json` 的版本号，否则卡片不会出现「⬆ 更新」，已安装用户拿不到新代码。
+- **发布闸门**：发布前必须通过 `python -m unittest discover -s tests -t . -v`；`launcher.py package` 还会从运行期 `PAGE` / `SAFE_PAGE` 提取内嵌 JS 交给 `node --check`，语法错误直接拒绝打包。主页面脚本坏掉时用户连 WebUI 都进不去（0.12.0 事故），因此这条不能绕过；`/safe` 是兜底入口。
 - 新增后端 = 新建目录 + `backend.json`（含默认端口）+ 入口脚本读取 `AIPLUGIN4_BACKEND_PORT`；如需 token/监听 IP 支持，按上面六后端的模式接入 `AIPLUGIN4_BACKEND_TOKEN/_HOST`。
 - 新增带 WebUI 的后端：在 `backend.json` 补 `webui`（至少 `path`），前端一律用相对 URL / `document.baseURI` 拼请求，保证既能直连端口、也能经 `/ui/<name>/` 反代；WebUI 路由挂在后端根路径下，不要假设自己独占域名。若后端只给 launcher 反代看，建议文档提示把监听 IP 设为 `127.0.0.1` 以避免额外开放端口（插件同机时 API 仍可用 127.0.0.1）。
 - 弹窗类 UI 用 `.dialog-body` 类承载内容（`flex:1; min-height:0; overflow-y:auto`），不要写死高度，否则配置项/日志一多就滚不动。

@@ -2,6 +2,14 @@
 
 标题格式为 `## <版本号>`，release 工作流按标签版本号读取对应段落作为发布说明；日常更新以「Unreleased」汇总，发版前改成版本号并补日期。
 
+## 0.12.1 - 2026-10-20
+
+- **修复 0.12.0 的 WebUI 无法登录**：`webui.py` 内嵌 JS 中的 `join('\n')` 被 Python 三引号字符串提前转义成真实换行，整个 `<script>` 语法错误，输入 token 后页面无反应（也无法从页面点更新）。已改用 `String.fromCharCode(10)`。
+- 新增 **发布闸门**：`launcher.py package` 打包前从**运行期** `PAGE` / `SAFE_PAGE` 提取内嵌脚本执行 `node --check`，语法错误直接拒绝打包；release workflow 在打包前先跑 `python3 -m unittest discover -s tests -t . -v`（含内嵌 JS 语法测试）。
+- 新增 **安全模式页 `/safe`**：不依赖主页面脚本，输入 WebUI token 后可直接「更新本体」「重启 WebUI」，用于页面脚本损坏时自救（主页面页脚也有入口）。页面无需登录即可打开，但操作仍校验 token。
+- 新增 `tests/test_webui_page.py`：直接校验运行期 `PAGE` / `SAFE_PAGE` 的脚本语法，防止 Python 转义问题再次漏过。
+- **升级提示**：已装 0.12.0 的机器若 WebUI 输入 token 后无反应，用命令行升级：`aibackend update`（或 `python launcher.py update`），再 `aibackend webui-restart`，浏览器 Ctrl+F5；升级后可用 `/safe` 兜底。
+
 ## 0.12.0 - 2026-10-20
 
 - 新增「插件配置导出」：WebUI 工具栏 `📋 复制后端配置` / `📋 复制 MCP 配置` / `👁 预览`，一键生成插件可直接粘贴的 JSON（只含已安装的后端项目；预览可改访问主机、查看纳入/排除项、下载 `.json`；局域网 `http` 下剪贴板 API 不可用时自动降级）。新增 API `GET /api/plugin-config`、`GET /api/mcp-config`，CLI `aibackend plugin-config` / `aibackend mcp-config`（`--host`、`--pretty`）。

@@ -418,7 +418,7 @@ PAGE = """<!DOCTYPE html>
 <div id="toast"></div>
 <footer style="display:flex; align-items:center; justify-content:space-between;">
   <span>aiplugin4-backends · launcher.py webui</span>
-  <button id="themeBtn" onclick="cycleTheme()" style="margin-left:10px;">主题</button>
+  <span><a href="/safe" target="_blank" style="margin-left:12px;color:var(--muted);font-size:12px;text-decoration:none;">安全模式</a><button id="themeBtn" onclick="cycleTheme()" style="margin-left:10px;">主题</button></span>
 </footer>
 <script>
 let current = null;
@@ -538,10 +538,10 @@ async function reloadPluginConfig(){
   } else {
     lines.push('注意：粘贴会整体替换「MCP服务器」，手写的其它服务器请先合并。');
   }
-  document.getElementById('pcInfo').textContent = lines.join('\n');
+  document.getElementById('pcInfo').textContent = lines.join(String.fromCharCode(10));
   const warn = document.getElementById('pcWarn');
   if (d.warnings && d.warnings.length) {
-    warn.textContent = d.warnings.join('\n');
+    warn.textContent = d.warnings.join(String.fromCharCode(10));
     warn.style.display = 'block';
   } else {
     warn.textContent = '';
@@ -1037,6 +1037,71 @@ setInterval(() => { if (loggedIn) refresh().catch(() => {}); }, 1000);
 </html>"""
 
 
+# 安全模式：管理页脚本异常导致无法登录/更新时的恢复入口（不依赖主页面脚本）。
+SAFE_PAGE = """<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>aiplugin4-backends · 安全模式</title>
+<style>
+  :root { color-scheme: dark; }
+  body { font-family: system-ui, -apple-system, "Segoe UI", sans-serif; background:#12141a; color:#e7e9ee; max-width:760px; margin:40px auto; padding:0 20px; line-height:1.7; }
+  h1 { font-size:20px; }
+  p { color:#9aa1ad; font-size:13px; }
+  input { background:#1b1e26; border:1px solid #2a2f3a; color:#e7e9ee; border-radius:8px; padding:8px 10px; width:260px; }
+  button { background:#232833; border:1px solid #333a48; color:#e7e9ee; border-radius:8px; padding:8px 14px; cursor:pointer; margin-right:8px; }
+  button:hover { background:#2c3341; }
+  pre { background:#171a21; border:1px solid #2a2f3a; border-radius:8px; padding:12px; white-space:pre-wrap; word-break:break-all; font-size:12px; min-height:80px; }
+  .row { margin:14px 0; display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
+  a { color:#9aa1ad; font-size:13px; }
+</style>
+</head>
+<body>
+<h1>aiplugin4-backends · 安全模式</h1>
+<p>管理页面脚本异常时，用本页更新本体或重启 WebUI。需要 WebUI 访问 token（与登录页一致）。</p>
+<div class="row"><input id="tok" type="password" placeholder="WebUI token" autocomplete="off"></div>
+<div class="row">
+  <button id="btnUpdate">⬆ 更新本体</button>
+  <button id="btnRestart">🔄 重启 WebUI</button>
+  <a href="/">返回管理页</a>
+</div>
+<pre id="log">就绪。</pre>
+<script>
+(function(){
+  var tokenInput = document.getElementById('tok');
+  var log = document.getElementById('log');
+  function token(){ return (tokenInput.value || '').trim() || localStorage.getItem('webui_token') || ''; }
+  function say(msg){ log.textContent += msg + String.fromCharCode(10); }
+  function api(path, body){
+    return fetch(path, {
+      method: 'POST',
+      headers: { 'X-Token': token(), 'Content-Type': 'application/json' },
+      body: body || undefined
+    }).then(function(r){
+      return r.json().catch(function(){ return { ok: r.ok }; }).then(function(j){
+        if (!r.ok) throw new Error((j && (j.message || j.error)) || ('HTTP ' + r.status));
+        return j;
+      });
+    });
+  }
+  document.getElementById('btnUpdate').onclick = function(){
+    say('正在更新…');
+    api('/api/update').then(function(j){
+      say(j.updated ? ('更新完成：' + (j.changelog || j.output || '已更新')) : '没有可更新的版本');
+    }).catch(function(e){ say('更新失败：' + e.message); });
+  };
+  document.getElementById('btnRestart').onclick = function(){
+    say('正在重启 WebUI…');
+    api('/api/webui-restart').then(function(){ say('已请求重启，约 2 秒后刷新本页。'); })
+      .catch(function(e){ say('重启失败：' + e.message); });
+  };
+})();
+</script>
+</body>
+</html>"""
+
+
 def run_webui(backends, config, supervisor: Supervisor, host: str = None, port: int = None, open_browser: bool = True) -> None:
     """启动 Web 管理界面（阻塞，Ctrl+C 退出）"""
     host = host or effective_webui_host()
@@ -1203,7 +1268,7 @@ def run_webui(backends, config, supervisor: Supervisor, host: str = None, port: 
             backends = discover_backends()
             by_name = {b.name: b for b in backends}
             path_only, _, query = self.path.partition("?")
-            if self.path not in ("/", "/icon.png", "/icon-256.png") and not self._authorized():
+            if path_only not in ("/", "/safe", "/icon.png", "/icon-256.png") and not self._authorized():
                 if path_only.startswith(UI_PREFIX):
                     self._ui_unauthorized()
                 else:
@@ -1214,6 +1279,15 @@ def run_webui(backends, config, supervisor: Supervisor, host: str = None, port: 
                 return
             if self.path == "/":
                 body = PAGE.encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "text/html; charset=utf-8")
+                self.send_header("Cache-Control", "no-store")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+                return
+            if path_only == "/safe":
+                body = SAFE_PAGE.encode("utf-8")
                 self.send_response(200)
                 self.send_header("Content-Type", "text/html; charset=utf-8")
                 self.send_header("Cache-Control", "no-store")

@@ -29,6 +29,11 @@ jobs:
         shell: bash
         run: echo "${GITHUB_REF_NAME#v}" > VERSION
 
+      # 发布闸门：内嵌 JS 语法 / 配置导出等单测必须通过，避免再发布“页面脚本坏掉、
+      # 用户连 WebUI 都进不去更新”的版本（package 里还会再做一次 node --check）。
+      - name: Run unit tests
+        run: python3 -m unittest discover -s tests -t . -v
+
       - name: Package backends
         run: python3 launcher.py package
 
