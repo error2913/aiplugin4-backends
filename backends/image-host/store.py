@@ -457,10 +457,15 @@ class Store:
             try:
                 with self._tx(con):
                     if dedup:
+                        # 同哈希命中：只加一条 ref，不写第二份字节。
+                        # 清理适配：只要这次是「手动」来源（WebUI 上传 / 存图库），就把 blob 提升为
+                        # manual —— 否则先是插件抓的、后来用户手动上传同一张图时，blob 仍是 plugin
+                        # 来源，容量压力下会被自动淘汰，违反「手动上传的图永不自动删」。
                         con.execute(
                             "UPDATE blob SET last_access_at=?, name=COALESCE(name, ?),"
+                            " origin=CASE WHEN ?='manual' THEN 'manual' ELSE origin END,"
                             " deleted_at=NULL WHERE id=?",
-                            (now_ms(), name or None, bid))
+                            (now_ms(), name or None, origin, bid))
                         if exists["deleted_at"] is not None:   # 死而复生
                             self._log(con, "restore_blob", bid, None)
                         self._cache_drop(bid)
