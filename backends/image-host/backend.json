@@ -5,7 +5,7 @@
   "entry": "imagehost.py",
   "deps": "requirements.txt",
   "port": 46680,
-  "version": "1.0.6",
+  "version": "1.0.7",
   "webui": {
     "path": "/",
     "title": "图床 WebUI"
@@ -19,9 +19,9 @@
       "create_dir": true
     },
     "webui_enabled": {
-      "label": "WebUI 开关（on = 打开 / off = 关闭；重启后端生效）",
-      "type": "text",
-      "default": "on",
+      "label": "WebUI 开关（重启后端生效）",
+      "type": "boolean",
+      "default": true,
       "env": "AIPLUGIN4_IMAGE_HOST_WEBUI"
     },
     "webui_password": {

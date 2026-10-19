@@ -5,7 +5,7 @@
   "entry": "browser.js",
   "deps": "package.json",
   "port": 8921,
-  "version": "1.0.4",
+  "version": "1.0.5",
   "config": {
     "browser_name": {
       "label": "浏览器类型（chromium/firefox/webkit）",
@@ -14,9 +14,9 @@
       "env": "AIPLUGIN4_BROWSER_NAME"
     },
     "browser_headless": {
-      "label": "无头模式（开启后不显示窗口）",
+      "label": "无头模式（开启后不显示浏览器窗口）",
       "type": "boolean",
-      "default": "",
+      "default": true,
       "env": "AIPLUGIN4_BROWSER_HEADLESS"
     },
     "browser_viewport": {
@@ -26,8 +26,8 @@
       "env": "AIPLUGIN4_BROWSER_VIEWPORT"
     },
     "browser_chromium_sandbox": {
-      "label": "Chromium 沙箱（留空=自动：root/容器自动关闭；true/false 强制开关）",
-      "type": "boolean",
+      "label": "Chromium 沙箱（自动 = root/容器下自动关闭）",
+      "type": "tristate",
       "default": "",
       "env": "AIPLUGIN4_BROWSER_CHROMIUM_SANDBOX"
     },
