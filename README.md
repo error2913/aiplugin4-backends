@@ -85,7 +85,7 @@ data/<名称>/           后端数据目录（如 mcp-files-exec 的沙箱工作
 
 命令行安装/卸载后端：`python launcher.py install-backend <名称>` / `uninstall-backend <名称>`（aibackend 同样支持）；安装按注册表版本从 release 下载独立包（失败自动回退缓存/远端文件）再装依赖，卸载停止进程并删除 `installed/<名称>`。
 
-右上角「🔄 重启 WebUI」可让管理界面重新加载后端清单（新增/修改后端、代码更新后无需手动重启进程）；命令行等价 `launcher.py webui-restart` / `aibackend webui-restart`。
+右上角「🔄 重启 WebUI」可让管理界面重新加载后端清单（新增/修改后端、代码更新后无需手动重启进程）；命令行等价 `launcher.py webui-restart` / `aibackend webui-restart`。systemd 或前台启动（没有 `logs/webui.pid`）时，重启会自动找到并结束占用 WebUI 端口的旧 launcher 进程，再由 systemd/新进程拉起新代码。
 
 「⬆ 更新」点击后按钮转圈，更新成功会在 2 秒后自动重启 WebUI 使新代码生效；后端卡片按「依赖已装 → 未装」排序，右上角「🙈 隐藏未装依赖」可只显示依赖就绪的后端。
 

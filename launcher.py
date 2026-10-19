@@ -1342,6 +1342,172 @@ def stop_webui() -> bool:
     return stopped
 
 
+def _parse_ss_listen_pids(text: str, port: int) -> list:
+    """解析 `ss -ltnp` 输出，返回监听指定端口的进程 PID（无 pid 信息时跳过）"""
+    pids = []
+    for line in (text or "").splitlines():
+        parts = line.split()
+        if len(parts) < 4 or not parts[0].startswith("LISTEN"):
+            continue
+        if parts[3].rsplit(":", 1)[-1] != str(port):
+            continue
+        for pid_s in re.findall(r"pid=(\d+)", line):
+            pid = int(pid_s)
+            if pid and pid not in pids:
+                pids.append(pid)
+    return pids
+
+
+def _parse_netstat_listen_pids(text: str, port: int) -> list:
+    """解析 Windows `netstat -ano` 输出，返回监听指定端口的 PID"""
+    pids = []
+    for line in (text or "").splitlines():
+        parts = line.split()
+        if len(parts) < 5 or parts[3].upper() != "LISTENING":
+            continue
+        if parts[1].rsplit(":", 1)[-1] != str(port):
+            continue
+        try:
+            pid = int(parts[4])
+        except ValueError:
+            continue
+        if pid and pid not in pids:
+            pids.append(pid)
+    return pids
+
+
+def _linux_proc_listening_pids(port: int) -> list:
+    """Linux /proc 兜底：通过监听 socket 的 inode 反查进程 PID"""
+    inodes = set()
+    for proc_file in ("/proc/net/tcp", "/proc/net/tcp6"):
+        try:
+            with open(proc_file, encoding="ascii", errors="ignore") as f:
+                next(f, None)
+                for line in f:
+                    parts = line.split()
+                    if len(parts) < 10 or parts[3] != "0A":
+                        continue
+                    try:
+                        local_port = int(parts[1].rsplit(":", 1)[1], 16)
+                    except (IndexError, ValueError):
+                        continue
+                    if local_port == port:
+                        inodes.add(parts[9])
+        except OSError:
+            continue
+    if not inodes:
+        return []
+    pids = []
+    for entry in os.listdir("/proc"):
+        if not entry.isdigit():
+            continue
+        pid = int(entry)
+        fd_dir = f"/proc/{pid}/fd"
+        try:
+            fds = os.listdir(fd_dir)
+        except OSError:
+            continue
+        for fd in fds:
+            try:
+                target = os.readlink(f"{fd_dir}/{fd}")
+            except OSError:
+                continue
+            if target.startswith("socket:[") and target[8:-1] in inodes:
+                pids.append(pid)
+                break
+    return pids
+
+
+def _listening_pids(port: int) -> list:
+    """查找监听指定端口的进程 PID（调用方还会校验命令行，避免误杀其他服务）"""
+    if os.name == "nt":
+        try:
+            out = subprocess.run(
+                ["netstat", "-ano"], capture_output=True, text=True,
+                encoding="utf-8", errors="replace", timeout=15,
+                **_no_window_kwargs(),
+            ).stdout
+            return _parse_netstat_listen_pids(out, port)
+        except (OSError, subprocess.SubprocessError):
+            return []
+    if sys.platform.startswith("linux"):
+        for exe in ("ss", "/usr/sbin/ss", "/usr/bin/ss", "/sbin/ss", "/bin/ss"):
+            path = shutil.which(exe) if "/" not in exe else (exe if os.path.isfile(exe) else None)
+            if not path:
+                continue
+            try:
+                out = subprocess.run(
+                    [path, "-ltnp"], capture_output=True, text=True,
+                    encoding="utf-8", errors="replace", timeout=10,
+                ).stdout
+            except (OSError, subprocess.SubprocessError):
+                continue
+            pids = _parse_ss_listen_pids(out, port)
+            if pids:
+                return pids
+        return _linux_proc_listening_pids(port)
+    return []
+
+
+def _pid_cmdline(pid: int) -> str:
+    """读取进程命令行（仅用于确认占用端口的是 launcher/webui）"""
+    if sys.platform.startswith("linux"):
+        try:
+            with open(f"/proc/{pid}/cmdline", "rb") as f:
+                return f.read().replace(b"\0", b" ").decode("utf-8", "replace").strip()
+        except OSError:
+            return ""
+    if os.name == "nt":
+        try:
+            out = subprocess.run(
+                ["wmic", "process", "where", f"processid={pid}", "get", "commandline", "/value"],
+                capture_output=True, text=True, encoding="mbcs", errors="replace",
+                timeout=10, **_no_window_kwargs(),
+            ).stdout
+            for line in out.splitlines():
+                if line.strip().lower().startswith("commandline="):
+                    return line.split("=", 1)[1].strip()
+        except (OSError, subprocess.SubprocessError):
+            pass
+    return ""
+
+
+def _kill_stale_webui_on_port(port: int) -> bool:
+    """结束占用 WebUI 端口的遗留 launcher/webui 进程。
+
+    systemd 托管或前台直接运行 `launcher.py webui` 时没有 logs/webui.pid，
+    `stop_webui()` 无法停止旧进程，重启/更新后会因端口被占用而继续跑旧代码；
+    这里通过监听端口反查 PID，并只结束命令行含 launcher.py / webui.py 的进程。
+    """
+    killed = False
+    for pid in _listening_pids(port):
+        if pid == os.getpid():
+            continue
+        cmd = _pid_cmdline(pid)
+        low = cmd.lower()
+        if "launcher.py" not in low and "webui.py" not in low:
+            print(f"[launcher] 端口 {port} 被 pid={pid} 占用，但不是 launcher/webui 进程，跳过（{cmd[:120] or '无法读取命令行'}）")
+            continue
+        print(f"[launcher] 端口 {port} 被旧 WebUI 进程占用（pid={pid}），正在结束: {cmd[:160]}")
+        try:
+            os.kill(pid, signal.SIGTERM)
+        except OSError as e:
+            print(f"[launcher] 结束旧 WebUI 进程失败: {e}")
+            continue
+        for _ in range(50):
+            if not Supervisor._pid_alive(pid):
+                break
+            time.sleep(0.1)
+        else:
+            try:
+                os.kill(pid, signal.SIGKILL)
+                time.sleep(0.3)
+            except OSError:
+                pass
+        killed = True
+    return killed
+
+
 def _sudo(args: list) -> int:
     """以 root 执行命令（非 root 时自动加 sudo），仅 Linux"""
     if os.geteuid() == 0:
@@ -1968,12 +2134,21 @@ def main() -> None:
         return
 
     if args.command == "webui-stop":
-        stop_webui()
+        if not stop_webui():
+            _kill_stale_webui_on_port(effective_webui_port())
         return
 
     if args.command == "webui-restart":
-        stop_webui()
+        port = effective_webui_port()
+        stopped = stop_webui()
+        if not stopped:
+            # systemd/前台模式没有 pid 文件：结束占用 WebUI 端口的旧进程，否则新进程会 EADDRINUSE 继续跑旧代码
+            stopped = _kill_stale_webui_on_port(port)
         time.sleep(0.5)
+        if stopped and os.environ.get("INVOCATION_ID"):
+            # systemd 托管：unit 是 Restart=always，结束旧进程后由 systemd 拉起新代码，这里不要抢端口
+            print("[launcher] 检测到 systemd 托管，旧 WebUI 已结束，等待 systemd 自动拉起新进程")
+            return
         start_webui_background(open_browser=False)
         return
 
