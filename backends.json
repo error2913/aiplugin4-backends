@@ -10,7 +10,8 @@
       "version": "1.0.1",
       "pluginConfig": {
         "backend": {
-          "scheme": "http"
+          "scheme": "http",
+          "tokenFrom": "backend"
         }
       },
       "source": "https://raw.githubusercontent.com/error2913/aiplugin4-backends/shop/backends/image-url-to-base64",
@@ -27,10 +28,11 @@
       "entry": "mediafetch.py",
       "deps": "requirements.txt",
       "port": 46679,
-      "version": "1.0.0",
+      "version": "1.0.1",
       "pluginConfig": {
         "backend": {
-          "scheme": "http"
+          "scheme": "http",
+          "tokenFrom": "backend"
         }
       },
       "source": "https://raw.githubusercontent.com/error2913/aiplugin4-backends/shop/backends/media-fetch",
@@ -90,7 +92,8 @@
       "version": "1.0.0",
       "pluginConfig": {
         "backend": {
-          "scheme": "http"
+          "scheme": "http",
+          "tokenFrom": "backend"
         }
       },
       "source": "https://raw.githubusercontent.com/error2913/aiplugin4-backends/shop/backends/stream-output",
@@ -107,10 +110,11 @@
       "entry": "usage_chart.py",
       "deps": "requirements.txt",
       "port": 3009,
-      "version": "1.0.0",
+      "version": "1.0.1",
       "pluginConfig": {
         "backend": {
-          "scheme": "http"
+          "scheme": "http",
+          "tokenFrom": "backend"
         }
       },
       "source": "https://raw.githubusercontent.com/error2913/aiplugin4-backends/shop/backends/usage-chart",

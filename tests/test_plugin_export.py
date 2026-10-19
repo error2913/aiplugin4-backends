@@ -95,6 +95,29 @@ class PluginExportTest(unittest.TestCase):
         self.assertEqual(len(result["included"]), 6)
         self.assertEqual(result["warnings"], [])
 
+    def test_backend_export_tokens(self):
+        """4 个 URL 后端设置 token 后应一并导出（tokenFrom: backend）。"""
+        self.cfg["stream-output"]["token"] = "t-stream"
+        self.cfg["image-url-to-base64"]["token"] = "t-i2b64"
+        self.cfg["media-fetch"]["token"] = "t-media"
+        self.cfg["usage-chart"]["token"] = "t-chart"
+        with ExitStack() as stack:
+            self._patched(stack)
+            result = launcher.build_plugin_backend_config()
+        config = result["config"]
+        expected = {
+            "stream-output": "t-stream",
+            "image-url-to-base64": "t-i2b64",
+            "media-fetch": "t-media",
+            "usage-chart": "t-chart",
+        }
+        for name, token in expected.items():
+            self.assertEqual(config["backends"][name]["token"], token, name)
+        included = {item["name"]: item for item in result["included"]}
+        for name in expected:
+            self.assertIs(included[name]["token"], True, name)
+        self.assertEqual(result["warnings"], [])
+
     def test_backend_export_image_public_host(self):
         with ExitStack() as stack:
             self._patched(stack)
@@ -234,6 +257,12 @@ class PluginExportTest(unittest.TestCase):
         for name in ("stream-output", "image-url-to-base64", "media-fetch", "usage-chart",
                      "image-host", "ob11-core-bridge"):
             self.assertIn("backend", by_name[name]["pluginConfig"], name)
+        for name in ("stream-output", "image-url-to-base64", "media-fetch", "usage-chart"):
+            self.assertEqual(
+                by_name[name]["pluginConfig"]["backend"].get("tokenFrom"),
+                "backend",
+                name,
+            )
         for name in ("mcp-files-exec", "md-html-render", "mcp-browser", "image-host"):
             self.assertIn("mcp", by_name[name]["pluginConfig"], name)
         self.assertNotIn("platform", by_name["md-html-render"]["pluginConfig"]["mcp"])

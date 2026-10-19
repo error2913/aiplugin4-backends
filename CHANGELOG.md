@@ -2,6 +2,13 @@
 
 标题格式为 `## <版本号>`，release 工作流按标签版本号读取对应段落作为发布说明；日常更新以「Unreleased」汇总，发版前改成版本号并补日期。
 
+## 0.12.11 - 2026-10-20
+
+- 后端配置导出：`stream-output` / `image-url-to-base64` / `media-fetch` / `usage-chart` 的 token 现在一并导出（注册表 `pluginConfig.backend.tokenFrom: "backend"`）；token 留空时照旧省略。
+- `media-fetch 1.0.1`：上游 4xx 且响应非 JSON 时返回 `bodyText`，供插件错误分类/展示上游原文。
+- `usage-chart 1.0.1`：`/chart` 同时返回 `image_url` 与 `base64`（插件落本地图，访问 token 不需要进图片 URL）。
+- 升级提示：更新 `media-fetch` / `usage-chart` 两个后端后重启；插件侧需重新「复制后端配置」以带上 token。
+
 ## 0.12.10 - 2026-10-20
 
 - 「📋 复制后端配置」新增「图床对外地址」（只作用于 image-host）：
