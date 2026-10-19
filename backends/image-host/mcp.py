@@ -26,6 +26,7 @@ TOOLS = [
     {
         "name": "image_search",
         "description": ("搜索私人图库中的图片（按名称、标签、来源元数据）。"
+                        "默认只搜长期图库（手动上传/收进图库）；插件自动抓取的图片要传 scope=plugin/all。"
                         "返回 id / 名称 / 标签 / 来源 / 时间 / URL。"),
         "inputSchema": {
             "type": "object",
@@ -35,6 +36,9 @@ TOOLS = [
                 "platform": {"type": "string"},
                 "group_id": {"type": "string"},
                 "since": {"type": "string", "description": "ISO 时间，只返回此后的"},
+                "scope": {"type": "string", "enum": ["gallery", "plugin", "all"],
+                          "default": "gallery",
+                          "description": "gallery=只搜长期图库（默认）；plugin=只搜插件自动抓取；all=全部"},
                 "limit": {"type": "integer", "minimum": 1, "maximum": 50, "default": 20},
                 "offset": {"type": "integer", "minimum": 0, "default": 0},
             },
@@ -103,14 +107,21 @@ def _text(value: str):
     return {"content": [{"type": "text", "text": value}]}
 
 
+SCOPES = {"gallery": "manual", "plugin": "plugin", "all": ""}
+
+
 def _tool_search(store, args: dict):
+    scope = str(args.get("scope") or "gallery").strip().lower()
+    if scope not in SCOPES:
+        return _text("scope 不合法：可选 gallery（默认，长期图库）/ plugin（插件抓取）/ all（全部）。")
+    origin = SCOPES[scope]
     tags = args.get("tags") or []
     limit = int(args.get("limit") or 20)
     offset = int(args.get("offset") or 0)
     total, items = store.list(
         q=(args.get("query") or "").strip(),
         tag=(tags[0] if tags else ""),
-        origin="",
+        origin=origin,
         limit=min(50, max(1, limit)),
         offset=max(0, offset),
     )
@@ -123,6 +134,8 @@ def _tool_search(store, args: dict):
                         for s in it["sources"])]
 
     if not items:
+        if scope == "gallery":
+            return _text("长期图库里没有匹配的图片。插件自动抓取的图片需传 scope=plugin 或 scope=all 才会搜。")
         return _text("没有匹配的图片。")
 
     lines = []
@@ -136,7 +149,7 @@ def _tool_search(store, args: dict):
             f"用户{src.get('user_id') or '-'} {_fmt_time(src.get('at') or it['created_at'])}{extra} | "
             f"/i/{it['id']}"
         )
-    return _text(f"共 {total} 条，返回 {len(items)} 条（offset={offset}）：\n" + "\n".join(lines))
+    return _text(f"共 {total} 条（scope={scope}），返回 {len(items)} 条（offset={offset}）：\n" + "\n".join(lines))
 
 
 def _tool_rename(store, args: dict):
