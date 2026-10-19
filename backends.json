@@ -70,10 +70,7 @@
       "version": "1.1.0",
       "pluginConfig": {
         "mcp": {
-          "path": "/mcp",
-          "platform": [
-            "QQ"
-          ]
+          "path": "/mcp"
         }
       },
       "source": "https://raw.githubusercontent.com/error2913/aiplugin4-backends/shop/backends/md-html-render",
@@ -181,6 +178,10 @@
         "backend": {
           "scheme": "http",
           "tokenFrom": "backend",
+          "tokenRequired": true
+        },
+        "mcp": {
+          "path": "/mcp",
           "tokenRequired": true
         }
       },

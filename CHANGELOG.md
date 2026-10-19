@@ -2,6 +2,15 @@
 
 标题格式为 `## <版本号>`，release 工作流按标签版本号读取对应段落作为发布说明；日常更新以「Unreleased」汇总，发版前改成版本号并补日期。
 
+## 0.12.3 - 2026-10-20
+
+- 修正「复制 MCP 配置」：
+  - **不再给 `md-html-render` 写 `platform: ["QQ"]`**。平台白名单不应由启动器替用户决定；现在默认不写 `platform`，所有平台可用，需要限制时粘贴后自行加。
+  - **补回 `image-host` 的 MCP 配置**（`http://<host>:46680/mcp`）。它的 `/mcp` 需要访问 token，未设置时导出省略 headers 并给出警告。
+  - MCP 导出现在覆盖 4 个已安装后端：`mcp-files-exec` / `md-html-render` / `mcp-browser` / `image-host`。
+- 同步 README、`docs/后端.md`、`docs/插件配置导出方案.md` 与单测。
+- 升级方式：`aibackend update` → `aibackend webui-restart`（若仍报端口占用，先 `fuser -k <端口>/tcp` 或用 `systemctl restart aiplugin4-webui`）。
+
 ## 0.12.2 - 2026-10-20
 
 - 修复 `aibackend webui-restart` / `aibackend webui-stop` 在**没有 `logs/webui.pid`**（systemd 托管或前台运行）时不会结束占用 WebUI 端口的旧进程：重启时新进程报 `OSError: [Errno 98] Address already in use`，旧页面继续运行。现在与 `python launcher.py webui-restart` 一致——先按端口找到并结束旧 launcher/webui 进程；检测到 systemd（`INVOCATION_ID`）时交给 systemd 拉起，不抢端口。

@@ -283,6 +283,10 @@ def _export_entries(kind: str, requested_host: str, backends: list = None):
             item = {"type": "http", "url": url}
             if token:
                 item["headers"] = {"Authorization": f"Bearer {token}"}
+            elif meta.get("tokenRequired"):
+                warnings.append(
+                    f"{name} 未设置访问 token：该后端的 MCP 接口需要鉴权，插件调用会返回 401"
+                )
             platform = meta.get("platform")
             if isinstance(platform, str):
                 platform = [platform]

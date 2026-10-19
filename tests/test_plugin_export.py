@@ -126,7 +126,10 @@ class PluginExportTest(unittest.TestCase):
             self._patched(stack)
             result = launcher.build_plugin_mcp_config()
         servers = result["config"]["mcpServers"]
-        self.assertEqual(list(servers.keys()), ["mcp-files-exec", "md-html-render", "mcp-browser"])
+        self.assertEqual(
+            list(servers.keys()),
+            ["mcp-files-exec", "md-html-render", "mcp-browser", "image-host"],
+        )
         self.assertEqual(
             servers["mcp-files-exec"],
             {
@@ -135,16 +138,34 @@ class PluginExportTest(unittest.TestCase):
                 "headers": {"Authorization": "Bearer mcp-token"},
             },
         )
+        # 默认不写 platform：平台白名单由用户粘贴后自行决定，避免工具在其它平台不可见
         self.assertEqual(
             servers["md-html-render"],
-            {"type": "http", "url": "http://127.0.0.1:37632/mcp", "platform": ["QQ"]},
+            {"type": "http", "url": "http://127.0.0.1:37632/mcp"},
         )
         self.assertEqual(
             servers["mcp-browser"],
             {"type": "http", "url": "http://127.0.0.1:8921/mcp"},
         )
+        # image-host 也提供 MCP（/mcp，需要访问 token）
+        self.assertEqual(
+            servers["image-host"],
+            {
+                "type": "http",
+                "url": "http://127.0.0.1:46680/mcp",
+                "headers": {"Authorization": "Bearer img-token"},
+            },
+        )
         self.assertNotIn("version", result["config"])
         self.assertEqual(result["text"], json.dumps(result["config"], ensure_ascii=False, separators=(",", ":")))
+
+    def test_mcp_export_image_host_token_required_warning(self):
+        self.cfg["image-host"]["token"] = ""
+        with ExitStack() as stack:
+            self._patched(stack)
+            result = launcher.build_plugin_mcp_config()
+        self.assertNotIn("headers", result["config"]["mcpServers"]["image-host"])
+        self.assertTrue(any("image-host" in w and "token" in w for w in result["warnings"]))
 
     def test_mcp_export_empty_token_omits_headers(self):
         self.cfg["mcp-files-exec"]["token"] = ""
@@ -179,8 +200,9 @@ class PluginExportTest(unittest.TestCase):
         for name in ("stream-output", "image-url-to-base64", "media-fetch", "usage-chart",
                      "image-host", "ob11-core-bridge"):
             self.assertIn("backend", by_name[name]["pluginConfig"], name)
-        for name in ("mcp-files-exec", "md-html-render", "mcp-browser"):
+        for name in ("mcp-files-exec", "md-html-render", "mcp-browser", "image-host"):
             self.assertIn("mcp", by_name[name]["pluginConfig"], name)
+        self.assertNotIn("platform", by_name["md-html-render"]["pluginConfig"]["mcp"])
 
 
 if __name__ == "__main__":

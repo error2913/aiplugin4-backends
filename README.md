@@ -49,15 +49,15 @@ WebUI 工具栏提供两个一键复制按钮，把启动器里**已安装**的�
 | 按钮 | 粘贴到 | 内容 |
 | --- | --- | --- |
 | 📋 复制后端配置 | 海豹 → 插件设置 → aiplugin4 → 后端 → 后端配置 | `{version:1, backends:{...}}`：6 个后端项目的地址 + 图床 / 核心桥 token |
-| 📋 复制 MCP 配置 | 海豹 → 插件设置 → aiplugin4 → MCP → MCP服务器 | 标准 `mcpServers`：3 个 MCP 项目的 `/mcp` 地址 + token header + `platform` |
+| 📋 复制 MCP 配置 | 海豹 → 插件设置 → aiplugin4 → MCP → MCP服务器 | 标准 `mcpServers`：4 个 MCP 后端（mcp-files-exec / md-html-render / mcp-browser / image-host）的 `/mcp` 地址 + token header；不写 platform（不限制平台） |
 
 - 只导出**已安装**（程序 + 依赖就绪）的后端；未安装的不写入，插件侧使用默认值。
-- 论坛配置不属于 aiplugin4-backends，不参与导出；MCP 类项目只进入 MCP 配置，不进入后端配置。
+- 论坛配置不属于 aiplugin4-backends，不参与导出；MCP 服务器只进入 MCP 配置（image-host 同时是后端项目，两类配置里都会出现）。
 - 访问主机默认 `127.0.0.1`（后端与插件同机）；插件在另一台机器时在「👁 预览」里改成局域网 IP/域名。后端在卡片里监听具体 IP 时以该 IP 为准。
 - MCP 配置**粘贴会整体替换**「MCP服务器」；如果还手写过其它服务器，请先合并再粘贴。
 - 「👁 预览」可查看格式化 JSON、纳入/排除项与警告，并支持下载 `.json`；局域网 `http://` 下浏览器剪贴板 API 不可用时会自动降级，失败则打开预览手动复制。
 - CLI 等价命令：`aibackend plugin-config` / `aibackend mcp-config`（`--host`、`--pretty`）。
-- 只含已安装项，所以**不包含 image-host 的 MCP 工具**、也不含手写的远程 MCP 服务器。
+- `image-host` 的 `/mcp` 需要访问 token，未设置时导出会省略 headers 并给出警告；不需要平台白名单时保持默认即可。
 
 JSON 格式与完整设计见 [docs/插件配置导出方案](docs/插件配置导出方案.md)。
 
