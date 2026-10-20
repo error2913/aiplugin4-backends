@@ -347,6 +347,9 @@ def _export_entries(kind: str, requested_host: str, backends: list = None, image
                 platform = [platform]
             if isinstance(platform, list) and platform:
                 item["platform"] = [str(p) for p in platform if str(p).strip()]
+            # image-host 的 MCP 结果含 [img:<sha256>]：让插件把它规范化为 [img:h<sha>] 并注册虚拟图
+            if name == "image-host":
+                item["imageRefs"] = True
             config["mcpServers"][name] = item
         included.append({"name": name, "url": url, "token": bool(token)})
     return config, included, excluded, warnings, host, (public_hint if kind == "backend" else "")

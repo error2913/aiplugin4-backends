@@ -2,6 +2,16 @@
 
 标题格式为 `## <版本号>`，release 工作流按标签版本号读取对应段落作为发布说明；日常更新以「Unreleased」汇总，发版前改成版本号并补日期。
 
+## 0.12.12 - 2026-10-20
+
+- `image-host 1.0.15`：
+  - `ref` 增加 `tool` / `server` / `via` 元数据；上传接口接收 `tags` 与来源，用于工具产出图片的英文类型标签与来源检索。
+  - MCP 增加到 6 个工具：`image_search`（`tool`/`server`/`platform`/`group_id`/`since`/`tags`/`scope` 过滤）、`image_keep`、`image_unkeep`（新增）、`image_rename`、`image_tag`、`image_tags`；`keep`/`unkeep`/`tag` 单次 ≤50 个 id。
+  - 工具元数据标签（`来源:`/`群:`/`工具:`/`MCP:`/`类型:` 前缀、纯群号/工具名/时间/文件名等）拒绝写入；来源展示不再出现“未知”。
+  - WebUI / MCP 的搜索、标签清单、来源与工具字段同步更新。
+- 「📋 复制 MCP 配置」为 image-host 自动写入 `imageRefs: true`：插件据此把 `[img:<sha>]` 规范化为 `[img:h<sha>]` 并注册虚拟图。
+- 发布闸门：后端单测改为跑 `shop` 分支 image-host 全量测试（新增 upload / store v3 / MCP 工具用例，共 57 项），避免新逻辑漏测。
+
 ## 0.12.11 - 2026-10-20
 
 - 后端配置导出：`stream-output` / `image-url-to-base64` / `media-fetch` / `usage-chart` 的 token 现在一并导出（注册表 `pluginConfig.backend.tokenFrom: "backend"`）；token 留空时照旧省略。

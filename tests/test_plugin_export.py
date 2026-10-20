@@ -200,13 +200,14 @@ class PluginExportTest(unittest.TestCase):
             servers["mcp-browser"],
             {"type": "http", "url": "http://127.0.0.1:8921/mcp"},
         )
-        # image-host 也提供 MCP（/mcp，需要访问 token）
+        # image-host 也提供 MCP（/mcp，需要访问 token）；imageRefs 让插件规范化 [img:<sha>]
         self.assertEqual(
             servers["image-host"],
             {
                 "type": "http",
                 "url": "http://127.0.0.1:46680/mcp",
                 "headers": {"Authorization": "Bearer img-token"},
+                "imageRefs": True,
             },
         )
         self.assertNotIn("version", result["config"])
