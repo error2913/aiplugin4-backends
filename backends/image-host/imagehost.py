@@ -3,7 +3,7 @@
 一个服务三个面（共享同一份 SQLite）：
 
   REST   /api/*  /i/*  /t/*   ← 插件（抓取、取图、取 b64、释放引用、对账、批量）
-  MCP    /mcp                 ← AI（搜索 / 重命名 / 打标签）
+  MCP    /mcp                 ← AI（搜索 / 收进图库 / 移出图库 / 重命名 / 打标签 / 标签清单）
   WebUI  /                    ← 人（鉴权：画廊 / 来源 / 删除 / 重命名 / 标签 / 上传 / 批量）
 
 依赖 Flask + requests + Pillow（Pillow 缺失时只关闭缩略图）。
@@ -73,6 +73,46 @@ def _parse_timeout(raw: str):
 
 
 FETCH_TIMEOUT = _parse_timeout(os.environ.get("AIPLUGIN4_IMAGE_HOST_FETCH_TIMEOUT") or "5,20")
+
+
+def _parse_tags(raw) -> list:
+    """解析 upload 的 tags：JSON 数组、JSON 字符串或逗号分隔字符串；其它一律忽略。"""
+    if raw is None or raw == "":
+        return []
+    if isinstance(raw, list):
+        return raw
+    if isinstance(raw, str):
+        text = raw.strip()
+        if not text:
+            return []
+        try:
+            parsed = json.loads(text)
+        except Exception:
+            parsed = [part.strip() for part in text.split(",") if part.strip()]
+        return parsed if isinstance(parsed, list) else [parsed]
+    return []
+
+
+def _normalize_source(raw) -> dict:
+    """source 必须是对象；工具图片的来源元数据（tool/server/via）只写 ref 列。"""
+    if isinstance(raw, str):
+        try:
+            raw = json.loads(raw)
+        except Exception:
+            raw = {}
+    if not isinstance(raw, dict):
+        return {}
+    source = {k: raw[k] for k in ("platform", "group_id", "user_id", "message_id",
+                                  "session_id", "at", "raw_url",
+                                  "tool", "server", "via") if raw.get(k) is not None}
+    for key in ("tool", "server", "via"):
+        if key in source:
+            value = str(source[key]).strip()
+            if value:
+                source[key] = value
+            else:
+                source.pop(key)
+    return source
 
 CAP_BYTES = CAP_MB * 1024 * 1024
 MAX_BYTES = MAX_FILE_MB * 1024 * 1024
@@ -195,18 +235,19 @@ def _write_stream(chunks, limit: int):
 
 
 def _store_put(tmp, sha, size, fmt, mime, ref, source, origin, name=None,
-               file_ready=False):
+               file_ready=False, tags=None):
     try:
         bid, dedup = store.put(tmp, sha, size, fmt, mime, ref=ref, source=source,
-                               origin=origin, name=name, file_ready=file_ready)
+                               origin=origin, name=name, file_ready=file_ready,
+                               tags=tags)
     except DiskFull as exc:
         if tmp:
             _unlink(tmp)
         raise ApiError("disk_full", 507,
                        used_mb=round(exc.used / 1048576, 1),
                        manual_mb=round(exc.manual / 1048576, 1))
-    log.info("落库 id=%s size=%d fmt=%s ref=%s origin=%s dedup=%s",
-             bid, size, fmt, ref, origin, dedup)
+    log.info("落库 id=%s size=%d fmt=%s ref=%s origin=%s tool=%s dedup=%s tags=%s",
+             bid, size, fmt, ref, origin, (source or {}).get("tool"), dedup, tags)
     return bid, dedup
 
 
@@ -295,10 +336,15 @@ def api_upload():
     source = {}
     raw_source = request.form.get("source") if request.form else None
     if raw_source:
-        try:
-            source = json.loads(raw_source)
-        except Exception:
-            source = {}
+        source = _normalize_source(raw_source)
+    elif request.form:
+        # multipart 也允许直接带 tool/server/via 字段
+        source = _normalize_source({key: request.form.get(key)
+                                    for key in ("platform", "group_id", "user_id",
+                                                "message_id", "session_id", "at",
+                                                "raw_url", "tool", "server", "via")
+                                    if request.form.get(key)})
+    tags = _parse_tags(request.form.get("tags")) if request.form else []
 
     # ① multipart（WebUI 手动上传）→ origin 强制 manual
     if request.files.get("file"):
@@ -312,12 +358,19 @@ def api_upload():
         if not name and fh.filename:
             name = os.path.splitext(os.path.basename(fh.filename))[0][:80]
         bid, dedup = _store_put(tmp, sha, size, fmt, mime, ref, source, "manual",
-                                name=name or None)
+                                name=name or None, tags=tags)
         return jsonify(_item(bid, fmt, size, dedup, ref))
 
     data = request.get_json(silent=True) or {}
     ref = data.get("ref") or uuid.uuid4().hex
-    source = data.get("source") or source
+    source = _normalize_source(data.get("source") or source)
+    # 兼容顶层 tool/server/via（等价于 source.tool/server/via）
+    for key in ("tool", "server", "via"):
+        if not source.get(key) and data.get(key):
+            value = str(data[key]).strip()
+            if value:
+                source[key] = value
+    tags = _parse_tags(data.get("tags")) or tags
     # 只有「WebUI 会话 + via=webui」才允许把 JSON 路径判为手动上传
     manual = data.get("via") == "webui" and _cookie_ok()
     origin = "manual" if manual else "plugin"
@@ -341,7 +394,8 @@ def api_upload():
                     raise ApiError("too_large", 413, size=exc.size)
                 raise ApiError("fetch_failed", 502,
                                upstream_status=exc.status, detail=exc.detail)
-        bid, dedup = _store_put(tmp, sha, size, fmt, mime, ref, source, origin, name=name)
+        bid, dedup = _store_put(tmp, sha, size, fmt, mime, ref, source, origin,
+                                name=name, tags=tags)
         return jsonify(_item(bid, fmt, size, dedup, ref))
 
     # ③ 已有字节（快路径：先算哈希，命中则不落任何文件；新图直接写终态）
@@ -359,11 +413,11 @@ def api_upload():
         sha = hashlib.sha256(blob).hexdigest()
         if store.lookup(sha) is not None:
             bid, dedup = _store_put(None, sha, size, fmt, mime, ref, source, origin,
-                                    name=name)
+                                    name=name, tags=tags)
         else:
             store.write_blob(sha, fmt, blob)
             bid, dedup = _store_put(None, sha, size, fmt, mime, ref, source, origin,
-                                    name=name, file_ready=True)
+                                    name=name, file_ready=True, tags=tags)
         return jsonify(_item(bid, fmt, size, dedup, ref))
 
     raise ApiError("bad_request", 400, reason="need_url_or_base64_or_file")
@@ -453,10 +507,18 @@ def api_list():
     except ValueError:
         raise ApiError("bad_request", 400, reason="bad_pagination")
     trash = request.args.get("trash") in ("1", "true", "yes")
+    tags_raw = (request.args.get("tags") or "").strip()
+    tags = [t.strip() for t in tags_raw.split(",") if t.strip()] if tags_raw else []
     total, items = store.list(
         q=(request.args.get("q") or "").strip(),
         tag=(request.args.get("tag") or "").strip(),
+        tags=tags,
         origin=(request.args.get("origin") or "").strip(),
+        platform=(request.args.get("platform") or "").strip(),
+        group_id=(request.args.get("group_id") or "").strip(),
+        tool=(request.args.get("tool") or "").strip(),
+        server=(request.args.get("server") or "").strip(),
+        since=(request.args.get("since") or None),
         limit=limit, offset=offset, trash=trash)
     for item in items:
         item["url"] = f"/i/{item['id']}"
@@ -467,7 +529,7 @@ def api_list():
 
 @app.get("/api/tags")
 def api_tags():
-    """标签清单（分页）。WebUI 标签视图与 MCP image_tags 共用。"""
+    """标签清单（分页）。WebUI 标签视图用全部来源；MCP image_tags 默认长期图库。"""
     _require_auth()
     try:
         limit = max(1, min(500, int(request.args.get("limit", 100))))
@@ -475,7 +537,8 @@ def api_tags():
     except ValueError:
         raise ApiError("bad_request", 400, reason="bad_pagination")
     total, tags = store.tags(q=(request.args.get("q") or "").strip(),
-                              limit=limit, offset=offset)
+                              limit=limit, offset=offset,
+                              origin=(request.args.get("origin") or "").strip())
     return jsonify({"total": total, "limit": limit, "offset": offset, "tags": tags})
 
 

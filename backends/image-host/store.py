@@ -21,15 +21,17 @@ import contextlib
 import logging
 import os
 import queue
+import re
 import sqlite3
 import threading
 import time
 
 log = logging.getLogger("image-host.store")
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 META_CACHE_MAX = 4096
 MAX_IDS = 2000
+TAG_MAX_LEN = 40
 
 PRAGMAS = """
 PRAGMA journal_mode=WAL;
@@ -97,6 +99,13 @@ CREATE TABLE IF NOT EXISTS meta (
 );
 """
 
+# v3：ref 追加工具/服务器/入口三列（只追加，不改既有列）；搜索过滤走索引
+DDL_V3_REST = """
+CREATE INDEX IF NOT EXISTS idx_ref_tool ON ref(tool);
+CREATE INDEX IF NOT EXISTS idx_ref_server ON ref(server);
+CREATE INDEX IF NOT EXISTS idx_ref_platform ON ref(platform);
+"""
+
 ACTIONS = ("tag", "untag", "keep", "unkeep", "delete", "restore", "purge")
 
 
@@ -125,6 +134,133 @@ def _chunks(seq, size):
 
 def _marks(n):
     return ",".join("?" * n)
+
+
+# ---------------------------------------------------------------- 标签边界（类型/内容 vs 元数据）
+
+# 来源/群/工具/服务器等元数据只写 ref 列，永不写成标签。
+_METADATA_TAG_PREFIXES = (
+    "来源:", "来源：", "群:", "群：", "工具:", "工具：", "mcp:", "mcp：",
+    "类型:", "类型：", "服务器:", "服务器：", "平台:", "平台：",
+    "时间:", "时间：", "用户:", "用户：", "会话:", "会话：",
+)
+# 产出工具/内置工具名不能当内容标签
+KNOWN_TOOL_NAMES = frozenset({
+    "image_search", "image_keep", "image_unkeep", "image_rename",
+    "image_tag", "image_tags", "image_view", "image_to_text",
+    "text_to_image", "meme_generator", "read_raw", "pub_read",
+    "generate_audio", "call_ob11_api", "get_image",
+})
+_META_DIGITS_RE = re.compile(r"^\d+$")                       # 纯群号 / QQ号 / 时间戳
+_META_DATE_RE = re.compile(
+    r"^\d{4}[-/.年]\d{1,2}[-/.月]\d{1,2}日?(?:[ T]\d{1,2}[:：]\d{2}(?:[:：]\d{2})?)?$")
+_META_CLOCK_RE = re.compile(r"^\d{1,2}[:：]\d{2}(?:[:：]\d{2})?$")
+_META_FILE_RE = re.compile(
+    r"^.*\.(?:png|jpe?g|gif|webp|bmp|svg|avif|heic|tiff?|mp4|mov|webm|mkv|mp3|wav|ogg|flac|pdf|zip|rar|7z|txt)$",
+    re.IGNORECASE)
+_META_URL_RE = re.compile(r"^(?:https?|ftp)://", re.IGNORECASE)
+_HEX_LIKE_RE = re.compile(r"^[0-9a-fA-F]{32,}$")             # sha256 之类的 ID 不是标签
+
+
+def _metadata_tag_reason(tag: str) -> str:
+    """返回拒绝原因；空串 = 合法的类型/内容标签。"""
+    low = tag.lower()
+    for prefix in _METADATA_TAG_PREFIXES:
+        if low.startswith(prefix.lower()):
+            return "元数据前缀"
+    if low in KNOWN_TOOL_NAMES:
+        return "工具名"
+    if _META_URL_RE.match(tag):
+        return "URL"
+    if _META_DIGITS_RE.match(tag):
+        return "纯数字（群号/用户号/时间戳）"
+    if _META_DATE_RE.match(tag) or _META_CLOCK_RE.match(tag):
+        return "时间"
+    if _META_FILE_RE.match(tag):
+        return "文件名"
+    if _HEX_LIKE_RE.match(tag):
+        return "图片 ID"
+    if len(tag) > TAG_MAX_LEN:
+        return f"超过 {TAG_MAX_LEN} 字符"
+    if any(ord(ch) < 32 for ch in tag):
+        return "控制字符"
+    return ""
+
+
+def clean_tags(tags) -> tuple[list[str], list[str]]:
+    """把输入标签分成 (合法类型/内容标签, 被拒绝的元数据式标签)。
+
+    - 字符串按单值处理；数组逐项 strip、去重
+    - 拒绝 ``来源:`` / ``群:`` / ``工具:`` / ``MCP:`` / ``类型:`` 等前缀，
+      以及纯群号/工具名/时间/文件名/图片 ID 等元数据式标签
+    - 空标签静默丢弃（不进 ignored）
+    """
+    valid: list[str] = []
+    ignored: list[str] = []
+    if tags is None:
+        return valid, ignored
+    if isinstance(tags, str):
+        tags = [tags]
+    if not isinstance(tags, (list, tuple)):
+        return valid, [str(tags)]
+    for raw in tags:
+        if not isinstance(raw, str):
+            ignored.append(str(raw))
+            continue
+        tag = raw.strip()
+        if not tag:
+            continue
+        if _metadata_tag_reason(tag):
+            ignored.append(tag)
+            continue
+        if tag not in valid:
+            valid.append(tag)
+    return valid, ignored
+
+
+# ---------------------------------------------------------------- 图片引用（CIR v1）解析
+
+_HEX64_RE = re.compile(r"^[0-9a-fA-F]{64}$")
+_IMG_WRAP_RE = re.compile(r"^[\[［]\s*img\s*[:：](.*)[\]］]$", re.IGNORECASE | re.DOTALL)
+_AVATAR_REF_RE = re.compile(r"^(?:user_avatar|group_avatar)\s*[:：]", re.IGNORECASE)
+_HOSTED_URL_RE = re.compile(r"/i/([0-9a-fA-F]{64})(?:/b64)?")
+_HASH_REF_RE = re.compile(r"^h([0-9a-fA-F]{64})$", re.IGNORECASE)
+
+
+def _hosted_of(part: str):
+    part = (part or "").strip()
+    if _HEX64_RE.match(part):
+        return part.lower()
+    m = _HASH_REF_RE.match(part)
+    if m:
+        return m.group(1).lower()
+    m = _HOSTED_URL_RE.search(part)
+    if m:
+        return m.group(1).lower()
+    return None
+
+
+def normalize_ref(raw) -> str:
+    """CIR/ref → 规范化目标：图床 sha256（小写）或插件 ref 原文。
+
+    兼容 ``[img:<ref>]`` / 全角括号、``h<sha>``、裸 sha、``/i/<sha>`` 地址、
+    ``[img:<ref>:描述]``（描述不参与查找）、插件 ref。
+    """
+    s = str(raw or "").strip()
+    m = _IMG_WRAP_RE.match(s)
+    if m:
+        s = m.group(1).strip()
+    hit = _hosted_of(s)
+    if hit:
+        return hit
+    if _AVATAR_REF_RE.match(s):
+        return s
+    parts = re.split(r"[:：]", s, maxsplit=1)
+    if len(parts) == 2:
+        hit = _hosted_of(parts[0])
+        if hit:
+            return hit
+    return s
 
 
 def _safe_unlink(path: str) -> None:
@@ -186,6 +322,14 @@ class Store:
                 con.execute("ALTER TABLE blob ADD COLUMN deleted_at INTEGER")
             con.executescript(DDL_V2_REST)
             con.execute("PRAGMA user_version=2")
+        if version < 3:
+            # 只追加列：工具图片的来源元数据（tool / server / via）
+            cols = {row[1] for row in con.execute("PRAGMA table_info(ref)")}
+            for col in ("tool", "server", "via"):
+                if col not in cols:
+                    con.execute(f"ALTER TABLE ref ADD COLUMN {col} TEXT")
+            con.executescript(DDL_V3_REST)
+            con.execute("PRAGMA user_version=3")
         con.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
 
     def _new_conn(self):
@@ -424,12 +568,16 @@ class Store:
 
     def put(self, tmp_path: str | None, bid: str, size: int, fmt: str, mime: str,
             ref: str, source: dict | None, origin: str = "plugin",
-            name: str | None = None, file_ready: bool = False):
+            name: str | None = None, file_ready: bool = False,
+            tags: list | str | None = None):
         """落库。哈希命中只追加 ref，不写第二份字节。返回 (id, dedup)。
 
         - ``tmp_path=None`` + ``file_ready=False``：调用方已确认命中已有 blob，纯 DB 更新
         - ``file_ready=True``：调用方已用 ``write_blob`` 写好终态文件
         - 否则把 ``tmp_path`` 原子搬到终态
+        - ``tags``：只允许类型/内容标签，与 blob/ref **同事务**写 tag 表；
+          元数据式标签（来源:/群:/工具:/MCP:/类型: 前缀、纯群号/工具名/时间/文件名等）被过滤
+        - ``source`` 可带 ``tool`` / ``server`` / ``via``（写 ref 列，不进标签）
         文件搬迁与缩略图生成在事务**之外**：CPU/IO 再慢也不占写锁。
         """
         source = source or {}
@@ -479,17 +627,29 @@ class Store:
                         self._add_used(con, size + thumb_size)
                     con.execute(
                         "INSERT OR REPLACE INTO ref(id,ref,platform,group_id,user_id,"
-                        "message_id,session_id,at,raw_url) VALUES(?,?,?,?,?,?,?,?,?)",
+                        "message_id,session_id,at,raw_url,tool,server,via) "
+                        "VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
                         (bid, ref, source.get("platform"), source.get("group_id"),
                          source.get("user_id"), source.get("message_id"),
                          source.get("session_id"), source.get("at"),
-                         source.get("raw_url")))
+                         source.get("raw_url"), source.get("tool"),
+                         source.get("server"), source.get("via")))
+                    self._apply_tags(con, bid, tags)
                     self._maybe_prune(con)
             except BaseException:
                 if pending_file:      # 事务失败：清掉刚落位的文件，避免孤儿
                     _safe_unlink(pending_file)
                 raise
         return bid, dedup
+
+    def _apply_tags(self, con, bid: str, tags) -> list[str]:
+        """同事务写标签（幂等）；返回真正合法写入的标签。"""
+        valid, ignored = clean_tags(tags)
+        for tag in valid:
+            con.execute("INSERT OR IGNORE INTO tag(id,tag) VALUES(?,?)", (bid, tag))
+        if ignored:
+            log.info("忽略元数据式标签 id=%s tags=%s", bid, ignored[:5])
+        return valid
 
     def _make_thumb(self, bid: str, src: str, size: int = 0):
         """只对大图生成缩略图：小图直接发原图更快，也省一份文件。"""
@@ -597,12 +757,12 @@ class Store:
                     con.execute(
                         f"UPDATE blob SET {','.join(sets)} WHERE id=?", (*args, bid))
                     self._cache_drop(bid)
-                for tag in add_tags or []:
-                    tag = (tag or "").strip()
-                    if tag:
-                        con.execute(
-                            "INSERT OR IGNORE INTO tag(id,tag) VALUES(?,?)", (bid, tag))
-                for tag in remove_tags or []:
+                clean_add, _ = clean_tags(add_tags)
+                clean_rm, _ = clean_tags(remove_tags)
+                for tag in clean_add:
+                    con.execute(
+                        "INSERT OR IGNORE INTO tag(id,tag) VALUES(?,?)", (bid, tag))
+                for tag in clean_rm:
                     con.execute("DELETE FROM tag WHERE id=? AND tag=?", (bid, tag))
                 return True
 
@@ -613,7 +773,7 @@ class Store:
 
     def _filter_where(self, flt: dict, deleted: bool):
         where, args = [], []
-        q = (flt.get("q") or "").strip()
+        q = str(flt.get("q") or "").strip()
         if q:
             like = f"%{q}%"
             where.append(
@@ -622,27 +782,62 @@ class Store:
                 "(r.group_id LIKE ? OR r.user_id LIKE ? OR r.message_id LIKE ?)) "
                 " OR EXISTS(SELECT 1 FROM tag t WHERE t.id=b.id AND t.tag LIKE ?))")
             args += [like, like, like, like, like]
-        tag = (flt.get("tag") or "").strip()
+        tag = str(flt.get("tag") or "").strip()
         if tag:
             where.append("EXISTS(SELECT 1 FROM tag t WHERE t.id=b.id AND t.tag=?)")
             args.append(tag)
-        origin = (flt.get("origin") or "").strip()
+        tags = flt.get("tags") or []
+        if isinstance(tags, str):
+            tags = [tags]
+        for one in tags:
+            one = str(one or "").strip()
+            if one:
+                where.append("EXISTS(SELECT 1 FROM tag t WHERE t.id=b.id AND t.tag=?)")
+                args.append(one)
+        origin = str(flt.get("origin") or "").strip()
         if origin in ("plugin", "manual"):
             where.append("b.origin=?")
             args.append(origin)
+        # 来源元数据一律下推 SQL（platform / group_id / tool / server），total 才是过滤后的数
+        for key, col in (("platform", "platform"), ("group_id", "group_id"),
+                         ("tool", "tool"), ("server", "server")):
+            val = str(flt.get(key) or "").strip()
+            if val:
+                where.append(
+                    f"EXISTS(SELECT 1 FROM ref r WHERE r.id=b.id AND r.{col}=?)")
+                args.append(val)
+        since = flt.get("since")
+        if since not in (None, ""):
+            try:
+                since_ms = int(since)
+            except (TypeError, ValueError):
+                since_ms = 0
+            if since_ms > 0:
+                where.append("b.created_at >= ?")
+                args.append(since_ms)
         where.append("b.deleted_at IS NOT NULL" if deleted else "b.deleted_at IS NULL")
         return " AND ".join(where), args
 
-    def list(self, *, q: str = "", tag: str = "", origin: str = "",
-             limit: int = 24, offset: int = 0, trash: bool = False):
-        """三查询取全页：blob / tags / sources。"""
-        clause, args = self._filter_where({"q": q, "tag": tag, "origin": origin}, trash)
+    def list(self, *, q: str = "", tag: str = "", tags=None, origin: str = "",
+             platform: str = "", group_id: str = "", tool: str = "",
+             server: str = "", since=None, limit: int = 24, offset: int = 0,
+             trash: bool = False):
+        """三查询取全页：blob / tags / sources。
+
+        ``tags`` 为多标签 AND；``since`` 为毫秒时间戳（按 ``blob.created_at``）。
+        ``platform`` / ``group_id`` / ``tool`` / ``server`` 都下推 SQL，``total`` 正确。
+        """
+        clause, args = self._filter_where(
+            {"q": q, "tag": tag, "tags": tags or [], "origin": origin,
+             "platform": platform, "group_id": group_id, "tool": tool,
+             "server": server, "since": since}, trash)
         con = self._conn()
         total = con.execute(
             f"SELECT COUNT(*) FROM blob b WHERE {clause}", args).fetchone()[0]
         rows = con.execute(
             f"SELECT b.*, (SELECT COUNT(*) FROM ref r WHERE r.id=b.id) AS ref_count "
-            f"FROM blob b WHERE {clause} ORDER BY b.created_at DESC LIMIT ? OFFSET ?",
+            f"FROM blob b WHERE {clause} "
+            f"ORDER BY b.created_at DESC, b.rowid DESC LIMIT ? OFFSET ?",
             (*args, int(limit), int(offset))).fetchall()
         if not rows:
             return int(total), []
@@ -655,11 +850,13 @@ class Store:
             tags_map.setdefault(t["id"], []).append(t["tag"])
         src_map: dict[str, list] = {}
         for s in con.execute(
-                f"SELECT id, platform, group_id, user_id, message_id, session_id, at, raw_url "
+                f"SELECT id, platform, group_id, user_id, message_id, session_id, at, "
+                f"raw_url, tool, server, via "
                 f"FROM ref WHERE id IN ({marks}) ORDER BY at DESC", ids):
             src_map.setdefault(s["id"], []).append(
                 {k: s[k] for k in ("platform", "group_id", "user_id", "message_id",
-                                   "session_id", "at", "raw_url")})
+                                   "session_id", "at", "raw_url",
+                                   "tool", "server", "via")})
 
         items = []
         for row in rows:
@@ -682,23 +879,30 @@ class Store:
             })
         return int(total), items
 
-    def tags(self, q: str = "", limit: int = 100, offset: int = 0):
-        """标签清单（按使用次数降序，支持关键字过滤与分页）。返回 (total, tags)。"""
+    def tags(self, q: str = "", limit: int = 100, offset: int = 0,
+             origin: str = "manual"):
+        """标签清单（按使用次数降序，支持关键字过滤与分页）。返回 (total, tags)。
+
+        - 默认只统计 `origin=manual`（长期图库，image_tags 口径）；``origin=""`` = 全部来源
+        - 回收站里的图片不计数
+        """
         con = self._conn()
-        like = f"%{q}%" if q else ""
-        if like:
-            total = con.execute(
-                "SELECT COUNT(DISTINCT tag) FROM tag WHERE tag LIKE ?", (like,)).fetchone()[0]
-            rows = con.execute(
-                "SELECT tag, COUNT(*) c FROM tag WHERE tag LIKE ? GROUP BY tag "
-                "ORDER BY c DESC, tag LIMIT ? OFFSET ?",
-                (like, int(limit), int(offset))).fetchall()
-        else:
-            total = con.execute("SELECT COUNT(DISTINCT tag) FROM tag").fetchone()[0]
-            rows = con.execute(
-                "SELECT tag, COUNT(*) c FROM tag GROUP BY tag "
-                "ORDER BY c DESC, tag LIMIT ? OFFSET ?",
-                (int(limit), int(offset))).fetchall()
+        where = ["b.deleted_at IS NULL"]
+        args: list = []
+        if origin in ("plugin", "manual"):
+            where.append("b.origin=?")
+            args.append(origin)
+        q = (q or "").strip()
+        if q:
+            where.append("t.tag LIKE ?")
+            args.append(f"%{q}%")
+        base = (f"FROM tag t JOIN blob b ON b.id=t.id WHERE {' AND '.join(where)}")
+        total = con.execute(
+            f"SELECT COUNT(DISTINCT t.tag) {base}", args).fetchone()[0]
+        rows = con.execute(
+            f"SELECT t.tag, COUNT(*) c {base} GROUP BY t.tag "
+            f"ORDER BY c DESC, t.tag LIMIT ? OFFSET ?",
+            (*args, int(limit), int(offset))).fetchall()
         return int(total), [{"tag": r["tag"], "count": int(r["c"])} for r in rows]
 
     def stats(self):
@@ -710,6 +914,46 @@ class Store:
         return {"count": int(count), "trash": int(trash),
                 "used_bytes": self._used(con), "manual_bytes": self.manual_bytes(con),
                 "changes_head": self.change_head()}
+
+    # ---------------------------------------------------------------- 引用解析（CIR / 插件 ref）
+
+    def resolve_refs(self, raws) -> list[str]:
+        """把任意 CIR/ref 输入规范化为待解析目标（sha256 或插件 ref 原文），去重保序。"""
+        if isinstance(raws, str):
+            raws = [raws]
+        out: list[str] = []
+        for raw in raws or []:
+            norm = normalize_ref(raw)
+            if norm and norm not in out:
+                out.append(norm)
+        return out
+
+    def lookup_ids(self, refs) -> tuple[list[str], list[str]]:
+        """CIR/ref → blob id。返回 ``(ids, unmatched)``；``unmatched`` 为查不到的目标。"""
+        con = self._conn()
+        ids: list[str] = []
+        unmatched: list[str] = []
+        seen: set[str] = set()
+        for ref in refs or []:
+            if _HEX64_RE.match(ref):
+                row = con.execute("SELECT id FROM blob WHERE id=?", (ref,)).fetchone()
+                if row:
+                    if row["id"] not in seen:
+                        seen.add(row["id"])
+                        ids.append(row["id"])
+                else:
+                    unmatched.append(ref)
+                continue
+            rows = con.execute(
+                "SELECT DISTINCT id FROM ref WHERE ref=? ORDER BY id", (ref,)).fetchall()
+            if rows:
+                for row in rows:
+                    if row["id"] not in seen:
+                        seen.add(row["id"])
+                        ids.append(row["id"])
+            else:
+                unmatched.append(ref)
+        return ids, unmatched
 
     # ---------------------------------------------------------------- 批量
 
@@ -740,8 +984,9 @@ class Store:
     def preview(self, action: str, ids: list, body: dict | None = None) -> dict:
         """只读预演：返回真实会受影响的条数，供确认框显示。"""
         body = body or {}
-        add = [str(t).strip() for t in (body.get("add_tags") or []) if str(t).strip()]
-        rm = [str(t).strip() for t in (body.get("remove_tags") or []) if str(t).strip()]
+        add, ignored_add = clean_tags(body.get("add_tags"))
+        rm, ignored_rm = clean_tags(body.get("remove_tags"))
+        ignored = ignored_add + [t for t in ignored_rm if t not in ignored_add]
         con = self._conn()
         existing = self._existing(con, ids)
         affected = 0
@@ -767,36 +1012,51 @@ class Store:
                 affected += con.execute(
                     f"SELECT COUNT(*) FROM blob WHERE id IN ({marks}) "
                     f"AND origin='manual' AND deleted_at IS NULL", chunk).fetchone()[0]
-            elif action == "tag" and add:
-                affected += con.execute(
-                    f"SELECT COUNT(*) FROM blob b WHERE b.id IN ({marks}) "
-                    f"AND b.deleted_at IS NULL AND (SELECT COUNT(*) FROM tag t "
-                    f"WHERE t.id=b.id AND t.tag IN ({_marks(len(add))})) < ?",
-                    (*chunk, *add, len(add))).fetchone()[0]
-            elif action == "untag" and rm:
-                affected += con.execute(
-                    f"SELECT COUNT(*) FROM blob b WHERE b.id IN ({marks}) "
-                    f"AND b.deleted_at IS NULL AND EXISTS(SELECT 1 FROM tag t "
-                    f"WHERE t.id=b.id AND t.tag IN ({_marks(len(rm))}))",
-                    (*chunk, *rm)).fetchone()[0]
+            elif action in ("tag", "untag"):
+                add_l = add if action == "tag" else []
+                rm_l = rm
+                hit: set[str] = set()
+                if add_l:
+                    rows = con.execute(
+                        f"SELECT b.id FROM blob b WHERE b.id IN ({marks}) "
+                        f"AND b.deleted_at IS NULL AND (SELECT COUNT(*) FROM tag t "
+                        f"WHERE t.id=b.id AND t.tag IN ({_marks(len(add_l))})) < ?",
+                        (*chunk, *add_l, len(add_l))).fetchall()
+                    hit.update(r["id"] for r in rows)
+                if rm_l:
+                    rows = con.execute(
+                        f"SELECT DISTINCT b.id FROM blob b JOIN tag t ON t.id=b.id "
+                        f"WHERE b.id IN ({marks}) AND b.deleted_at IS NULL "
+                        f"AND t.tag IN ({_marks(len(rm_l))})",
+                        (*chunk, *rm_l)).fetchall()
+                    hit.update(r["id"] for r in rows)
+                affected += len(hit)
 
         return {"requested": len(ids), "affected": int(affected),
                 "skipped": max(0, len(ids) - int(affected)),
-                "refs_affected": int(refs_affected), "sample": ids[:10]}
+                "refs_affected": int(refs_affected), "ignored_tags": ignored,
+                "sample": ids[:10]}
 
     def batch(self, action: str, ids: list, body: dict | None = None) -> dict:
+        """批量操作（单事务）。
+
+        返回统一结构：``requested`` / ``affected``（真正改变的图片数）/
+        ``changed_ids`` / ``skipped``（存在但无需变更） / ``skipped_ids`` /
+        ``failed``（not_found / gone） / ``ignored_tags``（被拒绝的元数据式标签）。
+        """
         body = body or {}
         if action not in ACTIONS:
             raise ValueError("bad_action")
         if len(ids) > MAX_IDS:
             raise ValueError("too_many")
-        add = [str(t).strip() for t in (body.get("add_tags") or []) if str(t).strip()]
-        rm = [str(t).strip() for t in (body.get("remove_tags") or []) if str(t).strip()]
+        add, ignored_add = clean_tags(body.get("add_tags"))
+        rm, ignored_rm = clean_tags(body.get("remove_tags"))
+        ignored_tags = ignored_add + [t for t in ignored_rm if t not in ignored_add]
 
         with self._lock:
             con = self._conn()
-            affected = 0
             changed: list[str] = []
+            skipped: list[str] = []
             failed: list[dict] = []
             with self._tx(con):
                 existing = self._existing(con, ids)
@@ -807,41 +1067,56 @@ class Store:
                     else:
                         live.append(bid)
 
-                if action in ("tag", "untag") and not add and not rm:
-                    pass
-                elif action == "tag":
-                    for chunk in _chunks(live, 300):
-                        rows = con.execute(
-                            f"SELECT id, tag FROM tag WHERE id IN ({_marks(len(chunk))}) "
-                            f"AND tag IN ({_marks(len(add))})",
-                            (*chunk, *add)).fetchall()
-                        have = {(r["id"], r["tag"]) for r in rows}
-                        pairs = [(b, t) for b in chunk for t in add if (b, t) not in have]
-                        if pairs:
-                            con.executemany(
-                                "INSERT OR IGNORE INTO tag(id,tag) VALUES(?,?)", pairs)
-                            affected += len({b for b, _ in pairs})
-                elif action == "untag":
-                    for chunk in _chunks(live, 300):
-                        cur = con.execute(
-                            f"DELETE FROM tag WHERE id IN ({_marks(len(chunk))}) "
-                            f"AND tag IN ({_marks(len(rm))})", (*chunk, *rm))
-                        affected += cur.rowcount
+                if action in ("tag", "untag"):
+                    add_l = add if action == "tag" else []
+                    rm_l = rm
+                    active = [b for b in live if existing[b]["deleted_at"] is None]
+                    hit: set[str] = set()
+                    if add_l:
+                        for chunk in _chunks(active, 300):
+                            rows = con.execute(
+                                f"SELECT id, tag FROM tag WHERE id IN ({_marks(len(chunk))}) "
+                                f"AND tag IN ({_marks(len(add_l))})",
+                                (*chunk, *add_l)).fetchall()
+                            have = {(r["id"], r["tag"]) for r in rows}
+                            pairs = [(b, t) for b in chunk for t in add_l
+                                     if (b, t) not in have]
+                            if pairs:
+                                con.executemany(
+                                    "INSERT OR IGNORE INTO tag(id,tag) VALUES(?,?)", pairs)
+                                hit.update({b for b, _t in pairs})
+                    if rm_l:
+                        for chunk in _chunks(active, 300):
+                            rows = con.execute(
+                                f"SELECT DISTINCT id FROM tag WHERE id IN "
+                                f"({_marks(len(chunk))}) AND tag IN ({_marks(len(rm_l))})",
+                                (*chunk, *rm_l)).fetchall()
+                            gone = {r["id"] for r in rows}
+                            if gone:
+                                con.execute(
+                                    f"DELETE FROM tag WHERE id IN ({_marks(len(chunk))}) "
+                                    f"AND tag IN ({_marks(len(rm_l))})",
+                                    (*chunk, *rm_l))
+                                hit.update(gone)
+                    changed = [b for b in active if b in hit]
+                    skipped = [b for b in live if b not in hit]
                 elif action in ("keep", "unkeep"):
                     want, src = ("manual", "plugin") if action == "keep" else ("plugin", "manual")
+                    flipped: list[str] = []
                     for chunk in _chunks(live, 400):
                         rows = con.execute(
                             f"SELECT id FROM blob WHERE id IN ({_marks(len(chunk))}) "
-                            f"AND origin=? AND deleted_at IS NULL", (*chunk, src)).fetchall()
-                        hit = [r["id"] for r in rows]
-                        if hit:
-                            con.executemany(
-                                "UPDATE blob SET origin=? WHERE id=?",
-                                [(want, b) for b in hit])
-                            affected += len(hit)
-                            changed.extend(hit)
-                            for b in hit:
-                                self._cache_drop(b)
+                            f"AND origin=? AND deleted_at IS NULL",
+                            (*chunk, src)).fetchall()
+                        flipped.extend(r["id"] for r in rows)
+                    flip = set(flipped)
+                    changed = [b for b in live if b in flip]
+                    skipped = [b for b in live if b not in flip]
+                    if changed:
+                        con.executemany("UPDATE blob SET origin=? WHERE id=?",
+                                        [(want, b) for b in changed])
+                        for b in changed:
+                            self._cache_drop(b)
                 elif action == "delete":
                     ts = now_ms()
                     for chunk in _chunks(live, 300):
@@ -853,9 +1128,10 @@ class Store:
                             self._log_delete(con, bid)
                             con.execute("UPDATE blob SET deleted_at=? WHERE id=?", (ts, bid))
                             self._cache_drop(bid)
-                            affected += 1
                             changed.append(bid)
+                    skipped = [b for b in live if b not in set(changed)]
                 elif action == "restore":
+                    gone_ids: set[str] = set()
                     for chunk in _chunks(live, 300):
                         rows = con.execute(
                             f"SELECT id FROM blob WHERE id IN ({_marks(len(chunk))}) "
@@ -865,12 +1141,14 @@ class Store:
                             path = self.blob_path(bid, existing[bid]["format"])
                             if not os.path.exists(path):
                                 failed.append({"id": bid, "reason": "gone"})
+                                gone_ids.add(bid)
                                 continue
                             con.execute("UPDATE blob SET deleted_at=NULL WHERE id=?", (bid,))
                             self._log(con, "restore_blob", bid, None)
                             self._cache_drop(bid)
-                            affected += 1
                             changed.append(bid)
+                    skipped = [b for b in live
+                               if b not in set(changed) and b not in gone_ids]
                 elif action == "purge":
                     for chunk in _chunks(live, 200):
                         rows = con.execute(
@@ -878,9 +1156,14 @@ class Store:
                             f"AND deleted_at IS NOT NULL", chunk).fetchall()
                         for row in rows:
                             self._hard_delete(con, row["id"], reason="manual")
-                            affected += 1
                             changed.append(row["id"])
+                    skipped = [b for b in live if b not in set(changed)]
 
+            order = {b: i for i, b in enumerate(ids)}
+            changed = sorted(set(changed), key=lambda b: order.get(b, 1 << 30))
+            skipped = sorted(set(skipped), key=lambda b: order.get(b, 1 << 30))
             return {"ok": True, "action": action, "requested": len(ids),
-                    "affected": affected, "changed_ids": changed,
-                    "failed": failed, "cursor": self.change_head()}
+                    "affected": len(changed), "changed_ids": changed,
+                    "skipped": len(skipped), "skipped_ids": skipped,
+                    "failed": failed, "ignored_tags": ignored_tags,
+                    "cursor": self.change_head()}

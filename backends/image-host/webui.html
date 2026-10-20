@@ -628,6 +628,9 @@ function srcLine(s) {
   const parts = [s.platform === 'manual' ? '手动' : (s.platform || '未知')];
   if (s.group_id) parts.push('群 ' + s.group_id);
   if (s.user_id) parts.push('用户 ' + s.user_id);
+  if (s.tool) parts.push('工具 ' + s.tool);
+  if (s.server) parts.push('服务器 ' + s.server);
+  if (s.via) parts.push('入口 ' + s.via);
   row.textContent = parts.join(' · ') + ' · ' + fmtTime(s.at);
   return row;
 }
@@ -705,6 +708,9 @@ function openDetail(it) {
         s.user_id ? '用户 ' + s.user_id : '',
         s.message_id ? '消息 ' + s.message_id : '',
         s.session_id ? '会话 ' + s.session_id : '',
+        s.tool ? '工具 ' + s.tool : '',
+        s.server ? '服务器 ' + s.server : '',
+        s.via ? '入口 ' + s.via : '',
         fmtTime(s.at),
       ].filter(Boolean).join(' · ');
       row.appendChild(line);
