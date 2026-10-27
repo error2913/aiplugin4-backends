@@ -2,6 +2,14 @@
 
 标题格式为 `## <版本号>`，release 工作流按标签版本号读取对应段落作为发布说明；日常更新以「Unreleased」汇总，发版前改成版本号并补日期。
 
+## 0.12.13 - 2026-10-27
+
+- `image-host 1.0.16`：模型变体图源（`/m/<id>?max=`、`/m/<id>/b64`）+ `gif_mode`（默认 `first_frame`：gif 给模型时取首帧转 webp/jpeg，原图仍按原样分发给 QQ）+ `gif-first-frame` capability + `/api/meta` 元数据。
+  - 新增 `model_variant.py`（纯 PIL：尺寸钳制 512–4096、alpha 处理、首帧策略）；**升级需把该文件一起部署**（见注册表 `files`）。
+  - 入库预热覆盖超限图片（含 gif 首帧）；数据库 schema 升到 v4（`blob.w/h` + `variant` 表，级联删除、容量统计含变体），升级后自动迁移。
+  - `backend.json` 新增 `gif_mode` 配置项（env `AIPLUGIN4_IMAGE_HOST_GIF_MODE`）。
+- `image-url-to-base64 1.0.2`：`max_side` 可选参数（长边缩放、bmp→png、GIF 首帧导出），响应附带 `mime`/`width`/`height`/`resized`；`max_side<=0` 保持旧行为。
+
 ## 0.12.12 - 2026-10-20
 
 - `image-host 1.0.15`：
