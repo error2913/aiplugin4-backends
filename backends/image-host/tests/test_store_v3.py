@@ -61,17 +61,21 @@ class StoreV3Base(unittest.TestCase):
 
 
 class TestSchemaMigration(StoreV3Base):
-    def test_schema_version_is_3_and_ref_has_metadata_columns(self):
+    def test_schema_version_is_4_and_ref_has_metadata_columns(self):
         con = self.store._conn()
         self.assertEqual(con.execute("PRAGMA user_version").fetchone()[0],
                          SCHEMA_VERSION)
-        self.assertEqual(SCHEMA_VERSION, 3)
+        self.assertEqual(SCHEMA_VERSION, 4)
         cols = {row[1] for row in con.execute("PRAGMA table_info(ref)")}
         for name in ("tool", "server", "via"):
             self.assertIn(name, cols)
-        # 不新增 blob.kind
+        # 不新增 blob.kind；v4 追加原图尺寸与变体表
         blob_cols = {row[1] for row in con.execute("PRAGMA table_info(blob)")}
         self.assertNotIn("kind", blob_cols)
+        self.assertTrue({"w", "h"}.issubset(blob_cols))
+        self.assertTrue(con.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='variant'"
+        ).fetchone())
 
     def test_migrate_from_v1_only_appends_and_keeps_rows(self):
         root = tempfile.mkdtemp(prefix="ih-store-v1-")
@@ -94,7 +98,7 @@ class TestSchemaMigration(StoreV3Base):
         store = Store(root, cap_bytes=1024 * 1024)
         store.init()
         con = store._conn()
-        self.assertEqual(con.execute("PRAGMA user_version").fetchone()[0], 3)
+        self.assertEqual(con.execute("PRAGMA user_version").fetchone()[0], 4)
         cols = {row[1] for row in con.execute("PRAGMA table_info(ref)")}
         self.assertTrue({"tool", "server", "via"}.issubset(cols))
         row = con.execute("SELECT ref, platform, group_id, tool, server, via "

@@ -1,11 +1,11 @@
 {
   "name": "image-host",
-  "description": "私人图床 + 图库：按 URL 抓取落库（sha256 哈希去重）、只读分发与 base64 出口、来源/工具元数据（ref.tool/server/via）、类型/内容标签、WebUI 画廊（鉴权）、MCP 6 工具（搜索/收进图库/移出图库/重命名/打标签/标签清单）",
+  "description": "私人图床 + 图库：按 URL 抓取落库（sha256 哈希去重）、只读分发与 base64 出口、模型变体图（/m 按长边缩放转码 + GIF 首帧 + /api/meta 元数据）、来源/工具元数据（ref.tool/server/via）、类型/内容标签、WebUI 画廊（鉴权）、MCP 6 工具（搜索/收进图库/移出图库/重命名/打标签/标签清单）",
   "type": "python",
   "entry": "imagehost.py",
   "deps": "requirements.txt",
   "port": 46680,
-  "version": "1.0.15",
+  "version": "1.0.16",
   "webui": {
     "path": "/",
     "title": "图床 WebUI"
@@ -31,10 +31,22 @@
       "env": "AIPLUGIN4_IMAGE_HOST_PASSWORD"
     },
     "cap_mb": {
-      "label": "图库容量上限（MB，原图+缩略图；超出按 LRU 淘汰，先清回收站）",
+      "label": "图库容量上限（MB，原图+缩略图+模型变体；超出按 LRU 淘汰，先清回收站）",
       "type": "number",
       "default": 2048,
       "env": "AIPLUGIN4_IMAGE_HOST_CAP_MB"
+    },
+    "model_max_side": {
+      "label": "模型图默认长边（px，512–4096；插件 /m?max= 可覆盖）",
+      "type": "number",
+      "default": 2048,
+      "env": "AIPLUGIN4_IMAGE_HOST_MODEL_MAX"
+    },
+    "gif_mode": {
+      "label": "GIF 模型图源模式（first_frame = 取首帧给模型；original = 旧行为，不缩放）",
+      "type": "text",
+      "default": "first_frame",
+      "env": "AIPLUGIN4_IMAGE_HOST_GIF_MODE"
     },
     "max_file_mb": {
       "label": "单张图片上限（MB）",

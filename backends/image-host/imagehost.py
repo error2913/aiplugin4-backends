@@ -23,10 +23,11 @@ import tempfile
 import threading
 import uuid
 
-from flask import Flask, abort, jsonify, request, send_file
+from flask import Flask, Response, abort, jsonify, request, send_file
 
 import fetch as fetchmod
 import mcp as mcpmod
+import model_variant
 from store import ACTIONS, DiskFull, Store, now_ms
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
@@ -58,8 +59,13 @@ TRASH_DAYS = int(os.environ.get("AIPLUGIN4_IMAGE_HOST_TRASH_DAYS") or "7")
 CHANGE_KEEP_DAYS = int(os.environ.get("AIPLUGIN4_IMAGE_HOST_CHANGE_KEEP_DAYS") or "30")
 DEV_ALLOW_PRIVATE = (os.environ.get("AIPLUGIN4_IMAGE_HOST_DEV_ALLOW_PRIVATE") or "") == "1"
 
+# 模型变体图：默认目标长边（插件 /m?max= 可覆盖，clamp 到 [512,4096]）
+MODEL_MAX_SIDE = model_variant.clamp_max(
+    os.environ.get("AIPLUGIN4_IMAGE_HOST_MODEL_MAX"), model_variant.DEFAULT_MAX_SIDE)
+
 MAX_BATCH_IDS = 500
 MAX_FILTER_MATCH = 2000
+MAX_META_IDS = 200
 
 
 def _parse_timeout(raw: str):
@@ -195,13 +201,21 @@ def _unlink(path):
 
 def _item(bid: str, fmt: str, size: int, dedup: bool, ref: str):
     row = store.get(bid) or {}
+    model_format = model_variant.canonical_format(row.get("format") or fmt)
+    variant = store.variant_lookup(bid, MODEL_MAX_SIDE)
+    if variant:
+        model_format = variant["fmt"]
     return {
         "id": bid,
         "url": f"/i/{bid}",
         "b64_url": f"/i/{bid}/b64",
+        "model_url": f"/m/{bid}",
+        "model_format": model_format,
         "thumb_url": f"/t/{bid}" if row.get("thumb_path") else None,
         "format": fmt,
         "size": size,
+        "w": row.get("w"),
+        "h": row.get("h"),
         "dedup": dedup,
         "ref": ref,
     }
@@ -234,20 +248,92 @@ def _write_stream(chunks, limit: int):
         raise ApiError("internal", 500, detail=str(exc))
 
 
+def _probe_size(path):
+    """PIL 读尺寸；失败返回 (None, None)，不阻断上传。"""
+    if not path:
+        return None, None
+    try:
+        return model_variant.image_size(path)
+    except Exception:
+        return None, None
+
+
+def _ensure_variant(bid: str, max_side: int) -> dict:
+    """生成/复用变体，返回含 ``bytes`` 的 dict。
+
+    缓存写失败（磁盘满 / 并发删除）不影响本次响应；真正无法解码时抛 400。
+    """
+    row = store.lookup(bid)
+    if not row:
+        raise ApiError("not_found", 404)
+    cached = store.variant_lookup(bid, max_side)
+    if cached and os.path.exists(cached["path"]):
+        return dict(cached, cached=True)
+    path = store.blob_path(bid, row["format"])
+    if not os.path.exists(path):
+        raise ApiError("not_found", 404)
+    try:
+        with open(path, "rb") as fh:
+            data = fh.read()
+        result = model_variant.render(data, max_side, fmt_hint=row["format"])
+    except model_variant.VariantError as exc:
+        log.warning("模型变体生成失败 id=%s max=%s: %s", bid, max_side, exc)
+        raise ApiError("unsupported_for_model", 400, reason="render_failed",
+                       detail=str(exc))
+    saved = store.save_variant(bid, max_side, result["fmt"], result["mime"],
+                               result["w"], result["h"], result["bytes"])
+    if saved:
+        return dict(saved, bytes=result["bytes"], cached=False)
+    return {"blob_id": bid, "max_side": int(max_side), "fmt": result["fmt"],
+            "mime": result["mime"], "w": result["w"], "h": result["h"],
+            "size": len(result["bytes"]), "path": None,
+            "bytes": result["bytes"], "cached": False}
+
+
+def _ensure_row_size(bid: str, row: dict) -> dict:
+    """旧数据 w/h 为 NULL：首次请求时惰性回填（回填失败则维持 NULL）。"""
+    if row.get("w") and row.get("h"):
+        return row
+    w, h = _probe_size(store.blob_path(bid, row["format"]))
+    if w and h:
+        store.set_size(bid, w, h)
+        row = dict(row)
+        row["w"], row["h"] = w, h
+    return row
+
+
 def _store_put(tmp, sha, size, fmt, mime, ref, source, origin, name=None,
                file_ready=False, tags=None):
+    w = h = None
+    # multipart / URL 抓取路径：tmp 即将被 store.put 搬走，先取尺寸
+    if tmp:
+        w, h = _probe_size(tmp)
     try:
         bid, dedup = store.put(tmp, sha, size, fmt, mime, ref=ref, source=source,
                                origin=origin, name=name, file_ready=file_ready,
-                               tags=tags)
+                               tags=tags, w=w, h=h)
     except DiskFull as exc:
         if tmp:
             _unlink(tmp)
         raise ApiError("disk_full", 507,
                        used_mb=round(exc.used / 1048576, 1),
                        manual_mb=round(exc.manual / 1048576, 1))
-    log.info("落库 id=%s size=%d fmt=%s ref=%s origin=%s tool=%s dedup=%s tags=%s",
-             bid, size, fmt, ref, origin, (source or {}).get("tool"), dedup, tags)
+    if w is None or h is None:
+        # base64 快路径（file_ready）与旧图去重：从终态文件补尺寸
+        w, h = _probe_size(store.blob_path(bid, fmt))
+        if w and h:
+            store.set_size(bid, w, h)
+    log.info("落库 id=%s size=%d fmt=%s w=%s h=%s ref=%s origin=%s tool=%s dedup=%s tags=%s",
+             bid, size, fmt, w, h, ref, origin, (source or {}).get("tool"), dedup, tags)
+    # 入库预热默认模型变体：超默认目标且可为模型出图（GIF_MODE=first_frame 时
+    # gif 也预热首帧；original 旧行为仍跳过 gif）；失败只记日志，不阻断入库
+    prefetchable = (model_variant.canonical_format(fmt) != "gif"
+                    or model_variant.gif_first_frame_enabled())
+    if w and h and prefetchable and max(w, h) > MODEL_MAX_SIDE:
+        try:
+            _ensure_variant(bid, MODEL_MAX_SIDE)
+        except Exception as exc:
+            log.warning("入库预生成模型变体失败 id=%s: %s", bid, exc)
     return bid, dedup
 
 
@@ -256,14 +342,23 @@ def _store_put(tmp, sha, size, fmt, mime, ref, source, origin, name=None,
 @app.get("/api/health")
 def api_health():
     stats = store.stats()
+    gif_mode = model_variant.gif_mode()
+    capabilities = ["model-variant", "meta", "variant-max"]
+    if gif_mode == model_variant.GIF_MODE_FIRST_FRAME:
+        capabilities.append("gif-first-frame")
     return jsonify({
         "ok": True,
         "image_host": True,
+        "capabilities": capabilities,
+        "gif_mode": gif_mode,
+        "model_max_side": MODEL_MAX_SIDE,
         "cap_mb": CAP_MB,
         "used_mb": round(stats["used_bytes"] / 1048576, 2),
         "manual_mb": round(stats["manual_bytes"] / 1048576, 2),
         "count": stats["count"],
         "trash": stats["trash"],
+        "variants": stats.get("variant_count", 0),
+        "variant_mb": round(stats.get("variant_bytes", 0) / 1048576, 2),
         "changes_head": stats["changes_head"],
         "webui": bool(PASSWORD),
         "version": VERSION,
@@ -309,6 +404,150 @@ def serve_b64(bid: str):
     resp = jsonify({"base64": payload, "format": row["format"], "id": bid})
     resp.headers["Cache-Control"] = "private, max-age=86400"
     return resp
+
+
+# ---------------------------------------------------------------- 模型变体图（/m）
+
+def _lookup_public(bid: str):
+    """与 /i 一致：不存在 → 404；回收站 → 非登录态 404。"""
+    row = store.lookup(bid)
+    if not row:
+        abort(404)
+    if row["deleted_at"] is not None and not _authed():
+        abort(404)
+    return row
+
+
+def _model_headers(resp, *, in_trash: bool, variant: bool, w, h):
+    resp.headers["X-Model-Variant"] = "1" if variant else "0"
+    if w and h:
+        resp.headers["X-Image-Size"] = f"{int(w)}x{int(h)}"
+    resp.headers["Cache-Control"] = ("private, max-age=60" if in_trash
+                                     else "public, max-age=31536000, immutable")
+    return resp
+
+
+def _model_plan(bid: str, row: dict, max_side: int):
+    """统一的 /m 判定：原样 / 变体 / 不支持。"""
+    row = _ensure_row_size(bid, row)
+    plan = model_variant.decide(row["format"], row.get("w"), row.get("h"), max_side)
+    if plan["mode"] == model_variant.MODE_UNSUPPORTED:
+        raise ApiError("unsupported_for_model", 400,
+                       format=model_variant.canonical_format(row["format"]),
+                       w=row.get("w"), h=row.get("h"), max=max_side,
+                       reason=plan.get("reason"))
+    return row, plan
+
+
+@app.get("/m/<bid>")
+def serve_model(bid: str):
+    """给模型的图片出口：原图够小 → 原字节；否则生成/命中 PNG/JPEG/WEBP 变体。
+
+    GIF_MODE=first_frame 时超限 gif 返回首帧变体（webp/jpeg），原图不受影响。
+    """
+    if not _valid_id(bid):
+        abort(404)
+    row = _lookup_public(bid)
+    in_trash = row["deleted_at"] is not None
+    max_side = model_variant.clamp_max(request.args.get("max"), MODEL_MAX_SIDE)
+    row, plan = _model_plan(bid, row, max_side)
+    store.touch(bid, row)            # 1 小时节流的 LRU 信号
+
+    if plan["mode"] == model_variant.MODE_PASSTHROUGH:
+        path = store.blob_path(bid, row["format"])
+        if not os.path.exists(path):
+            abort(404)
+        resp = send_file(path, mimetype=row["mime"], conditional=True,
+                         max_age=31536000)
+        return _model_headers(resp, in_trash=in_trash, variant=False,
+                              w=row.get("w"), h=row.get("h"))
+
+    cached = store.variant_lookup(bid, max_side)
+    if cached and os.path.exists(cached["path"]):
+        resp = send_file(cached["path"], mimetype=cached["mime"],
+                         conditional=True, max_age=31536000)
+        return _model_headers(resp, in_trash=in_trash, variant=True,
+                              w=cached["w"], h=cached["h"])
+
+    variant = _ensure_variant(bid, max_side)
+    resp = Response(variant["bytes"], mimetype=variant["mime"])
+    return _model_headers(resp, in_trash=in_trash, variant=True,
+                          w=variant["w"], h=variant["h"])
+
+
+@app.get("/m/<bid>/b64")
+def serve_model_b64(bid: str):
+    """同 /m，但回 base64 JSON：``{base64, format, mime, w, h, id, variant}``。"""
+    if not _valid_id(bid):
+        abort(404)
+    row = _lookup_public(bid)
+    max_side = model_variant.clamp_max(request.args.get("max"), MODEL_MAX_SIDE)
+    row, plan = _model_plan(bid, row, max_side)
+    store.touch(bid, row)
+
+    is_variant = plan["mode"] == model_variant.MODE_VARIANT
+    if not is_variant:
+        path = store.blob_path(bid, row["format"])
+        if not os.path.exists(path):
+            abort(404)
+        with open(path, "rb") as fh:
+            data = fh.read()
+        fmt = model_variant.canonical_format(row["format"])
+        mime = row["mime"]
+        w, h = row.get("w"), row.get("h")
+        if not (w and h):
+            w, h = _probe_size(path)
+    else:
+        cached = store.variant_lookup(bid, max_side)
+        if cached and os.path.exists(cached["path"]):
+            with open(cached["path"], "rb") as fh:
+                data = fh.read()
+            fmt, mime, w, h = cached["fmt"], cached["mime"], cached["w"], cached["h"]
+        else:
+            variant = _ensure_variant(bid, max_side)
+            data = variant["bytes"]
+            fmt, mime, w, h = (variant["fmt"], variant["mime"],
+                               variant["w"], variant["h"])
+
+    payload = base64.b64encode(data).decode("ascii")
+    resp = jsonify({"base64": payload, "format": fmt, "mime": mime,
+                    "w": w, "h": h, "id": bid, "variant": bool(is_variant)})
+    resp.headers["Cache-Control"] = "private, max-age=86400"
+    return resp
+
+
+@app.get("/api/meta")
+def api_meta():
+    """批量查询图片元数据（后端 token 鉴权），供插件选源；单次 ≤200 个 id。"""
+    _require_auth()
+    raw = (request.args.get("ids") or "").strip()
+    ids = list(dict.fromkeys(x.strip().lower() for x in raw.split(",") if x.strip()))
+    if not ids:
+        raise ApiError("bad_request", 400, reason="need_ids")
+    if len(ids) > MAX_META_IDS:
+        raise ApiError("too_many", 413, count=len(ids), max=MAX_META_IDS)
+
+    items = []
+    for bid in ids:
+        row = store.lookup(bid) if _valid_id(bid) else None
+        if not row:
+            items.append({"id": bid, "found": False, "deleted": False,
+                          "format": None, "mime": None, "w": None, "h": None,
+                          "size": 0, "variant_max": []})
+            continue
+        row = _ensure_row_size(bid, row)
+        items.append({
+            "id": bid,
+            "found": True,
+            "deleted": row["deleted_at"] is not None,
+            "format": row["format"],
+            "mime": row["mime"],
+            "w": row.get("w"),
+            "h": row.get("h"),
+            "size": row["size"],
+            "variant_max": store.variant_max(bid),
+        })
+    return jsonify(items)
 
 
 @app.get("/t/<bid>")

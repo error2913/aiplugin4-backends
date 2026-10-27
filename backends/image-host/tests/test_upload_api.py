@@ -75,10 +75,10 @@ class UploadBase(unittest.TestCase):
 
 
 class TestUpload(UploadBase):
-    def test_health_version_is_1_0_15(self):
+    def test_health_version_is_1_0_16(self):
         res = self.client.get("/api/health")
         self.assertEqual(res.status_code, 200)
-        self.assertEqual(res.get_json()["version"], "1.0.15")
+        self.assertEqual(res.get_json()["version"], "1.0.16")
 
     def test_json_tags_and_source_metadata(self):
         source = {"platform": "QQ", "group_id": "123456", "user_id": "789",

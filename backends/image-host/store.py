@@ -28,10 +28,12 @@ import time
 
 log = logging.getLogger("image-host.store")
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 META_CACHE_MAX = 4096
 MAX_IDS = 2000
 TAG_MAX_LEN = 40
+# 每张原图最多缓存的模型变体数（防止 /m?max= 任意取值把磁盘撑爆）
+VARIANT_PER_BLOB_MAX = 8
 
 PRAGMAS = """
 PRAGMA journal_mode=WAL;
@@ -104,6 +106,22 @@ DDL_V3_REST = """
 CREATE INDEX IF NOT EXISTS idx_ref_tool ON ref(tool);
 CREATE INDEX IF NOT EXISTS idx_ref_server ON ref(server);
 CREATE INDEX IF NOT EXISTS idx_ref_platform ON ref(platform);
+"""
+
+# v4：模型变体图（/m 端点缓存）+ 原图尺寸
+DDL_V4_REST = """
+CREATE TABLE IF NOT EXISTS variant (
+  blob_id    TEXT NOT NULL REFERENCES blob(id) ON DELETE CASCADE,
+  max_side   INTEGER NOT NULL,
+  fmt        TEXT NOT NULL,
+  mime       TEXT NOT NULL,
+  w          INTEGER NOT NULL,
+  h          INTEGER NOT NULL,
+  size       INTEGER NOT NULL,
+  path       TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  PRIMARY KEY (blob_id, max_side, fmt)
+);
 """
 
 ACTIONS = ("tag", "untag", "keep", "unkeep", "delete", "restore", "purge")
@@ -330,6 +348,14 @@ class Store:
                     con.execute(f"ALTER TABLE ref ADD COLUMN {col} TEXT")
             con.executescript(DDL_V3_REST)
             con.execute("PRAGMA user_version=3")
+        if version < 4:
+            # 只追加列：原图宽高（旧数据留 NULL，/m 首次请求时惰性回填）+ 变体缓存表
+            cols = {row[1] for row in con.execute("PRAGMA table_info(blob)")}
+            for col in ("w", "h"):
+                if col not in cols:
+                    con.execute(f"ALTER TABLE blob ADD COLUMN {col} INTEGER")
+            con.executescript(DDL_V4_REST)
+            con.execute("PRAGMA user_version=4")
         con.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
 
     def _new_conn(self):
@@ -395,10 +421,14 @@ class Store:
                     "ON CONFLICT(k) DO UPDATE SET v=v+excluded.v", (delta,))
 
     def _resync_used(self, con) -> None:
-        total = con.execute(
+        """重算 used：原图 + 缩略图 + 模型变体字节。"""
+        blob_total = con.execute(
             "SELECT COALESCE(SUM(size+thumb_size),0) FROM blob").fetchone()[0]
+        variant_total = con.execute(
+            "SELECT COALESCE(SUM(size),0) FROM variant").fetchone()[0]
+        total = int(blob_total) + int(variant_total)
         con.execute("INSERT INTO meta(k,v) VALUES('used',?) "
-                    "ON CONFLICT(k) DO UPDATE SET v=excluded.v", (int(total),))
+                    "ON CONFLICT(k) DO UPDATE SET v=excluded.v", (total,))
 
     # ---------------------------------------------------------------- 元数据缓存
 
@@ -427,7 +457,7 @@ class Store:
             return cached
         row = self._conn().execute(
             "SELECT id, format, mime, size, thumb_path, deleted_at, last_access_at,"
-            "       origin, created_at, name FROM blob WHERE id=?", (bid,)).fetchone()
+            "       origin, created_at, name, w, h FROM blob WHERE id=?", (bid,)).fetchone()
         if not row:
             return None
         data = dict(row)
@@ -442,6 +472,11 @@ class Store:
     def thumb_path(self, bid: str) -> str:
         return os.path.join(self.thumbs, bid[:2], f"{bid}.webp")
 
+    def variant_path(self, bid: str, max_side, fmt: str) -> str:
+        """变体落盘路径：``shards/<xx>/<id>.m<max>.<fmt>``。"""
+        return os.path.join(self.shards, bid[:2],
+                            f"{bid}.m{int(max_side)}.{fmt}")
+
     @staticmethod
     def _ensure_parent(path: str) -> None:
         os.makedirs(os.path.dirname(path), exist_ok=True)
@@ -452,6 +487,7 @@ class Store:
         return self._used(self._conn())
 
     def manual_bytes(self, con=None) -> int:
+        """长期图库口径：只算原图 + 缩略图，**不含**模型变体（变体走 used_bytes）。"""
         con = con or self._conn()
         row = con.execute(
             "SELECT COALESCE(SUM(size+thumb_size),0) FROM blob WHERE origin='manual'"
@@ -493,15 +529,22 @@ class Store:
             (bid,)).fetchone()
         if not row:
             return
+        # 变体缓存随原图一起清（FK ON DELETE CASCADE 管行，文件要显式删）
+        variants = con.execute(
+            "SELECT path, size FROM variant WHERE blob_id=?", (bid,)).fetchall()
+        variant_size = sum(int(v["size"] or 0) for v in variants)
         # 还在图库里的图被强制删除（cap 压力）→ 要通知插件；回收站里的 → purge 事件
         if row["deleted_at"] is None:
             self._log_delete(con, bid)
         else:
             self._log(con, "purge_blob", bid, None, reason)
+        con.execute("DELETE FROM variant WHERE blob_id=?", (bid,))
         con.execute("DELETE FROM blob WHERE id=?", (bid,))   # ref/tag CASCADE
-        self._add_used(con, -(int(row["size"]) + int(row["thumb_size"])))
+        self._add_used(con, -(int(row["size"]) + int(row["thumb_size"]) + variant_size))
         self._cache_drop(bid)
-        for path in (self.blob_path(bid, row["format"]), row["thumb_path"]):
+        paths = [self.blob_path(bid, row["format"]), row["thumb_path"]]
+        paths.extend(v["path"] for v in variants)
+        for path in paths:
             if path:
                 try:
                     os.unlink(path)
@@ -569,7 +612,8 @@ class Store:
     def put(self, tmp_path: str | None, bid: str, size: int, fmt: str, mime: str,
             ref: str, source: dict | None, origin: str = "plugin",
             name: str | None = None, file_ready: bool = False,
-            tags: list | str | None = None):
+            tags: list | str | None = None,
+            w: int | None = None, h: int | None = None):
         """落库。哈希命中只追加 ref，不写第二份字节。返回 (id, dedup)。
 
         - ``tmp_path=None`` + ``file_ready=False``：调用方已确认命中已有 blob，纯 DB 更新
@@ -578,6 +622,8 @@ class Store:
         - ``tags``：只允许类型/内容标签，与 blob/ref **同事务**写 tag 表；
           元数据式标签（来源:/群:/工具:/MCP:/类型: 前缀、纯群号/工具名/时间/文件名等）被过滤
         - ``source`` 可带 ``tool`` / ``server`` / ``via``（写 ref 列，不进标签）
+        - ``w`` / ``h``：原图尺寸（调用方用 PIL 读；失败传 None，不阻断入库）；
+          去重命中时旧行 NULL 会被本次值回填
         文件搬迁与缩略图生成在事务**之外**：CPU/IO 再慢也不占写锁。
         """
         source = source or {}
@@ -612,8 +658,9 @@ class Store:
                         con.execute(
                             "UPDATE blob SET last_access_at=?, name=COALESCE(name, ?),"
                             " origin=CASE WHEN ?='manual' THEN 'manual' ELSE origin END,"
-                            " deleted_at=NULL WHERE id=?",
-                            (now_ms(), name or None, origin, bid))
+                            " deleted_at=NULL, w=COALESCE(w, ?), h=COALESCE(h, ?) "
+                            "WHERE id=?",
+                            (now_ms(), name or None, origin, w, h, bid))
                         if exists["deleted_at"] is not None:   # 死而复生
                             self._log(con, "restore_blob", bid, None)
                         self._cache_drop(bid)
@@ -621,9 +668,10 @@ class Store:
                         self._ensure_capacity(con, size)
                         con.execute(
                             "INSERT INTO blob(id,format,mime,size,thumb_size,created_at,"
-                            "last_access_at,name,origin,thumb_path) VALUES(?,?,?,?,?,?,?,?,?,?)",
+                            "last_access_at,name,origin,thumb_path,w,h) "
+                            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
                             (bid, fmt, mime, size, thumb_size, ts, ts,
-                             (name or None), origin, thumb))
+                             (name or None), origin, thumb, w, h))
                         self._add_used(con, size + thumb_size)
                     con.execute(
                         "INSERT OR REPLACE INTO ref(id,ref,platform,group_id,user_id,"
@@ -683,6 +731,122 @@ class Store:
         except Exception as exc:
             log.warning("缩略图生成失败 %s: %s", bid, exc)
             return None, 0
+
+    # ---------------------------------------------------------------- 模型变体缓存
+
+    def set_size(self, bid: str, w: int, h: int) -> None:
+        """回填旧数据的原图宽高（仅在缺值时写入）。"""
+        try:
+            w, h = int(w), int(h)
+        except (TypeError, ValueError):
+            return
+        if w <= 0 or h <= 0:
+            return
+        with self._lock:
+            con = self._conn()
+            con.execute(
+                "UPDATE blob SET w=?, h=? WHERE id=? AND (w IS NULL OR h IS NULL)",
+                (w, h, bid))
+            self._cache_drop(bid)
+
+    def variant_lookup(self, bid: str, max_side) -> dict | None:
+        """查该图在指定 ``max_side`` 下已缓存的变体（任一输出格式，取最新）。"""
+        row = self._conn().execute(
+            "SELECT blob_id, max_side, fmt, mime, w, h, size, path, created_at "
+            "FROM variant WHERE blob_id=? AND max_side=? "
+            "ORDER BY created_at DESC, rowid DESC LIMIT 1",
+            (bid, int(max_side))).fetchone()
+        return dict(row) if row else None
+
+    def variant_max(self, bid: str) -> list[int]:
+        """该图已缓存变体的 ``max_side`` 列表（降序，去重）。"""
+        rows = self._conn().execute(
+            "SELECT DISTINCT max_side FROM variant WHERE blob_id=? "
+            "ORDER BY max_side DESC", (bid,)).fetchall()
+        return [int(r["max_side"]) for r in rows]
+
+    def variants_of(self, bid: str) -> list[dict]:
+        rows = self._conn().execute(
+            "SELECT blob_id, max_side, fmt, mime, w, h, size, path, created_at "
+            "FROM variant WHERE blob_id=? ORDER BY created_at, rowid", (bid,)).fetchall()
+        return [dict(r) for r in rows]
+
+    def save_variant(self, bid: str, max_side, fmt: str, mime: str,
+                     w: int, h: int, data: bytes) -> dict | None:
+        """写变体文件并落库，返回变体行；缓存不可用（磁盘满/原图已删）返回 None。
+
+        - 同一 ``(bid, max_side, fmt)`` 已存在且文件在 → 直接复用，不重写；
+        - 变体字节计入 ``meta.used``（与 ``stats()`` / 容量淘汰同口径），
+          **不**计入 ``manual_bytes``（那是原图口径，避免重复计数）；
+        - 每张原图最多保留 ``VARIANT_PER_BLOB_MAX`` 个变体，超出按旧→新清理文件。
+        调用方（``/m``）即使拿不到缓存也必须能继续回响应字节，所以这里不抛业务异常。
+        """
+        fmt = str(fmt or "").strip().lower()
+        max_side = int(max_side)
+        payload = bytes(data or b"")
+        size = len(payload)
+        with self._lock:
+            con = self._conn()
+            if not con.execute("SELECT 1 FROM blob WHERE id=?", (bid,)).fetchone():
+                return None
+            existing = con.execute(
+                "SELECT blob_id, max_side, fmt, mime, w, h, size, path, created_at "
+                "FROM variant WHERE blob_id=? AND max_side=? AND fmt=?",
+                (bid, max_side, fmt)).fetchone()
+            if existing and os.path.exists(existing["path"]):
+                return dict(existing)
+            path = self.variant_path(bid, max_side, fmt)
+            self._ensure_parent(path)
+            part = path + ".part"
+            try:
+                with open(part, "wb") as fh:
+                    fh.write(payload)
+                os.replace(part, path)
+            except OSError as exc:
+                _safe_unlink(part)
+                log.warning("变体落盘失败 id=%s max=%s fmt=%s: %s",
+                            bid, max_side, fmt, exc)
+                return None
+            ts = now_ms()
+            pruned: list = []
+            try:
+                with self._tx(con):
+                    # 事务内再查一次：并发 /m 生成同一 (bid,max,fmt) 时不重复计容量
+                    current = con.execute(
+                        "SELECT size FROM variant WHERE blob_id=? AND max_side=? "
+                        "AND fmt=?", (bid, max_side, fmt)).fetchone()
+                    effective_old = int(current["size"]) if current else 0
+                    con.execute(
+                        "INSERT OR REPLACE INTO variant(blob_id, max_side, fmt, mime,"
+                        " w, h, size, path, created_at) VALUES(?,?,?,?,?,?,?,?,?)",
+                        (bid, max_side, fmt, mime, int(w), int(h), size, path, ts))
+                    self._add_used(con, size - effective_old)
+                    pruned = self._prune_variants(con, bid)
+            except BaseException as exc:
+                # 原图恰好被并发删除（FK 失败）或 DB 异常：缓存放弃，不影响本次响应
+                _safe_unlink(path)
+                log.info("变体入库失败 id=%s max=%s fmt=%s: %s",
+                         bid, max_side, fmt, exc)
+                return None
+            for row in pruned:
+                _safe_unlink(row["path"])
+            if pruned:
+                log.info("变体缓存清理 id=%s 条数=%d", bid, len(pruned))
+            return {"blob_id": bid, "max_side": max_side, "fmt": fmt, "mime": mime,
+                    "w": int(w), "h": int(h), "size": size, "path": path,
+                    "created_at": ts}
+
+    def _prune_variants(self, con, bid: str) -> list:
+        """每张原图只保留最新 N 个变体；返回被清掉的行（事务内调用）。"""
+        rows = con.execute(
+            "SELECT path, size FROM variant WHERE blob_id=? "
+            "ORDER BY created_at DESC, rowid DESC LIMIT -1 OFFSET ?",
+            (bid, VARIANT_PER_BLOB_MAX)).fetchall()
+        for row in rows:
+            con.execute("DELETE FROM variant WHERE blob_id=? AND path=?",
+                        (bid, row["path"]))
+            self._add_used(con, -int(row["size"]))
+        return [dict(r) for r in rows]
 
     # ---------------------------------------------------------------- 引用
 
@@ -911,8 +1075,12 @@ class Store:
             "SELECT COUNT(*) FROM blob WHERE deleted_at IS NULL").fetchone()[0]
         trash = con.execute(
             "SELECT COUNT(*) FROM blob WHERE deleted_at IS NOT NULL").fetchone()[0]
+        variant_count, variant_bytes = con.execute(
+            "SELECT COUNT(*), COALESCE(SUM(size),0) FROM variant").fetchone()
         return {"count": int(count), "trash": int(trash),
                 "used_bytes": self._used(con), "manual_bytes": self.manual_bytes(con),
+                "variant_count": int(variant_count),
+                "variant_bytes": int(variant_bytes),
                 "changes_head": self.change_head()}
 
     # ---------------------------------------------------------------- 引用解析（CIR / 插件 ref）
