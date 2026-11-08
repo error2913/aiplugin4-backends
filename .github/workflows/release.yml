@@ -36,8 +36,7 @@ jobs:
 
       - name: Run backend unit tests (shop)
         run: |
-          python3 -m pip install --quiet flask requests pillow imageio
-          python3 -m unittest discover -s shop-src/backends/image-url-to-base64/tests -p "test_*.py" -v
+          python3 -m pip install --quiet flask requests pillow
           python3 -m unittest discover -s shop-src/backends/image-host/tests -p "test_*.py" -v
 
       - name: Package backends

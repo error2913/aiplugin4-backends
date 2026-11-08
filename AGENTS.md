@@ -4,7 +4,7 @@
 
 ## 项目是什么
 
-aiplugin4 的配套后端管理仓库：一个 launcher 管理若干 HTTP/MCP 后端服务（流式输出、图片转 base64、用量图表、网页读取、Markdown/HTML 渲染、MCP 文件与命令执行），提供：
+aiplugin4 的配套后端管理仓库：一个 launcher 管理若干 HTTP/MCP 后端服务（流式输出、用量图表、Markdown/HTML 渲染、MCP 文件与命令执行），提供：
 
 - WebUI 管理界面（`webui.py`，纯 Python 标准库，无第三方依赖）
 - 后端 WebUI 反代：后端在 `backend.json` 声明 `webui` 后，卡片出现「🌐 WebUI」按钮，经 launcher 同源 `/ui/<名称>/` 打开后端自带页面（只暴露 launcher 端口）
@@ -58,7 +58,7 @@ aibackend help                         # 查看所有命令
 安装后端（`install_backend`）：缓存 `backends/<name>` 与注册表版本一致时直接复制到运行目录 `installed/<name>`；否则优先按注册表版本从 release 独立包（`aiplugin4-backends-<名称>-<版本>.zip`）下载解压（`_download_backend_package`），失败回退缓存/按 `source` 从 `shop` 分支 raw URL 逐文件下载，再装依赖；失败自动清掉半成品。写回 `installed/<name>/backend.json` 时以程序包自带清单为准（保留 `config` schema 等字段）、注册表仅兜底缺失字段。卸载（`remove_backend_dir`）只删 `installed/<name>`。依赖精确同步：`ensure_venv`/`ensure_node` 用依赖指纹（`deps_hash`/`node_deps_hash`）判断，清单变化即重建 venv / `npm ci`（node 有 lockfile 时）。启动时注入 `AIPLUGIN4_BACKEND_PORT / _HOST / _TOKEN` 与 `backend.json` `config` schema 声明的自定义 env（`default` 与用户值先经 `_expand_config_value` 展开 `{REPO_ROOT}`，`create_dir: true` 的字段先创建目录）→ 子进程日志重定向到 `logs/<name>.log`，`CREATE_NO_WINDOW`。`_monitor` 线程负责异常退出后按退避时间自动拉起；手动停止写入 `stopped` 标记则不再拉起。
 
 ### 后端 token/监听 IP
-后端读取 `AIPLUGIN4_BACKEND_HOST`（默认 `0.0.0.0`）与 `AIPLUGIN4_BACKEND_TOKEN`（默认空）。token 非空时校验请求头 `Authorization: Bearer <token>` 或 `X-Token: <token>`，否则 401。六个后端均已实现（Flask/FastAPI 中间件、express 中间件、mcp-files-exec 的 ASGI 包装）。
+后端读取 `AIPLUGIN4_BACKEND_HOST`（默认 `0.0.0.0`）与 `AIPLUGIN4_BACKEND_TOKEN`（默认空）。token 非空时校验请求头 `Authorization: Bearer <token>` 或 `X-Token: <token>`，否则 401。各后端均已实现（Flask/FastAPI 中间件、express 中间件、mcp-files-exec 的 ASGI 包装）。
 
 `md-html-render` 仅提供 **MCP（Streamable HTTP，挂 `/mcp`，每会话一个 McpServer 实例）**，已移除 REST 路由：工具为 `render_markdown` / `render_html`（返回 PNG base64 文本）；token 中间件对 `/mcp` 同样生效。注意 `/mcp` 必须在 `express.json()` 之前注册，让 transport 自行解析原始 body。
 
@@ -105,7 +105,7 @@ Git tag `v*` 触发 `.github/workflows/release.yml`：先 checkout `shop` 分支
 - 新增后端若要参与插件配置导出，在 `backends.json` 条目声明 `pluginConfig`：`backend` 组（`scheme`/`path`/`tokenFrom`/`tokenRequired`）和/或 `mcp` 组（`path`/`platform`）；导出只含 `deps_ready()` 为真的已安装项。MCP 配置粘贴到插件会整体替换「MCP服务器」。
 - 改后端程序必须同时 bump `backends.json` 与 shop 分支 `backend.json` 的版本号，否则卡片不会出现「⬆ 更新」，已安装用户拿不到新代码。
 - **发布闸门**：发布前必须通过 `python -m unittest discover -s tests -t . -v`；`launcher.py package` 还会从运行期 `PAGE` / `SAFE_PAGE` 提取内嵌 JS 交给 `node --check`，语法错误直接拒绝打包。主页面脚本坏掉时用户连 WebUI 都进不去（0.12.0 事故），因此这条不能绕过；`/safe` 是兜底入口。
-- 新增后端 = 新建目录 + `backend.json`（含默认端口）+ 入口脚本读取 `AIPLUGIN4_BACKEND_PORT`；如需 token/监听 IP 支持，按上面六后端的模式接入 `AIPLUGIN4_BACKEND_TOKEN/_HOST`。
+- 新增后端 = 新建目录 + `backend.json`（含默认端口）+ 入口脚本读取 `AIPLUGIN4_BACKEND_PORT`；如需 token/监听 IP 支持，按上面五后端的模式接入 `AIPLUGIN4_BACKEND_TOKEN/_HOST`。
 - 新增带 WebUI 的后端：在 `backend.json` 补 `webui`（至少 `path`），前端一律用相对 URL / `document.baseURI` 拼请求，保证既能直连端口、也能经 `/ui/<name>/` 反代；WebUI 路由挂在后端根路径下，不要假设自己独占域名。若后端只给 launcher 反代看，建议文档提示把监听 IP 设为 `127.0.0.1` 以避免额外开放端口（插件同机时 API 仍可用 127.0.0.1）。
 - 弹窗类 UI 用 `.dialog-body` 类承载内容（`flex:1; min-height:0; overflow-y:auto`），不要写死高度，否则配置项/日志一多就滚不动。
 - 新增后端要走「shop 分支源码 + main 注册表」：源码提交到 `shop` 分支的 `backends/<名称>/`，并在 main 的 `backends.json` 注册（`files` 列出所有需要分发的文件、`version`、`source` 指向 `shop` 分支 raw URL）；未注册的后端不会被 WebUI/CLI 发现与安装。

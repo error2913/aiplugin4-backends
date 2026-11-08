@@ -1,27 +1,6 @@
 {
   "backends": [
     {
-      "name": "image-url-to-base64",
-      "description": "图片 URL 转 base64（自动识别格式；可选 max_side 长边缩放并返回宽高/mime；bmp→png、GIF 首帧导出）",
-      "type": "python",
-      "entry": "urltobase64.py",
-      "deps": "requirements.txt",
-      "port": 46678,
-      "version": "1.0.2",
-      "pluginConfig": {
-        "backend": {
-          "scheme": "http",
-          "tokenFrom": "backend"
-        }
-      },
-      "source": "https://raw.githubusercontent.com/error2913/aiplugin4-backends/shop/backends/image-url-to-base64",
-      "files": [
-        "backend.json",
-        "requirements.txt",
-        "urltobase64.py"
-      ]
-    },
-    {
       "name": "media-fetch",
       "description": "媒体接口中转：代插件请求音频/图片接口，把二进制响应转成 base64 JSON（海豹 goja 读不了二进制）",
       "type": "python",

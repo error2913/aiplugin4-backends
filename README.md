@@ -1,6 +1,6 @@
 # aiplugin4-backends
 
-aiplugin4 的配套后端服务：流式输出、图片转 base64、用量图表、网页读取、Markdown/HTML 渲染、SealDice 核心/OB11 指令中转。
+aiplugin4 的配套后端服务：流式输出、用量图表、Markdown/HTML 渲染、SealDice 核心/OB11 指令中转。
 
 配合 [aiplugin4](https://github.com/error2913/aiplugin4) 使用：把各服务地址填入插件「后端」配置分组（见 aiplugin4 的 docs/08）。
 
@@ -48,7 +48,7 @@ WebUI 工具栏提供两个一键复制按钮，把启动器里**已安装**的�
 
 | 按钮 | 粘贴到 | 内容 |
 | --- | --- | --- |
-| 📋 复制后端配置 | 海豹 → 插件设置 → aiplugin4 → 后端 → 后端配置 | `{version:1, backends:{...}}`：6 个后端项目的地址 + 各后端 token（已设置时） |
+| 📋 复制后端配置 | 海豹 → 插件设置 → aiplugin4 → 后端 → 后端配置 | `{version:1, backends:{...}}`：5 个后端项目的地址 + 各后端 token（已设置时） |
 | 📋 复制 MCP 配置 | 海豹 → 插件设置 → aiplugin4 → MCP → MCP服务器 | 标准 `mcpServers`：4 个 MCP 后端（mcp-files-exec / md-html-render / mcp-browser / image-host）的 `/mcp` 地址 + token header；不写 platform（不限制平台） |
 
 - 只导出**已安装**（程序 + 依赖就绪）的后端；未安装的不写入，插件侧使用默认值。

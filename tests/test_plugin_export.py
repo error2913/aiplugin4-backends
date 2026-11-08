@@ -24,7 +24,6 @@ class PluginExportTest(unittest.TestCase):
         self.backends = [
             _backend(name)
             for name in (
-                "image-url-to-base64",
                 "media-fetch",
                 "mcp-files-exec",
                 "md-html-render",
@@ -37,7 +36,6 @@ class PluginExportTest(unittest.TestCase):
         ]
         self.cfg = {
             "stream-output": {"port": 3010, "host": "0.0.0.0", "token": "", "options": {}},
-            "image-url-to-base64": {"port": 46678, "host": "0.0.0.0", "token": "", "options": {}},
             "media-fetch": {"port": 46679, "host": "0.0.0.0", "token": "", "options": {}},
             "usage-chart": {"port": 3009, "host": "0.0.0.0", "token": "", "options": {}},
             "image-host": {"port": 46680, "host": "0.0.0.0", "token": "img-token", "options": {}},
@@ -70,12 +68,11 @@ class PluginExportTest(unittest.TestCase):
         self.assertEqual(config["version"], 1)
         self.assertEqual(
             list(config["backends"].keys()),
-            ["image-url-to-base64", "media-fetch", "stream-output", "usage-chart",
+            ["media-fetch", "stream-output", "usage-chart",
              "ob11-core-bridge", "image-host"],
             "顺序应固定为注册表顺序",
         )
         self.assertEqual(config["backends"]["stream-output"], {"url": "http://127.0.0.1:3010"})
-        self.assertEqual(config["backends"]["image-url-to-base64"], {"url": "http://127.0.0.1:46678"})
         self.assertEqual(
             config["backends"]["ob11-core-bridge"],
             {"url": "ws://127.0.0.1:46880/plugin", "token": "bridge-token"},
@@ -92,13 +89,12 @@ class PluginExportTest(unittest.TestCase):
         self.assertEqual(result["image_host_public"], "192.168.1.50")
         self.assertNotIn("token", config["backends"]["media-fetch"])
         self.assertEqual(result["text"], json.dumps(config, ensure_ascii=False, separators=(",", ":")))
-        self.assertEqual(len(result["included"]), 6)
+        self.assertEqual(len(result["included"]), 5)
         self.assertEqual(result["warnings"], [])
 
     def test_backend_export_tokens(self):
-        """4 个 URL 后端设置 token 后应一并导出（tokenFrom: backend）。"""
+        """3 个 URL 后端设置 token 后应一并导出（tokenFrom: backend）。"""
         self.cfg["stream-output"]["token"] = "t-stream"
-        self.cfg["image-url-to-base64"]["token"] = "t-i2b64"
         self.cfg["media-fetch"]["token"] = "t-media"
         self.cfg["usage-chart"]["token"] = "t-chart"
         with ExitStack() as stack:
@@ -107,7 +103,6 @@ class PluginExportTest(unittest.TestCase):
         config = result["config"]
         expected = {
             "stream-output": "t-stream",
-            "image-url-to-base64": "t-i2b64",
             "media-fetch": "t-media",
             "usage-chart": "t-chart",
         }
@@ -255,10 +250,10 @@ class PluginExportTest(unittest.TestCase):
 
     def test_registry_metadata_present(self):
         by_name = {item["name"]: item for item in self.registry}
-        for name in ("stream-output", "image-url-to-base64", "media-fetch", "usage-chart",
+        for name in ("stream-output", "media-fetch", "usage-chart",
                      "image-host", "ob11-core-bridge"):
             self.assertIn("backend", by_name[name]["pluginConfig"], name)
-        for name in ("stream-output", "image-url-to-base64", "media-fetch", "usage-chart"):
+        for name in ("stream-output", "media-fetch", "usage-chart"):
             self.assertEqual(
                 by_name[name]["pluginConfig"]["backend"].get("tokenFrom"),
                 "backend",
