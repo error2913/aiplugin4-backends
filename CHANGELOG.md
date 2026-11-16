@@ -2,6 +2,26 @@
 
 标题格式为 `## <版本号>`，release 工作流按标签版本号读取对应段落作为发布说明；日常更新以「Unreleased」汇总，发版前改成版本号并补日期。
 
+## 0.14.1 - 2026-11-16
+
+### ob11-core-bridge 3.0.0：删掉 relay 与全部冗余配置，只留一个纯粹的独立协议端
+
+**删配置，不删能力。** 2.0.0 把桥改成了"默认独立协议端 + 保留 relay 兼容"，但留着十几个配置项与一套出站/转发/回环代码。3.0.0 把这些全删了：桥现在只有一条拓扑（海豹连进来、插件连进来），**没有任何出站连接**。
+
+- **卡片配置从 13 项收到 3 项**：只留 `platform`（默认 `QQ`）/ `virtual_self_id`（默认 `10001`）/ `virtual_nickname`（默认 `AI骰娘`）。删除的键：`mode`、`core_token`、`plugin_token`、`protocol_url`、`protocol_token`、`virtual_self_role`、`virtual_group_id`、`virtual_group_name`、`virtual_peer_id`、`virtual_max_member_count`。旧存档里的这些键会被忽略，**不需要手工清空**，升级后直接可用。
+- **relay 模式彻底删除**：不再有出站 WS 客户端、重连退避、`echo` 回程路由、事件丢包计数。`health` 里也不再出现 `protocolConnected` / `protocolClients` / `droppedProtocolEvents`（不再是 `null`，是**没有这些字段**）。
+- **token 统一为启动器注入的通用 token**：桥读 `AIPLUGIN4_BACKEND_TOKEN`（与 mcp-browser / image-host / media-fetch 等后端同一个变量），核心端与插件端**共用这一个值**。海豹「连接」页与插件「核心桥Token」填同一个即可；留空=不校验。不再有 `core_token` / `plugin_token` 两个独立键，也没有"通用 token 自动兜底"的回退——它就是唯一来源。
+- **删掉「默认虚拟群 / 默认虚拟私聊对象」**：这是冗余设计。虚拟世界改为**纯惰性建表**——第一次见到某个真实群/用户才分配虚拟号，初始世界里没有任何群、没有任何用户。`send_group_msg` 不带 `group_id`、`send_private_msg` 不带 `user_id` 一律回 `1400`（不再兜底到某个凭空存在的号上）；`project()` 遇到缺失或非数字的 `source` ID 直接抛错，`core_command` 回 `core_command_error`，不会把非法 ID 塞给核心。群名改为派生名 `群<虚拟号>`（有 `source.groupName` 时优先用它）。
+- **删掉「机器人角色 / 群人数上限」配置项**：改成协议侧常量 `SELF_ROLE = 'admin'` / `MAX_MEMBER_COUNT = 200`。用户只需要填平台、号、昵称。
+- **`/healthz` 从 16 字段收到 15 字段**：`ok` / `coreConnected` / `coreClients` / `pluginConnected` / `pluginClients` / `mode` / `platform` / `corePort` / `virtualSelfId` / `virtualNickname` / `actionCount` / `eventCount` / `ledgerSize` / `legacyTarget` / `tokenRequired`。`mode` 保留为**恒定值** `"standalone"`——它是插件用来判断"要不要发 `source`"的线上常量，不是配置项。
+- **启动日志明确表态**：`listening <host>:<port>, core=<任意路径/无路径>, plugin=/plugin, token=已启用|未配置`。
+- **测试同步收敛**：删除 `tests/relay.test.js`；`npm test` 4 个文件 68 例全绿（`bridge` 15 / `standalone` 17 / `virtual-world` 14 / `responder` 22），新增覆盖"缺 ID 回 1400"、"`source` 缺群号报错"、"单一 token 的四种来源组合"、"任意路径含无路径接入"。
+- **`backends.json` 修正**：`pluginConfig.backend.tokenFrom` 从 `options.plugin_token` 改为 `backend`（原值指向已删除的配置键，会导致导出的插件配置里 token 为空）；`version` 提到 `3.0.0`；描述同步。
+
+**升级注意事项**：后端版本号变化会改变 `node_deps_hash()` 指纹，首次启动触发 `npm ci` 重建 `node_modules`（约 3–10 秒），属预期。2.x 用户升级后：桥不再出站连接旧 `protocol_url` 指向的协议端——如果你的场景依赖"核心指令结果真的发进 QQ 群"，那本来就不是桥的职责，请另接真实协议端。
+
+配套插件侧改动见 aiplugin4 `4.32.0`（`hello` 握手 + `source` 真实 ID 投影 + `actor.role` 从 `ctx.privilegeLevel` 推导）。
+
 ## 0.14.0 - 2026-11-16
 
 ### ob11-core-bridge 2.0.0：从「relay 中转站」改造为「独立 OB11 协议端」（默认模式）

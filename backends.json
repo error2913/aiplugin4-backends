@@ -126,17 +126,17 @@
     },
     {
       "name": "ob11-core-bridge",
-      "description": "独立 OB11 协议端（standalone 默认）：虚拟账号/群/用户世界 + 核心指令本地执行；relay 双连接模式保留",
+      "description": "独立 OB11 协议端：海豹以一条正向 WS 连上来即获得一个稳定的虚拟账号世界，核心指令本地执行并返回文本（不拦截、不注入、不出站）",
       "type": "node",
       "entry": "bridge.js",
       "deps": "package.json",
       "port": 46880,
-      "version": "2.0.0",
+      "version": "3.0.0",
       "pluginConfig": {
         "backend": {
           "scheme": "ws",
           "path": "/plugin",
-          "tokenFrom": "options.plugin_token"
+          "tokenFrom": "backend"
         }
       },
       "source": "https://raw.githubusercontent.com/error2913/aiplugin4-backends/shop/backends/ob11-core-bridge",

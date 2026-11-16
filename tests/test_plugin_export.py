@@ -42,8 +42,9 @@ class PluginExportTest(unittest.TestCase):
             "ob11-core-bridge": {
                 "port": 46880,
                 "host": "127.0.0.1",
-                "token": "unused-backend-token",
-                "options": {"plugin_token": "bridge-token"},
+                # 桥的核心端与插件端共用启动器这一个 token（不再有独立的 plugin_token 配置项）
+                "token": "bridge-token",
+                "options": {},
             },
             "mcp-files-exec": {"port": 3910, "host": "0.0.0.0", "token": "mcp-token", "options": {}},
             "md-html-render": {"port": 37632, "host": "0.0.0.0", "token": "", "options": {}},
