@@ -1,12 +1,11 @@
 'use strict';
 
 // 端到端冒烟：在同一个进程里跑一个真 Bridge，模拟"海豹核心 + 插件"两端，
-// 验证 standalone 的完整通路 —— 复印机报文 → 核心收到假事件 → 核心回 send_group_msg
+// 验证完整通路 —— 插件报文 → 核心收到假事件 → 核心回 send_group_msg
 // → Responder 本地应答并记账 → 该消息被投进 lane → 插件拿到结果。
 //
 // 与测试套件的分工：tests/ 里是窄断言（每个行为一条），这里是"三端一起跑通"的
-// 单一场景。S6 之前它按 relay 语义断言（interceptedCount），S6 之后按 standalone 断言
-// （deliveredCount + mode + /healthz 字段）。
+// 单一场景，断言落在 deliveredCount + mode + /healthz 字段。
 
 const net = require('node:net');
 const fs = require('node:fs');

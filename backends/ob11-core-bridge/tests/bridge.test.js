@@ -1,12 +1,10 @@
 'use strict';
 
-// 主测试文件：端点形态（D1）、虚拟世界（D2）、action 应答（D3）、账本（D5）、控制面（D6）。
+// 主测试文件：端点形态、虚拟世界、action 应答、账本、控制面。
 //
-// 本文件持有原 21 例里的 15 例（迁出 5 例去 relay.test.js、删掉 1 例 notice/meta）。
-// 默认跑 standalone：非 action 帧一律丢弃 ⇒ `source:'event'` 不可能出现，
-// 所以凡是"捕获核心回复"的用例都改成"核心收到注入事件后回一条 action"，
-// 断言落在账本 / deliveredCount / `source:'action'`（见执行方案 §7.1）。
-// relay 专属行为（出站连接/重连/echo 回程/事件丢弃）全部在 relay.test.js。
+// 桥只有一个形态：独立协议端。非 action 帧一律丢弃 ⇒ `source:'event'` 不可能出现，
+// 所以凡是"捕获核心回复"的用例都写成"核心收到注入事件后回一条 action"，
+// 断言落在账本 / deliveredCount / `source:'action'`。
 
 const {
   test, assert, FIXTURE,
@@ -38,7 +36,7 @@ test('accepts core websocket on any path, including no path at all', async t => 
   }
 });
 
-// `:259` 的**重写**：原例断言"裸帧双向透传"，那是 relay 的语义；
+// 原 1.1.x 例断言"裸帧双向透传"，那需要一条外侧协议端连接；桥现在没有这种连接。
 // 现在核心只作为客户端发 action，裸帧/非 action 帧一律丢弃不转发。
 // 本用例因此改断言两件事：① /healthz 全字段深比较（对外可观测事实的验收锚点）
 // ② 裸帧不产生任何回包、连接不断、进程存活。
@@ -217,10 +215,10 @@ test('private send_msg targets private lanes correctly', async t => {
   await closeWs(core);
 });
 
-// `:486` 的**重写**（§7.1）：
-//  ① maxMessages 部分改为"核心回多条 action"驱动（原来靠核心连推 5 条事件，standalone 下没有这条通路）
-//  ② ambiguous 歧义部分迁入 relay.test.js；这里只保留"standalone 下 ambiguous 恒 false"的恒定性断言
-test('lane mode bounds action replies and reply_only never reports ambiguity in standalone', async t => {
+// 原 1.1.x 例的**重写**：
+//  ① maxMessages 部分改为"核心回多条 action"驱动（原来靠核心连推 5 条事件，现在没有这条通路）
+//  ② 歧义判定不再按模式分叉：只有 action 一个来源，ambiguous 恒 false
+test('lane mode bounds action replies and reply_only never reports ambiguity', async t => {
   await setup(); t.after(teardown);
   const core = await connectCore();
   const plugin = await connectPlugin();
