@@ -162,6 +162,8 @@ npm test
 
 > 每个用例都用 `mkdtemp` 独立状态目录：`node --test` 并行跑多个文件，Windows 上跨进程 `rename` 有 `EPERM` 概率，共享目录会让"保存/重载"用例互相打架。
 >
+> 端口一律 `bind :0` 问 OS 要（`freePort()`），**不要**用 `47000 + Math.random()` 这种猜法：74 个桥实例落在同一个 1000 窗口里，按生日问题算撞号概率超过 90%，CI 上已经真的撞过（两个测试进程同时拿到 `47738` → `EADDRINUSE`）。`bridge.start()` 里 `listen` 失败会 reject 并把 `this.server` 置 `null`，不会变成 `uncaughtException` 把整个测试进程带走。
+>
 > 需要改 env 起桥的用例（`standalone.test.js`）必须自己管 env 事务：`bridge.js` 的常量在模块顶层求值，改 env 后必须清 `require.cache` 才能读到新值；泄漏一条非法 env 会让后续整片用例变红。
 
 ## 依赖

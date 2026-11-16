@@ -238,7 +238,10 @@ async function setup(options = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ob11-world-'));
   stateDir = dir;
 
-  const bridgePort = 47000 + Math.floor(Math.random() * 1000);
+  // 端口必须问 OS 要（bind :0），不能随机猜：`node --test` 多文件并行跑在不同进程里，
+  // 而"47000 + random(1000)"让 74 个桥实例落在同一个 1000 窗口内，按生日问题算撞号概率 ≈ 93%
+  // （CI 上真撞过：bridge.test.js 与 relay.test.js 同时拿到 47738 → EADDRINUSE）。
+  const bridgePort = await freePort();
   state.bridgePort = bridgePort;
   process.env.AIPLUGIN4_BACKEND_PORT = String(bridgePort);
   process.env.AIPLUGIN4_BACKEND_HOST = '127.0.0.1';

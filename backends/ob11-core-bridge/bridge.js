@@ -376,7 +376,20 @@ class Bridge {
       });
     });
     this.wss.on('connection', (ws, req) => this.attachClient(ws, req));
-    await new Promise(resolve => this.server.listen(PORT, HOST, resolve));
+    // listen 失败必须变成 reject，而不是 Node 默认的 'error' → uncaughtException（整个进程带走）。
+    // CI 上真踩过：两个测试进程抢同一个端口，EADDRINUSE 直接把测试跑成 uncaughtException。
+    try {
+      await new Promise((resolve, reject) => {
+        const onError = err => { this.server.removeListener('listening', onListening); reject(err); };
+        const onListening = () => { this.server.removeListener('error', onError); resolve(); };
+        this.server.once('error', onError);
+        this.server.once('listening', onListening);
+        this.server.listen(PORT, HOST);
+      });
+    } catch (err) {
+      this.server = null;
+      throw err;
+    }
     log('info', `listening ${HOST}:${PORT}, mode=${this.mode}, core=<任意路径/无路径>, plugin=${PLUGIN_PATH}, protocol=${PROTOCOL_URL || '未配置'}`);
     if (this.mode === 'relay') this.startProtocolClient();
     else this.startKeepalive();

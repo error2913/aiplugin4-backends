@@ -132,7 +132,8 @@ test('custom port is reported by /healthz and core accepts any path (incl. none)
   process.env.AIPLUGIN4_BRIDGE_PLUGIN_TOKEN = '';
   process.env.AIPLUGIN4_BRIDGE_MODE = 'standalone';
   delete process.env.AIPLUGIN4_BRIDGE_PROTOCOL_URL;
-  const port = 48000 + Math.floor(Math.random() * 500);
+  // 端口由 OS 分配（bind :0），不用 48000+random 猜——猜出来的端口可能正被别的用例/别的测试文件占着
+  const port = await freePort();
   const bridge = await boot({}, { port });
   t.after(async () => { await bridge.stop(); state.bridge = null; });
 
