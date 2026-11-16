@@ -1,8 +1,8 @@
 'use strict';
 
-// 虚拟世界：桥作为"独立 OB11 协议端"时那个账号/群/用户世界的唯一所有者。
+// 虚拟世界：桥作为"独立 OB11 协议端"时那个账号世界（群 / 用户 / 映射表）的唯一所有者。
 //
-// 设计约束（来自 00 REQ-D2-* / 01 §3.1）：
+// 设计约束：
 //   - **纯模块**：不 require ws、不碰网络、不 require bridge.js（单向依赖的最底层）。
 //   - **ID 稳定性**：同一个真实群/用户在任何一次重启后都必须映射到同一个虚拟 ID。
 //     落盘在 `<stateDir>/virtual-world.json`，原子写（tmp + rename）。
@@ -10,19 +10,17 @@
 //   - **禁段**：绝不能落在 QQ 机器人 UIN 段内，否则海豹的 isQQBotUserID 会把虚拟账号
 //     当成机器人并走 bot 专属分支。
 //
-// 三个配置 ID 的语义（易混，先讲清）：
-//   virtual_self_id   —— 机器人自己的虚拟号，`get_login_info.user_id` 与所有 self_id。
-//   virtual_group_id  —— **默认群**的虚拟号。桥启动时用它建一个占位群（real id 就是它自己），
-//                         供"没有 source 的老插件"和"未指定群"的私聊兜底。
-//   virtual_peer_id   —— **默认私聊对象**的虚拟号，同上兜底。
-//   真实群/用户 → 虚拟 ID 走确定性 hash，并会避开上面三个保留值。
+// **只有一项配置 ID**：`virtual_self_id`（机器人自己的号，`get_login_info.user_id` 与所有 self_id）。
+// 群与用户**没有**"默认对象"：每一个虚拟群号/用户号都是真实 ID 的确定性映射，第一次遇到就
+// 惰性建表。所以"未指定群号"的调用一律是错误调用，由 responder 报 1400 —— 虚拟世界里不存在
+// 一个凭空存在的群或私聊对象。
 
 const fs = require('node:fs');
 const path = require('node:path');
 
 const SCHEMA = 1;
 
-// 三个 id 空间互不相交（00 REQ-D2-08）：群号段与用户号段不重叠，
+// 三个 id 空间互不相交：群号段与用户号段不重叠，
 // 且都远离常见 QQ 号段，降低与真实号码撞车的观感。
 const GROUP_BASE = 1500000000;
 const GROUP_SPAN = 100000000;
@@ -38,6 +36,12 @@ const FORBIDDEN_RANGES = [
 ];
 
 const VALID_SELF_ROLES = new Set(['owner', 'admin', 'member']);
+// 机器人在群里的角色 / 虚拟群人数上限：不再作为配置项暴露（用户只需要填平台、号、昵称）。
+//   - 角色 admin：海豹用它算 PrivilegeLevel；admin 足够跑 .dismiss 之外的绝大多数指令。
+//   - 人数上限 200：必须恒 > 0，否则海豹把"0"当成机器人已退群并删会话
+//     （`platform_adapter_onebot.go:478-483`）。
+const SELF_ROLE = 'admin';
+const MAX_MEMBER_COUNT = 200;
 const LEDGER_DEFAULT_MAX = 2000; // 账本上限在 responder 里，这里只管状态文件大小
 
 const log = (level, message) => console[level](`[ob11-core-bridge] ${message}`);
@@ -77,35 +81,21 @@ function parsePositiveInt(raw) {
 class VirtualWorld {
   /**
    * @param {object} opts
-   * @param {string} opts.stateDir        状态目录（相对 cwd 或绝对路径）
-   * @param {string} opts.platform        桥自称的平台名（仅展示用）
-   * @param {string|number} opts.selfId   虚拟机器人号（原始配置值，可能是非法输入）
-   * @param {string} opts.nickname        虚拟机器人昵称
-   * @param {string} opts.selfRole        机器人在虚拟群里的角色
-   * @param {string|number} opts.groupId  默认群虚拟号
-   * @param {string} opts.groupName       默认群名
-   * @param {string|number} opts.peerId   默认私聊对象虚拟号
-   * @param {string|number} opts.maxMemberCount 虚拟群人数上限（必须 > 0）
+   * @param {string} opts.stateDir   状态目录（相对 cwd 或绝对路径）
+   * @param {string} opts.platform   桥自称的平台名（仅展示用）
+   * @param {string|number} opts.selfId 虚拟机器人号（原始配置值，可能是非法输入）
+   * @param {string} opts.nickname   虚拟机器人昵称
    */
   constructor(opts = {}) {
     this.stateDir = opts.stateDir || '.state';
     this.platform = String(opts.platform || 'QQ');
     this.nickname = String(opts.nickname === undefined || opts.nickname === null ? 'AI骰娘' : opts.nickname).trim() || 'AI骰娘';
-    this.selfRole = String(opts.selfRole === undefined || opts.selfRole === null ? 'admin' : opts.selfRole).trim().toLowerCase() || 'admin';
-    this.groupName = String(opts.groupName === undefined || opts.groupName === null ? 'AI 测试群' : opts.groupName).trim() || 'AI 测试群';
 
     // 原始配置值（可能是非法输入，validate() 负责挑出来）
     this.rawSelfId = opts.selfId;
-    this.rawGroupId = opts.groupId;
-    this.rawPeerId = opts.peerId;
-    // undefined ⇒ 用默认 200；显式传空字符串/maxMemberCount:'' 才算"用户填错"（validate 会报）
-    this.rawMaxMemberCount = opts.maxMemberCount === undefined ? 200 : opts.maxMemberCount;
 
     // 解析后的数字（validate() 成功后才可信）
     this.selfId = 0;
-    this.defaultGroupId = 0;
-    this.defaultPeerId = 0;
-    this.maxMemberCount = 0;
 
     this.schema = SCHEMA;
     this.lastMessageId = 0;
@@ -113,7 +103,6 @@ class VirtualWorld {
     this.users = new Map();    // realUid(string) -> vid(number)
     this.realSelfId = '';
     this._byVid = new Map();   // vid(number) -> group record
-    this._seen = null;         // require 时常量已定，这里只是占位
     this._saveCounter = 0;
     this._dirty = false;
   }
@@ -266,93 +255,33 @@ class VirtualWorld {
   /**
    * 启动自检：返回问题列表（空数组=通过）。
    *
-   * 五类非法值（00 REQ-D2-17 显式定义）：① 空值 ② 非数字 ③ <=0 ④ 命中机器人 UIN 段
-   * ⑤ 三个 ID 任两项撞号。外加两个独立项：人数上限必须 > 0、角色必须在三值内。
+   * `virtual_self_id` 四类非法值：① 空值 ② 非数字 ③ <= 0 ④ 命中机器人 UIN 段。
    * 通过时把数字写回实例字段，供后续投影使用。
    */
   validate() {
     const problems = [];
-    const resolved = {};
-
-    const check = (envName, label, raw) => {
-      const parsed = parsePositiveInt(raw);
-      if (parsed.error === 'empty') {
-        problems.push(`${label}（${envName}）为空值，必须填写正整数`);
-        return null;
-      }
-      if (parsed.error === 'not-integer') {
-        problems.push(`${label}（${envName}）不是整数：${String(raw)}`);
-        return null;
-      }
-      if (parsed.error === 'not-positive') {
-        problems.push(`${label}（${envName}）必须大于 0：${String(raw)}`);
-        return null;
-      }
-      if (isForbiddenBotUin(parsed.value)) {
-        problems.push(`${label}（${envName}）落在 QQ 机器人号段内，必须换一个：${parsed.value}`);
-        return null;
-      }
-      return parsed.value;
-    };
-
-    const selfId = check('AIPLUGIN4_BRIDGE_VIRTUAL_SELF_ID', '虚拟机器人号 virtual_self_id', this.rawSelfId);
-    const groupId = check('AIPLUGIN4_BRIDGE_VIRTUAL_GROUP_ID', '默认虚拟群号 virtual_group_id', this.rawGroupId);
-    const peerId = check('AIPLUGIN4_BRIDGE_VIRTUAL_PEER_ID', '默认私聊对象号 virtual_peer_id', this.rawPeerId);
-
-    const pairs = [
-      ['虚拟机器人号 virtual_self_id', selfId, '默认虚拟群号 virtual_group_id', groupId],
-      ['虚拟机器人号 virtual_self_id', selfId, '默认私聊对象号 virtual_peer_id', peerId],
-      ['默认虚拟群号 virtual_group_id', groupId, '默认私聊对象号 virtual_peer_id', peerId]
-    ];
-    for (const [nameA, a, nameB, b] of pairs) {
-      if (a && b && a === b) problems.push(`${nameA} 与 ${nameB} 撞号：${a}（三个虚拟 ID 必须互不相同）`);
-    }
-
-    const maxMember = parsePositiveInt(this.rawMaxMemberCount);
-    if (maxMember.error === 'empty') problems.push('虚拟群人数上限（AIPLUGIN4_BRIDGE_VIRTUAL_MAX_MEMBER_COUNT）为空值');
-    else if (maxMember.error) problems.push(`虚拟群人数上限（AIPLUGIN4_BRIDGE_VIRTUAL_MAX_MEMBER_COUNT）必须是正整数：${String(this.rawMaxMemberCount)}`);
-    else if (maxMember.value === 0) problems.push('虚拟群人数上限不能为 0（海豹会判定机器人已退群）');
-    else resolved.maxMemberCount = maxMember.value;
-
-    if (!VALID_SELF_ROLES.has(this.selfRole)) {
-      problems.push(`机器人在虚拟群里的角色（AIPLUGIN4_BRIDGE_VIRTUAL_SELF_ROLE）只能是 owner/admin/member：${this.selfRole}`);
-    }
-
-    resolved.selfId = selfId;
-    resolved.groupId = groupId;
-    resolved.peerId = peerId;
-
-    if (problems.length === 0) {
-      this.selfId = selfId;
-      this.defaultGroupId = groupId;
-      this.defaultPeerId = peerId;
-      this.maxMemberCount = resolved.maxMemberCount;
-      this._ensureDefaults();
+    const raw = this.rawSelfId;
+    const label = '虚拟机器人号 virtual_self_id';
+    const envName = 'AIPLUGIN4_BRIDGE_VIRTUAL_SELF_ID';
+    const parsed = parsePositiveInt(raw);
+    if (parsed.error === 'empty') {
+      problems.push(`${label}（${envName}）为空值，必须填写正整数`);
+    } else if (parsed.error === 'not-integer') {
+      problems.push(`${label}（${envName}）不是整数：${String(raw)}`);
+    } else if (parsed.error === 'not-positive') {
+      problems.push(`${label}（${envName}）必须大于 0：${String(raw)}`);
+    } else if (isForbiddenBotUin(parsed.value)) {
+      problems.push(`${label}（${envName}）落在 QQ 机器人号段内，必须换一个：${parsed.value}`);
+    } else {
+      this.selfId = parsed.value;
     }
     return problems;
-  }
-
-  /** 建好两个"默认"实体：默认群 + 默认私聊对象。 */
-  _ensureDefaults() {
-    if (!this.selfId) return;
-    const group = this._ensureGroupByVid(this.defaultGroupId, { name: this.groupName, placeholder: true });
-    if (!group.members.has(String(this.selfId))) {
-      group.members.set(String(this.selfId), { vid: this.selfId, nickname: this.nickname, card: '', role: this.selfRole });
-    }
-    if (!group.members.has(String(this.defaultPeerId))) {
-      group.members.set(String(this.defaultPeerId), { vid: this.defaultPeerId, nickname: '测试用户', card: '', role: 'member' });
-    }
-    // 成员同时也要登记进 users：`_hydrate()` 会把每个群成员都补进 users，
-    // 若这里不补，同一个状态"存盘前 / 重载后"的 users 表会不一致（差一个 selfId），
-    // 导致 stats 与陌生人查询在两个时点给出不同答案。
-    if (!this.users.has(String(this.selfId))) this.users.set(String(this.selfId), this.selfId);
-    if (!this.users.has(String(this.defaultPeerId))) this.users.set(String(this.defaultPeerId), this.defaultPeerId);
   }
 
   // ── 投影（真实 ID → 虚拟 ID）────────────────────────────────────────────
 
   _reservedVids() {
-    return new Set([this.selfId, this.defaultGroupId, this.defaultPeerId].filter(Boolean));
+    return new Set([this.selfId].filter(Boolean));
   }
 
   _allocate(kind, realId) {
@@ -374,7 +303,6 @@ class VirtualWorld {
   /** 真实群号 → 虚拟群号（稳定、持久化）。 */
   virtualGroupId(realGroupId) {
     const realId = String(realGroupId);
-    if (realId === String(this.defaultGroupId)) return this.defaultGroupId;
     const existing = this.groups.get(realId);
     if (existing) return existing.vid;
     const vid = this._allocate('group', realId);
@@ -389,7 +317,6 @@ class VirtualWorld {
   /** 真实用户号 → 虚拟用户号（稳定、持久化）。 */
   virtualUserId(realUserId) {
     const realId = String(realUserId);
-    if (realId === String(this.defaultPeerId)) return this.defaultPeerId;
     if (this.selfId && realId === String(this.selfId)) return this.selfId;
     const existing = this.users.get(realId);
     if (existing) return existing;
@@ -408,6 +335,9 @@ class VirtualWorld {
   /**
    * 投影一次调用来源。
    *
+   * 群号与用户号都是**必填**：虚拟世界里没有"默认群/默认私聊对象"可以兜底，
+   * 缺 ID 就是残缺调用，必须报错而不是悄悄塞进一个凭空存在的对象。
+   *
    * @param {object} source {endpointId, messageType, groupId, userId, groupName, userRole}
    * @returns {{selfId:number, messageType:'group'|'private', groupId:number|undefined,
    *            userId:number, groupName:string, userRole:string}}
@@ -417,30 +347,32 @@ class VirtualWorld {
     const rawUser = source.userId !== undefined && source.userId !== null && String(source.userId) !== ''
       ? source.userId
       : source.trigger;
-    const hasRealUser = rawUser !== undefined && rawUser !== null && String(rawUser) !== '';
-    // 真实用户号缺失时（例如只给了群号）不能报错：退化成默认私聊对象，
-    // 但**不得**把它当成真实用户去登记成员（否则默认对象会被绑到任意真实号上）。
-    const realUser = hasRealUser ? VirtualWorld._requirePositive(rawUser, '投影来源的用户 ID') : null;
-    const userId = realUser === null ? this.defaultPeerId : this.virtualUserId(realUser);
-
-    let groupId;
+    if (rawUser === undefined || rawUser === null || String(rawUser) === '') {
+      throw new Error('投影来源缺少用户 ID（source.userId）');
+    }
+    // 先把所有入参校验完再动映射表：残缺调用不该留下半条映射（否则一次失败调用会污染世界）
+    const realUser = VirtualWorld._requirePositive(rawUser, '投影来源的用户 ID');
+    let realGroup = null;
     if (messageType === 'group') {
       if (source.groupId === undefined || source.groupId === null || String(source.groupId) === '') {
-        groupId = this.defaultGroupId;
-      } else {
-        groupId = this.virtualGroupId(VirtualWorld._requirePositive(source.groupId, '投影来源的群 ID'));
+        throw new Error('投影来源缺少群 ID（source.groupId）');
       }
+      realGroup = VirtualWorld._requirePositive(source.groupId, '投影来源的群 ID');
+    }
+
+    const userId = this.virtualUserId(realUser);
+    let groupId;
+    if (messageType === 'group') {
+      groupId = this.virtualGroupId(realGroup);
       const record = this._byVid.get(groupId);
       if (record) {
         if (source.groupName) record.name = String(source.groupName);
-        if (realUser !== null) {
-          const member = record.members.get(String(realUser));
-          const role = VALID_SELF_ROLES.has(String(source.userRole)) ? String(source.userRole) : 'member';
-          if (member) {
-            if (source.userRole) member.role = role;
-          } else if (source.userRole) {
-            record.members.set(String(realUser), { vid: userId, nickname: '', card: '', role });
-          }
+        const member = record.members.get(String(realUser));
+        const role = VALID_SELF_ROLES.has(String(source.userRole)) ? String(source.userRole) : 'member';
+        if (member) {
+          if (source.userRole) member.role = role;
+        } else if (source.userRole) {
+          record.members.set(String(realUser), { vid: userId, nickname: '', card: '', role });
         }
       }
     }
@@ -477,22 +409,26 @@ class VirtualWorld {
     return this._byVid.get(n) || null;
   }
 
+  /** 惰性建群的默认群名（没有"用户填的默认群名"这回事）。 */
+  static defaultGroupName(vid) {
+    return `群${vid}`;
+  }
+
   _ensureGroupByVid(vid, extra = {}) {
     const existing = this._byVid.get(vid);
     if (existing) {
       if (extra.name) existing.name = extra.name;
       return existing;
     }
-    const realId = existing === null ? String(vid) : String(vid);
     const record = {
-      realId,
+      realId: String(vid),
       vid,
-      name: extra.name || this.groupName,
+      name: extra.name || VirtualWorld.defaultGroupName(vid),
       left: false,
       members: new Map(),
       placeholder: extra.placeholder !== false
     };
-    this.groups.set(realId, record);
+    this.groups.set(record.realId, record);
     this._byVid.set(vid, record);
     return record;
   }
@@ -504,7 +440,7 @@ class VirtualWorld {
   ensureGroup(vid) {
     const existing = this.getGroupByVid(vid);
     if (existing) return existing;
-    const record = this._ensureGroupByVid(Number(vid), { name: this.groupName, placeholder: true });
+    const record = this._ensureGroupByVid(Number(vid), { placeholder: true });
     this._dirty = true;
     return record;
   }
@@ -541,9 +477,9 @@ class VirtualWorld {
     const memberCount = Math.max(record.members.size, 1);
     return {
       group_id: record.vid,
-      group_name: record.name || this.groupName,
+      group_name: record.name || VirtualWorld.defaultGroupName(record.vid),
       member_count: memberCount,
-      max_member_count: Math.max(this.maxMemberCount, memberCount),
+      max_member_count: Math.max(MAX_MEMBER_COUNT, memberCount),
       group_all_shut: 0,
       group_remark: ''
     };
@@ -552,7 +488,7 @@ class VirtualWorld {
   /**
    * OB11 `get_group_member_info` 的 data。
    *
-   * 三档（00 §3.5）：机器人自己 → 配置角色；已登记成员 → 映射表角色；未知 → `member`。
+   * 三档：机器人自己 → 固定角色；已登记成员 → 映射表角色；未知 → `member`。
    * 未知**不报错**：报错会让 `checkBotGroupRole` 拿到 ok=false，调用方降级。
    */
   memberInfo(groupVid, userVid, opts = {}) {
@@ -565,7 +501,7 @@ class VirtualWorld {
         user_id: selfId,
         nickname: this.nickname,
         card: '',
-        role: this.selfRole,
+        role: SELF_ROLE,
         sex: 'unknown',
         age: 0,
         area: '',
@@ -606,7 +542,7 @@ class VirtualWorld {
     };
   }
 
-  /** `set_group_leave`：置墓碑而不是删记录（00 REQ-D3-09）。 */
+  /** `set_group_leave`：置墓碑而不是删记录。 */
   markGroupLeft(groupVid) {
     const record = this.getGroupByVid(groupVid);
     if (!record) return null;
@@ -636,7 +572,7 @@ class VirtualWorld {
   // ── 发号器（账本与回包共用）──────────────────────────────────────────────
 
   /**
-   * 单调递增的消息号。号段从 `Date.now()*1000` 起跳（00 REQ-D5-05），
+   * 单调递增的消息号。号段从 `Date.now()*1000` 起跳，
    * 保证重启后新号 > 历史账本里的旧号，并且在 `Number.MAX_SAFE_INTEGER` 以内。
    */
   allocateMessageId() {
@@ -661,19 +597,6 @@ class VirtualWorld {
     }
     return { groups: this.groups.size, users: this.users.size, members, leftGroups: left, lastMessageId: this.lastMessageId };
   }
-
-  /** 供 /healthz 用：当前生效的虚拟号配置。 */
-  selfInfo() {
-    return {
-      selfId: this.selfId,
-      nickname: this.nickname,
-      role: this.selfRole,
-      defaultGroupId: this.defaultGroupId,
-      defaultPeerId: this.defaultPeerId,
-      maxMemberCount: this.maxMemberCount,
-      platform: this.platform
-    };
-  }
 }
 
 module.exports = {
@@ -686,5 +609,7 @@ module.exports = {
   USER_BASE,
   USER_SPAN,
   VALID_SELF_ROLES,
+  SELF_ROLE,
+  MAX_MEMBER_COUNT,
   LEDGER_DEFAULT_MAX
 };

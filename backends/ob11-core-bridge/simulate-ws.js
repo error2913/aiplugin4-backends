@@ -60,12 +60,8 @@ async function main() {
   const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ob11-sim-'));
   process.env.AIPLUGIN4_BACKEND_PORT = String(port);
   process.env.AIPLUGIN4_BACKEND_HOST = '127.0.0.1';
-  process.env.AIPLUGIN4_BRIDGE_CORE_TOKEN = 'test-token';
-  process.env.AIPLUGIN4_BRIDGE_PLUGIN_TOKEN = 'test-token';
-  process.env.AIPLUGIN4_BRIDGE_MODE = 'standalone';
+  process.env.AIPLUGIN4_BACKEND_TOKEN = 'test-token';
   process.env.AIPLUGIN4_BRIDGE_STATE_DIR = stateDir;
-  delete process.env.AIPLUGIN4_BRIDGE_PROTOCOL_URL;
-  delete process.env.AIPLUGIN4_BRIDGE_PROTOCOL_TOKEN;
 
   const { Bridge } = require('./bridge');
   const bridge = new Bridge();
@@ -138,9 +134,15 @@ async function main() {
     assert.equal(response.result.ambiguous, false);
     assert.equal(response.result.deliveredCount, 1);
 
-    // ③b at 段注入（REQ-D4-05）：核心收到的 raw_message 带 CQ:at 前缀、message 首段是 at
+    // ③b at 段注入：核心收到的 raw_message 带 CQ:at 前缀、message 首段是 at。
+    // `at: ['30002']` 里给的是**真实** ID，桥会先投影成虚拟号再写进假事件，
+    // 所以这里断言的是"确实是个 2.0e9 段的虚拟用户号"，而不是原样回填 30002。
     assert.ok(atSeen, '核心应收到注入的假事件');
-    assert.equal(atSeen.raw, '[CQ:at,qq=30002] .ping');
+    const atMatch = /^\[CQ:at,qq=(\d+)\] \.ping$/.exec(atSeen.raw);
+    assert.ok(atMatch, `raw_message 应是 CQ:at 前缀 + 原文，实际 ${atSeen.raw}`);
+    const atVid = Number(atMatch[1]);
+    assert.equal(Number.isSafeInteger(atVid), true);
+    assert.ok(atVid >= 2000000000 && atVid < 2100000000, `at 应被投影到 2.0e9 段，实际 ${atVid}`);
     assert.deepEqual(atSeen.segments, ['at', 'text']);
 
     // ④ 指令里提到的虚拟 ID 全部是数字，且不带平台前缀（REQ-D2-15）；
@@ -151,12 +153,12 @@ async function main() {
     assert.equal(response.result.virtualTarget.groupId >= 1500000000 && response.result.virtualTarget.groupId < 1600000000, true,
       `虚拟群号应落在 1.5e9 号段，实际 ${response.result.virtualTarget.groupId}`);
 
-    // ⑤ /healthz 的 16 字段口径
+    // ⑤ /healthz 全字段口径
     const health = await fetch(`http://127.0.0.1:${port}/healthz`).then(r => r.json());
-    assert.equal(Object.keys(health).length, 16);
+    assert.equal(Object.keys(health).length, 15);
     assert.equal(health.mode, 'standalone');
     assert.equal(health.corePort, port);
-    assert.equal(health.protocolConnected, null);
+    assert.equal(health.tokenRequired, true);
     assert.equal(health.ledgerSize > 0, true);
 
     console.log('simulate-ws OK:', JSON.stringify({

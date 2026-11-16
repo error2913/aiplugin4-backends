@@ -1,12 +1,12 @@
 'use strict';
 
-// 共享测试脚手架：bridge.test.js / relay.test.js 都从这里取 connection 与断言工具。
+// 共享测试脚手架：bridge.test.js / standalone.test.js 都从这里取 connection 与断言工具。
 //
 // 为什么单独成文件：`bridge.test.js` 原本把 setup/teardown/连接工具全部写成文件局部函数
 // 且没有 module.exports，第二个测试文件想复用只能 `require('./bridge.test.js')`，
-// 那会把该文件的全部 test() 一并注册进当前进程，"21 pass"的计数口径当场失效。
+// 那会把该文件的全部 test() 一并注册进当前进程，"74 pass"的计数口径当场失效。
 //
-// 三个额外职责（S0 定下，后面所有切片依赖）：
+// 三个额外职责：
 //   1. state 隔离 —— 每个用例一个 mkdtemp 目录，避免 `node --test a.js b.js` 并行时
 //      两个进程抢同一个 .state/virtual-world.json（实测跨进程 rename 争用会 EPERM）。
 //   2. env 事务 —— 进用例快照、出用例逐键还原。非法 env 泄漏会让后续用例全部红。
@@ -21,6 +21,9 @@ const net = require('node:net');
 const { WebSocket, WebSocketServer } = require('ws');
 
 const FIXTURE = JSON.parse(fs.readFileSync(path.join(__dirname, 'fixtures', 'message_text.json'), 'utf8'));
+
+/** 桥与插件/核心共用的那个 token（启动器注入的 AIPLUGIN4_BACKEND_TOKEN）。 */
+const TEST_TOKEN = 'test-token';
 
 const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
 
@@ -107,35 +110,22 @@ async function waitFor(predicate, timeout = 3000) {
 // 数组用 in-place 清空（不重新赋值），这样测试文件里 const 解构出来的引用始终有效。
 const state = {
   bridge: null,
-  bridgePort: 0,
-  protocolPort: 0,
-  protocolServer: null
+  bridgePort: 0
 };
 const coreSockets = [];
 const pluginSockets = [];
-const protocolConnections = [];
 
 /** 本用例触碰的全部 env 键。快照/还原以这张表为准，新增 env 要同步加进来。 */
 const ENV_KEYS = [
   'AIPLUGIN4_BACKEND_PORT',
   'AIPLUGIN4_BACKEND_HOST',
   'AIPLUGIN4_BACKEND_TOKEN',
-  'AIPLUGIN4_BRIDGE_CORE_TOKEN',
   'AIPLUGIN4_BRIDGE_PLUGIN_PATH',
-  'AIPLUGIN4_BRIDGE_PLUGIN_TOKEN',
-  'AIPLUGIN4_BRIDGE_PROTOCOL_URL',
-  'AIPLUGIN4_BRIDGE_PROTOCOL_TOKEN',
-  'AIPLUGIN4_BRIDGE_MODE',
   'AIPLUGIN4_BRIDGE_PLATFORM',
   'AIPLUGIN4_BRIDGE_VIRTUAL_SELF_ID',
   'AIPLUGIN4_BRIDGE_VIRTUAL_NICKNAME',
-  'AIPLUGIN4_BRIDGE_VIRTUAL_SELF_ROLE',
-  'AIPLUGIN4_BRIDGE_VIRTUAL_GROUP_ID',
-  'AIPLUGIN4_BRIDGE_VIRTUAL_GROUP_NAME',
-  'AIPLUGIN4_BRIDGE_VIRTUAL_PEER_ID',
-  'AIPLUGIN4_BRIDGE_VIRTUAL_MAX_MEMBER_COUNT',
   'AIPLUGIN4_BRIDGE_STATE_DIR',
-  'AIPLUGIN4_BRIDGE_ONEBOT_PATH'
+  'AIPLUGIN4_BRIDGE_KEEPALIVE_MS'
 ];
 
 let envSnapshot = null;
@@ -183,22 +173,6 @@ function freshBridgeModule() {
   return require('../bridge');
 }
 
-// 启动一个假的 OB11 协议端 WS 服务端（随机端口），可选 token 校验与指定端口
-async function startProtocolServer(serverToken = 'test-token', port = 0) {
-  protocolConnections.length = 0;
-  state.protocolServer = new WebSocketServer({ port });
-  state.protocolServer.on('connection', (ws, req) => {
-    const url = new URL(req.url, 'http://localhost');
-    const hasQuery = url.searchParams.get('access_token') === serverToken;
-    const hasHeader = (req.headers.authorization || '') === `Bearer ${serverToken}`;
-    if (serverToken && !hasQuery && !hasHeader) { ws.close(1008, 'unauthorized'); return; }
-    protocolConnections.push(ws);
-  });
-  await new Promise(resolve => state.protocolServer.once('listening', resolve));
-  state.protocolPort = state.protocolServer.address().port;
-  return state.protocolPort;
-}
-
 function freePort() {
   return new Promise((resolve, reject) => {
     const server = net.createServer();
@@ -210,71 +184,35 @@ function freePort() {
   });
 }
 
-/**
- * 启动一个桥实例。
- *
- * 与 1.1.1 的差异（都属 S0 的"先立回归网"）：
- *   - `withProtocol` 默认 **false**：主线用例是 standalone，不该被自动推断判成 relay。
- *   - `pinMode`（默认 true）：把 AIPLUGIN4_BRIDGE_MODE 显式钉死；传 false 才能测 00 §8.1 的自动推断。
- *   - env 事务 + state 隔离：结束时全量还原，不留脏值。
- */
+/** 启动一个桥实例（env 事务 + state 隔离，结束时全量还原，不留脏值）。 */
 async function setup(options = {}) {
-  const {
-    withProtocol = false,
-    pinMode = true,
-    protocolUrl = '',
-    protocolToken = 'test-token',
-    serverToken = 'test-token',
-    env = {}
-  } = options;
+  const { serverToken = TEST_TOKEN, env = {} } = options;
 
   snapshotEnv();
   coreSockets.length = 0;
   pluginSockets.length = 0;
-  protocolConnections.length = 0;
-  state.protocolServer = null;
-  state.protocolPort = 0;
 
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ob11-world-'));
   stateDir = dir;
 
   // 端口必须问 OS 要（bind :0），不能随机猜：`node --test` 多文件并行跑在不同进程里，
-  // 而"47000 + random(1000)"让 74 个桥实例落在同一个 1000 窗口内，按生日问题算撞号概率 ≈ 93%
-  // （CI 上真撞过：bridge.test.js 与 relay.test.js 同时拿到 47738 → EADDRINUSE）。
+  // 而"47000 + random(1000)"让几十个桥实例落在同一个 1000 窗口内，按生日问题算撞号概率 > 90%
+  // （CI 上真撞过：两个测试进程同时拿到 47738 → EADDRINUSE）。
   const bridgePort = await freePort();
   state.bridgePort = bridgePort;
   process.env.AIPLUGIN4_BACKEND_PORT = String(bridgePort);
   process.env.AIPLUGIN4_BACKEND_HOST = '127.0.0.1';
-  process.env.AIPLUGIN4_BRIDGE_CORE_TOKEN = 'test-token';
+  process.env.AIPLUGIN4_BACKEND_TOKEN = serverToken;
   process.env.AIPLUGIN4_BRIDGE_PLUGIN_PATH = '/plugin';
-  process.env.AIPLUGIN4_BRIDGE_PLUGIN_TOKEN = 'test-token';
   process.env.AIPLUGIN4_BRIDGE_STATE_DIR = dir;
-  delete process.env.AIPLUGIN4_BRIDGE_ONEBOT_PATH;
   delete process.env.AIPLUGIN4_BRIDGE_PLATFORM;
   delete process.env.AIPLUGIN4_BRIDGE_VIRTUAL_SELF_ID;
-  delete process.env.AIPLUGIN4_BRIDGE_VIRTUAL_GROUP_ID;
-  delete process.env.AIPLUGIN4_BRIDGE_VIRTUAL_PEER_ID;
-  delete process.env.AIPLUGIN4_BRIDGE_VIRTUAL_MAX_MEMBER_COUNT;
+  delete process.env.AIPLUGIN4_BRIDGE_VIRTUAL_NICKNAME;
+  delete process.env.AIPLUGIN4_BRIDGE_KEEPALIVE_MS;
   for (const [key, value] of Object.entries(env)) {
     if (value === undefined || value === null) delete process.env[key];
     else process.env[key] = String(value);
   }
-
-  if (withProtocol) {
-    if (protocolUrl) {
-      process.env.AIPLUGIN4_BRIDGE_PROTOCOL_URL = protocolUrl;
-    } else {
-      await startProtocolServer(serverToken);
-      process.env.AIPLUGIN4_BRIDGE_PROTOCOL_URL = `ws://127.0.0.1:${state.protocolPort}`;
-    }
-    process.env.AIPLUGIN4_BRIDGE_PROTOCOL_TOKEN = protocolToken;
-  } else {
-    delete process.env.AIPLUGIN4_BRIDGE_PROTOCOL_URL;
-    delete process.env.AIPLUGIN4_BRIDGE_PROTOCOL_TOKEN;
-  }
-
-  if (pinMode) process.env.AIPLUGIN4_BRIDGE_MODE = withProtocol ? 'relay' : 'standalone';
-  else delete process.env.AIPLUGIN4_BRIDGE_MODE;
 
   const { Bridge } = freshBridgeModule();
   state.bridge = new Bridge();
@@ -289,12 +227,6 @@ async function teardown() {
   coreSockets.length = 0;
   for (const ws of pluginSockets) { try { ws.close(); } catch (_) { /* ignore */ } }
   pluginSockets.length = 0;
-  for (const ws of protocolConnections) { try { ws.close(); } catch (_) { /* ignore */ } }
-  protocolConnections.length = 0;
-  if (state.protocolServer) {
-    await new Promise(resolve => state.protocolServer.close(() => resolve()));
-    state.protocolServer = null;
-  }
   restoreEnv();
   if (stateDir) {
     fs.rmSync(stateDir, { recursive: true, force: true });
@@ -304,8 +236,8 @@ async function teardown() {
 
 async function connectCore(id = null) {
   // 核心端不占用路径：这里刻意用**不带任何后缀**的 URL 建立连接，
-  // 让整套用例默认就在验证"填 ws://host:port 就能连"这条契约（REQ-D1-14）。
-  const ws = await connect(`ws://127.0.0.1:${state.bridgePort}?access_token=test-token`);
+  // 让整套用例默认就在验证"填 ws://host:port 就能连"这条契约。
+  const ws = await connect(`ws://127.0.0.1:${state.bridgePort}?access_token=${TEST_TOKEN}`);
   coreSockets.push(ws);
   if (id !== null) {
     ws.send(JSON.stringify({ action: 'get_login_info', params: {}, echo: `login-${id}` }));
@@ -314,31 +246,28 @@ async function connectCore(id = null) {
 }
 
 /** 按任意路径连核心端，用于验证路径无关性（无路径 / `/` / `/core` / 自定义都该通）。 */
-async function connectCoreAt(pathname, query = '?access_token=test-token') {
+async function connectCoreAt(pathname, query = `?access_token=${TEST_TOKEN}`) {
   const ws = await connect(`ws://127.0.0.1:${state.bridgePort}${pathname}${query}`);
   coreSockets.push(ws);
   return ws;
 }
 
 async function connectPlugin() {
-  const ws = await connect(`ws://127.0.0.1:${state.bridgePort}/plugin?access_token=test-token`);
+  const ws = await connect(`ws://127.0.0.1:${state.bridgePort}/plugin?access_token=${TEST_TOKEN}`);
   pluginSockets.push(ws);
   return ws;
 }
 
-// 返回协议端（假服务端一侧）当前已连接的 socket；relay 下桥是主动连接协议端的一方
-function protocolConn() {
-  return protocolConnections.find(ws => ws.readyState === WebSocket.OPEN) || null;
-}
-async function waitForProtocol(timeout = 5000) {
-  await waitFor(() => protocolConn() !== null, timeout);
-  return protocolConn();
-}
+// 虚拟世界里的默认映射：桥启动时并不建任何群/用户，
+// 所以测试里出现的每个群号/用户号都必须是"真实 ID 投影出来的虚拟号"。
+// 这两个常量只用于**插件侧报文**的 target（会被忽略，真正生效的是 payload.source）。
+const DEFAULT_GROUP_TARGET = '20002';
+const DEFAULT_PEER_TARGET = '30002';
 
-function groupTarget(groupId = '20002', selfId = '10001') {
-  return { selfId, messageType: 'group', groupId, userId: '30002' };
+function groupTarget(groupId = DEFAULT_GROUP_TARGET, selfId = '10001') {
+  return { selfId, messageType: 'group', groupId, userId: DEFAULT_PEER_TARGET };
 }
-function privateTarget(userId = '30002', selfId = '10001') {
+function privateTarget(userId = DEFAULT_PEER_TARGET, selfId = '10001') {
   return { selfId, messageType: 'private', userId, groupId: undefined };
 }
 
@@ -350,7 +279,7 @@ function sendGroupAction(ws, groupId, text, echo) {
 function wsArgs(target, raw, capture = {}, timeoutMs = 1000) {
   return {
     target,
-    actor: { userId: String(target.userId || '30002'), nickname: 'AI', role: 'member' },
+    actor: { userId: String(target.userId || DEFAULT_PEER_TARGET), nickname: 'AI', role: 'member' },
     raw_message: raw,
     capture: {
       mode: capture.mode,
@@ -367,7 +296,7 @@ function wsStructuredArgs(target, command, args = [], options = {}) {
   const raw = `${prefix}${command}${args.length ? ` ${args.join(' ')}` : ''}`.trim();
   return {
     target,
-    actor: { userId: String(target.userId || '30002'), nickname: 'AI', role: 'member' },
+    actor: { userId: String(target.userId || DEFAULT_PEER_TARGET), nickname: 'AI', role: 'member' },
     command: { raw, name: command, args },
     capture: {
       mode: options.captureMode,
@@ -392,6 +321,7 @@ module.exports = {
   FIXTURE,
   WebSocket,
   WebSocketServer,
+  TEST_TOKEN,
   wait,
   waitFor,
   waitForEvent,
@@ -400,7 +330,6 @@ module.exports = {
   assertNoJsonArrival,
   connect,
   closeWs,
-  startProtocolServer,
   freePort,
   setup,
   teardown,
@@ -408,12 +337,9 @@ module.exports = {
   freshBridgeModule,
   ENV_KEYS,
   state,
-  protocolConnections,
   connectCore,
   connectCoreAt,
   connectPlugin,
-  protocolConn,
-  waitForProtocol,
   groupTarget,
   privateTarget,
   sendGroupAction,

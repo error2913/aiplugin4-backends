@@ -22,15 +22,10 @@ function makeResponder(opts = {}) {
   const world = new VirtualWorld({
     stateDir,
     selfId: '10001',
-    nickname: 'AI骰娘',
-    selfRole: 'admin',
-    groupId: '20002',
-    groupName: 'AI 测试群',
-    peerId: '30002',
-    maxMemberCount: 200
+    nickname: 'AI骰娘'
   }).load();
   world.validate();
-  const responder = new Responder(world, { version: '2.0.0', ...opts });
+  const responder = new Responder(world, { version: '3.0.0', ...opts });
   return { world, responder, stateDir, cleanup: () => fs.rmSync(stateDir, { recursive: true, force: true }) };
 }
 
@@ -189,13 +184,20 @@ test('send_msg dispatches by message_type and falls back to group', () => {
   } finally { cleanup(); }
 });
 
-test('unspecified targets fall back to the configured default group and peer', () => {
+test('send_group_msg and send_private_msg reject a missing target instead of defaulting', () => {
   const { responder, cleanup } = makeResponder();
   try {
-    const group = responder.handle({ action: 'send_group_msg', params: { message: textMsg('无群号') }, echo: 'd1' });
-    assert.equal(group.peer.groupId, '20002');
-    const priv = responder.handle({ action: 'send_private_msg', params: { message: textMsg('无对象') }, echo: 'd2' });
-    assert.equal(priv.peer.userId, '30002');
+    // 没有"默认群/默认私聊对象"可以兜底：缺号必须是 1400
+    const group = responder.handle({ action: 'send_group_msg', params: { message: textMsg('无群号') }, echo: 'd1' }).reply;
+    assert.equal(group.status, 'failed');
+    assert.equal(group.retcode, 1400);
+    assert.match(group.data.wording, /group_id/);
+    const priv = responder.handle({ action: 'send_private_msg', params: { message: textMsg('无对象') }, echo: 'd2' }).reply;
+    assert.equal(priv.status, 'failed');
+    assert.equal(priv.retcode, 1400);
+    assert.match(priv.data.wording, /user_id/);
+    // 账本不能被这种调用污染
+    assert.equal(responder.counters().ledgerSize, 0);
   } finally { cleanup(); }
 });
 
@@ -270,11 +272,12 @@ test('get_group_info applies tombstone -> 1404, then active -> ok, then unregist
     // max_member_count > 0：海豹把它当"机器人在群里"的判据
     assert.ok(fresh.data.max_member_count > 0);
 
-    // ② 活跃群 → 真实群名与成员数
+    // ② 活跃群 → 群名与成员数
     world.ensureGroup(20002);
     const active = responder.handle({ action: 'get_group_info', params: { group_id: 20002 }, echo: 'a' }).reply;
     assert.equal(active.status, 'ok');
-    assert.equal(active.data.group_name, 'AI 测试群');
+    // 群名来自 source.groupName 或派生名（没有"默认群名"配置）
+    assert.equal(active.data.group_name, '群20002');
     assert.ok(active.data.member_count >= 1);
 
     // ① 墓碑优先于一切 → 1404（不能落到"未登记→建群"分支）
@@ -376,7 +379,7 @@ test('get_status and get_version_info reflect a healthy local endpoint', () => {
     const version = responder.handle({ action: 'get_version_info', params: {}, echo: 'v' }).reply;
     assert.equal(version.data.app_name, 'ob11-core-bridge');
     assert.equal(version.data.protocol_version, 'v11');
-    assert.equal(version.data.app_version, '2.0.0');
+    assert.equal(version.data.app_version, '3.0.0');
   } finally { cleanup(); }
 });
 

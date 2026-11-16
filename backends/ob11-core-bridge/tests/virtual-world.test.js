@@ -2,10 +2,13 @@
 
 // virtual-world.js 的纯模块测试（不碰 WS、不启 HTTP）。
 //
-// 这个模块是 standalone 的地基：真实 ID → 虚拟 ID 的映射必须**稳定、持久、可校验**。
+// 这个模块是桥的地基：真实 ID → 虚拟 ID 的映射必须**稳定、持久、可校验**。
 // 一旦投影不稳定，海豹侧会认为"群号变了"，AI 的上下文与权限判定全部失效。
 //
-// 每个用例都用 mkdtemp 独立状态目录（REQ-D2-11）：
+// 只有一项配置 ID：`virtual_self_id`。群与用户没有"默认对象"，
+// 每个虚拟号都是真实 ID 的确定性映射，第一次遇到才建表。
+//
+// 每个用例都用 mkdtemp 独立状态目录：
 // node --test 并行跑多个文件，Windows 上跨进程 rename 有 EPERM 概率，
 // 共享目录会让"保存/重载"用例互相打架。
 
@@ -23,14 +26,15 @@ const {
   GROUP_SPAN,
   USER_BASE,
   USER_SPAN,
-  VALID_SELF_ROLES
+  VALID_SELF_ROLES,
+  SELF_ROLE,
+  MAX_MEMBER_COUNT
 } = require('../virtual-world');
 
 /**
  * 建一个"已通过自检"的世界。
- * 注意必须调 `validate()`：它是把原始配置解析成数字、并建出默认群/默认私聊对象的唯一入口；
- * 不调的话 selfId 还是 0，`_ensureDefaults()` 会直接返回，统计与成员断言全部对不上。
- * 需要测"非法配置"的用例自行传 bad 值并在断言后跳过该步。
+ * 注意必须调 `validate()`：它是把原始配置解析成数字的唯一入口；
+ * 不调的话 selfId 还是 0，`get_login_info` 与所有 self_id 全是 0。
  */
 function makeWorld(overrides = {}) {
   const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ob11-vw-'));
@@ -38,11 +42,6 @@ function makeWorld(overrides = {}) {
     stateDir,
     selfId: '10001',
     nickname: 'AI骰娘',
-    selfRole: 'admin',
-    groupId: '20002',
-    groupName: 'AI 测试群',
-    peerId: '30002',
-    maxMemberCount: 200,
     ...overrides
   }).load();
   world.validate();
@@ -56,29 +55,25 @@ function makeRawWorld(overrides = {}) {
     stateDir,
     selfId: '10001',
     nickname: 'AI骰娘',
-    selfRole: 'admin',
-    groupId: '20002',
-    groupName: 'AI 测试群',
-    peerId: '30002',
-    maxMemberCount: 200,
     ...overrides
   }).load();
   return { world, stateDir, cleanup: () => fs.rmSync(stateDir, { recursive: true, force: true }) };
 }
 
-// ── 合法性校验（REQ-D2-05：5 类非法配置 + 2 类附属）──────────────────────
+// ── 合法性校验（virtual_self_id 的 4 类非法值）──────────────────────────
 
-test('validate rejects empty and non-numeric ids', () => {
-  const { world, cleanup } = makeRawWorld({ selfId: '', groupId: 'abc', peerId: '0' });
-  try {
-    const problems = world.validate();
-    assert.ok(problems.length >= 3, `应至少报 3 条问题，实际 ${JSON.stringify(problems)}`);
-    // 报错文案必须点名是哪个字段（用户要能直接改对），不得只说"配置非法"
-    const joined = problems.join('\n');
-    for (const field of ['self_id', 'group_id', 'peer_id']) {
-      assert.match(joined, new RegExp(field), `问题清单应包含 ${field}`);
-    }
-  } finally { cleanup(); }
+test('validate rejects empty and non-numeric self id', () => {
+  for (const [bad, pattern] of [['', /为空值/], ['abc', /不是整数/], ['0', /必须大于 0/]]) {
+    const { world, cleanup } = makeRawWorld({ selfId: bad });
+    try {
+      const problems = world.validate();
+      assert.equal(problems.length, 1, `应只报 1 条问题，实际 ${JSON.stringify(problems)}`);
+      // 报错文案必须点名是哪个字段（用户要能直接改对），不得只说"配置非法"
+      assert.match(problems[0], /self_id/);
+      assert.match(problems[0], pattern);
+      assert.equal(world.selfId, 0, '非法配置不得写回解析结果');
+    } finally { cleanup(); }
+  }
 });
 
 test('validate rejects the forbidden QQ bot UIN ranges', () => {
@@ -93,40 +88,24 @@ test('validate rejects the forbidden QQ bot UIN ranges', () => {
   } finally { cleanup(); }
 });
 
-test('validate rejects colliding ids across group and user spaces', () => {
-  // 群号空间与用户空间必须互斥，否则 laneKey 会把"群 X 的消息"和"用户 X 的私聊"混成一条
-  const { world, cleanup } = makeRawWorld({ groupId: '1500000005', peerId: '1500000005' });
-  try {
-    const problems = world.validate();
-    assert.ok(problems.some(p => /重复|相同|冲突/.test(p)), `应报 ID 冲突，实际 ${JSON.stringify(problems)}`);
-  } finally { cleanup(); }
-});
-
-test('validate rejects zero max_member_count and unknown self role', () => {
-  const { world, cleanup } = makeRawWorld({ maxMemberCount: 0, selfRole: 'god' });
-  try {
-    const problems = world.validate();
-    // 报错必须点名环境变量名，用户才知道去面板改哪一项
-    assert.ok(problems.some(p => /MAX_MEMBER_COUNT/.test(p)), `应报 max_member_count，实际 ${JSON.stringify(problems)}`);
-    assert.ok(problems.some(p => /SELF_ROLE/.test(p)), `应报 self_role，实际 ${JSON.stringify(problems)}`);
-    assert.deepEqual([...VALID_SELF_ROLES].sort(), ['admin', 'member', 'owner']);
-    // 题目要求"没填就用默认 200"，所以"完全不传 maxMemberCount"必须是合法的
-    const { world: defaulted, cleanup: cleanup2 } = makeRawWorld({ maxMemberCount: undefined });
-    try { assert.deepEqual(defaulted.validate(), []); } finally { cleanup2(); }
-  } finally { cleanup(); }
-});
-
-test('validate accepts the default configuration and hydrates defaults', () => {
+test('validate accepts the default configuration and hydrates only the bot itself', () => {
   const { world, cleanup } = makeWorld();
   try {
     assert.deepEqual(world.validate(), []);
     assert.equal(world.selfId, 10001);
-    assert.equal(world.defaultGroupId, 20002);
-    assert.equal(world.defaultPeerId, 30002);
-    assert.equal(world.maxMemberCount, 200);
-    // 默认群/默认私聊对象必须已经在表里，否则 get_group_info 会走"未登记→建空群"分支
-    assert.ok(world.getGroupByVid(20002));
+    // 没有"默认群/默认私聊对象"：世界初始是空的，不凭空存在任何群或用户
+    assert.equal(world.groups.size, 0, `不该凭空建群：${JSON.stringify([...world.groups.keys()])}`);
+    assert.equal(world.users.size, 0, '不该凭空建用户');
+    assert.deepEqual(world.stats(), { groups: 0, users: 0, members: 0, leftGroups: 0, lastMessageId: 0 });
   } finally { cleanup(); }
+});
+
+test('role and member limit are constants, not configuration', () => {
+  // 用户只需要填平台/号/昵称；角色与人数上限是协议侧常量
+  assert.equal(SELF_ROLE, 'admin');
+  assert.equal(MAX_MEMBER_COUNT, 200);
+  assert.ok(MAX_MEMBER_COUNT > 0, '人数上限必须 > 0，否则海豹判定机器人已退群');
+  assert.deepEqual([...VALID_SELF_ROLES].sort(), ['admin', 'member', 'owner']);
 });
 
 // ── forbidden UIN 判定（5 段全覆盖）──────────────────────────────────────
@@ -165,9 +144,11 @@ test('projection is stable across calls and across reloads', () => {
     const realUser = '1234567890';
     const first = world.project({ messageType: 'group', groupId: realGroup, userId: realUser, groupName: '真实群' });
     assert.equal(first.messageType, 'group');
-    // 号段契约（REQ-D2-14）：群 1.5e9、用户 2.0e9
+    // 号段契约：群 1.5e9、用户 2.0e9
     assert.ok(first.groupId >= GROUP_BASE && first.groupId < GROUP_BASE + GROUP_SPAN, `群号应落在群段，实际 ${first.groupId}`);
     assert.ok(first.userId >= USER_BASE && first.userId < USER_BASE + USER_SPAN, `用户号应落在用户段，实际 ${first.userId}`);
+    // 群名来自 source.groupName（没有"用户填的默认群名"）
+    assert.equal(world.getGroupByVid(first.groupId).name, '真实群');
 
     // 重复调用必须幂等
     const second = world.project({ messageType: 'group', groupId: realGroup, userId: realUser });
@@ -175,8 +156,8 @@ test('projection is stable across calls and across reloads', () => {
     assert.equal(second.userId, first.userId);
 
     world.save();
-    // 换一个实例从同一目录重载：映射必须一模一样（跨重启稳定，REQ-D2-02/03）
-    const reloaded = new VirtualWorld({ stateDir, selfId: '10001', groupId: '20002', peerId: '30002' }).load();
+    // 换一个实例从同一目录重载：映射必须一模一样（跨重启稳定）
+    const reloaded = new VirtualWorld({ stateDir, selfId: '10001' }).load();
     reloaded.validate();
     const third = reloaded.project({ messageType: 'group', groupId: realGroup, userId: realUser });
     assert.equal(third.groupId, first.groupId);
@@ -194,35 +175,51 @@ test('private projection keeps the peer in the user space', () => {
   try {
     const projected = world.project({ messageType: 'private', userId: '1234567890' });
     assert.equal(projected.messageType, 'private');
+    assert.equal(projected.groupId, undefined, '私聊不该带群号');
     assert.ok(projected.userId >= USER_BASE && projected.userId < USER_BASE + USER_SPAN);
     // 私聊目标本身也必须能当陌生人查（核心会问 get_stranger_info）
     assert.equal(world.strangerInfo(projected.userId).user_id, projected.userId);
   } finally { cleanup(); }
 });
 
-// ── 墓碑语义（REQ-D3-09）────────────────────────────────────────────────
+test('projection without a group id or user id throws instead of falling back', () => {
+  const { world, cleanup } = makeWorld();
+  try {
+    // 没有"默认群"可以兜底：缺群号就是残缺调用
+    assert.throws(() => world.project({ messageType: 'group', userId: '1234567890' }), /群 ID/);
+    // 没有"默认私聊对象"可以兜底：缺用户号同样是残缺调用
+    assert.throws(() => world.project({ messageType: 'private' }), /用户 ID/);
+    // 非正整数的真实 ID 也不能被悄悄接受
+    assert.throws(() => world.project({ messageType: 'group', groupId: 'group-abc', userId: '1' }), /群 ID/);
+    // 失败的投影不该在世界里留下任何记录
+    assert.equal(world.groups.size, 0);
+    assert.equal(world.users.size, 0);
+  } finally { cleanup(); }
+});
+
+// ── 墓碑语义 ─────────────────────────────────────────────────────────────
 
 test('markGroupLeft leaves a tombstone that survives reload', () => {
   const { world, stateDir, cleanup } = makeWorld();
   try {
-    const projected = world.project({ messageType: 'group', groupId: '555000111' });
+    const projected = world.project({ messageType: 'group', groupId: '555000111', userId: '1234567890' });
     const vid = projected.groupId;
     world.markGroupLeft(vid);
     assert.equal(world.getGroupByVid(vid).left, true);
     // 墓碑不是删除：记录还在，所以"未登记自动建群"分支不会被误触发
     world.save();
 
-    const reloaded = new VirtualWorld({ stateDir, selfId: '10001', groupId: '20002', peerId: '30002' }).load();
+    const reloaded = new VirtualWorld({ stateDir, selfId: '10001' }).load();
     reloaded.validate();
     const record = reloaded.getGroupByVid(vid);
     assert.ok(record, '墓碑记录应仍然存在');
     assert.equal(record.left, true, '墓碑标记应跨重启保留');
     // 号不再复用到别的群
-    assert.equal(reloaded.project({ messageType: 'group', groupId: '555000111' }).groupId, vid);
+    assert.equal(reloaded.project({ messageType: 'group', groupId: '555000111', userId: '1234567890' }).groupId, vid);
   } finally { cleanup(); }
 });
 
-// ── 消息号（REQ-D5-01/05）───────────────────────────────────────────────
+// ── 消息号 ──────────────────────────────────────────────────────────────
 
 test('allocateMessageId is monotonic and stays a safe integer', () => {
   const { world, cleanup } = makeWorld();
@@ -237,40 +234,41 @@ test('allocateMessageId is monotonic and stays a safe integer', () => {
     assert.ok(ids[ids.length - 1] < Number.MAX_SAFE_INTEGER);
     // 跨实例（重载后）也不许回退：否则账本会串号。前提是落盘过（save 是显式调用）。
     world.save();
-    const reloaded = new VirtualWorld({ stateDir: world.stateDir, selfId: '10001', groupId: '20002', peerId: '30002' }).load();
+    const reloaded = new VirtualWorld({ stateDir: world.stateDir, selfId: '10001' }).load();
     const next = reloaded.allocateMessageId();
     assert.ok(next > ids[ids.length - 1], `重载后消息号必须继续递增：${ids[ids.length - 1]} → ${next}`);
   } finally { cleanup(); }
 });
 
-// ── 容错（REQ-D2-12）────────────────────────────────────────────────────
+// ── 容错 ────────────────────────────────────────────────────────────────
 
 test('corrupt state file is backed up and the world recovers empty', () => {
   const { world, stateDir, cleanup } = makeWorld();
   try {
-    world.project({ messageType: 'group', groupId: '777000888' });
+    world.project({ messageType: 'group', groupId: '777000888', userId: '1234567890' });
     world.save();
     fs.writeFileSync(world.file, '{ this is not json', 'utf8');
 
     // 不抛错：坏档备份后按空表重建，桥必须还能启动
-    const recovered = new VirtualWorld({ stateDir, selfId: '10001', groupId: '20002', peerId: '30002' }).load();
+    const recovered = new VirtualWorld({ stateDir, selfId: '10001' }).load();
     assert.deepEqual(recovered.validate(), []);
     // 备份文件名是 `virtual-world.json.bad-<ts>`（_backupBad），不是 .bak
     const backups = fs.readdirSync(stateDir).filter(name => name.includes('.bad-'));
     assert.ok(backups.length >= 1, `坏档应被备份，目录内容：${fs.readdirSync(stateDir).join(',')}`);
-    // 重建后默认群仍在，能正常应答
-    assert.ok(recovered.getGroupByVid(20002));
     // 坏档里的旧映射不应复活（确实是"按空表重建"，不是"部分恢复"）
     assert.equal(recovered.getGroup('777000888'), null);
+    // 重建后仍能正常投影（惰性建表）
+    const again = recovered.project({ messageType: 'group', groupId: '777000888', userId: '1234567890' });
+    assert.ok(again.groupId >= GROUP_BASE);
   } finally { cleanup(); }
 });
 
-// ── 展示与统计 ──────────────────────────────────────────────────────────
+// ── 展示、群信息与统计 ──────────────────────────────────────────────────
 
 test('displayId formats ids the way Sealdice logs expect, and stats counts records', () => {
   const { world, cleanup } = makeWorld();
   try {
-    // 展示口径跟海豹一致：用户 `QQ:123`、群 `QQ-Group:456`（REQ-D2-16）。
+    // 展示口径跟海豹一致：用户 `QQ:123`、群 `QQ-Group:456`。
     // 注意 DiceMasters 要填的是 `QQ:<virtual_self_id>`（用户口径），不是群口径。
     assert.equal(world.displayId('user', 10001), 'QQ:10001');
     assert.equal(world.displayId('group', 20002), 'QQ-Group:20002');
@@ -282,7 +280,31 @@ test('displayId formats ids the way Sealdice logs expect, and stats counts recor
     } finally { cleanup2(); }
     world.project({ messageType: 'group', groupId: '111222333', userId: '444555666' });
     const stats = world.stats();
-    assert.ok(stats.groups >= 2, `应有默认群 + 新投影群，实际 ${JSON.stringify(stats)}`);
-    assert.ok(stats.users >= 3, `应有机器人自己 + 默认私聊对象 + 投影用户，实际 ${JSON.stringify(stats)}`);
+    assert.equal(stats.groups, 1, `只该有投影出来的那 1 个群，实际 ${JSON.stringify(stats)}`);
+    assert.ok(stats.users >= 1, `应至少有投影用户，实际 ${JSON.stringify(stats)}`);
+  } finally { cleanup(); }
+});
+
+test('unregistered group gets a derived name and a positive member limit', () => {
+  const { world, cleanup } = makeWorld();
+  try {
+    const vid = world.project({ messageType: 'group', groupId: '424242424', userId: '1234567890' }).groupId;
+    // 群名由 source.groupName 决定；没给就用派生名（不存在"默认群名"配置）
+    const info = world.groupInfo(world.getGroupByVid(vid));
+    assert.equal(info.group_name, `群${vid}`);
+    assert.ok(info.max_member_count > 0, 'max_member_count 恒 > 0，否则海豹会删会话');
+    assert.equal(info.member_count >= 1, true);
+
+    // 核心侧自己造一个没登记过的群号（get_group_info 第三档）→ 建空群成功
+    const fresh = world.ensureGroup(1500000123);
+    assert.equal(fresh.vid, 1500000123);
+    assert.equal(world.groupInfo(fresh).group_name, '群1500000123');
+
+    // 机器人自己的成员信息：角色取常量 admin，昵称取配置
+    const self = world.memberInfo(vid, 10001);
+    assert.equal(self.role, SELF_ROLE);
+    assert.equal(self.nickname, 'AI骰娘');
+    // 未知成员不报错（报错会让 checkBotGroupRole 拿到 ok=false 而降级）
+    assert.equal(world.memberInfo(vid, 2999999999).role, 'member');
   } finally { cleanup(); }
 });

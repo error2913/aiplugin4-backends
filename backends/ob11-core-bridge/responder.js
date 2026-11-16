@@ -17,7 +17,7 @@
 
 const {
   VirtualWorld,
-  VALID_SELF_ROLES
+  SELF_ROLE
 } = require('./virtual-world');
 
 const LEDGER_MAX = 2000;
@@ -231,8 +231,10 @@ const HANDLERS = {
 
   send_group_msg(responder, params, echo) {
     const world = responder.world;
-    // group_id 是**虚拟**群号（核心侧只知道虚拟号）；未指定时落默认群
-    const groupId = asNumberId(params.group_id) || world.defaultGroupId;
+    // group_id 是**虚拟**群号（核心侧只知道虚拟号），必填：
+    // 虚拟世界里没有"默认群"这种东西，缺号就是残缺调用（REQ-D3-10）
+    const groupId = asNumberId(params.group_id);
+    if (groupId === null) return { handled: false, reply: fail(1400, 'send_group_msg 需要正整数 group_id', echo) };
     const segments = toSegments(params.message);
     // 自动补成员/群信息：核心侧的群名与昵称都来自这里
     const record = world.ensureGroup(groupId);
@@ -245,7 +247,8 @@ const HANDLERS = {
 
   send_private_msg(responder, params, echo) {
     const world = responder.world;
-    const userId = asNumberId(params.user_id) || world.defaultPeerId;
+    const userId = asNumberId(params.user_id);
+    if (userId === null) return { handled: false, reply: fail(1400, 'send_private_msg 需要正整数 user_id', echo) };
     const segments = toSegments(params.message);
     const entry = responder._recordSend('send_private_msg', params, { messageType: 'private', userId, segments });
     return responder._result(ok({ message_id: entry.messageId }, echo), entry);
@@ -276,8 +279,9 @@ const HANDLERS = {
 
   get_group_member_info(responder, params, echo) {
     const world = responder.world;
-    const groupId = asNumberId(params.group_id) || world.defaultGroupId;
+    const groupId = asNumberId(params.group_id);
     const userId = asNumberId(params.user_id);
+    if (groupId === null) return { handled: false, reply: fail(1400, 'get_group_member_info 需要正整数 group_id', echo) };
     if (userId === null) return { handled: false, reply: fail(1400, 'get_group_member_info 需要正整数 user_id', echo) };
     if (!world.getGroupByVid(groupId)) world.ensureGroup(groupId);
     return { handled: false, reply: ok(world.memberInfo(groupId, userId, { nickname: params.nickname }), echo) };
@@ -321,7 +325,8 @@ const HANDLERS = {
 
   send_group_forward_msg(responder, params, echo) {
     const world = responder.world;
-    const groupId = asNumberId(params.group_id) || world.defaultGroupId;
+    const groupId = asNumberId(params.group_id);
+    if (groupId === null) return { handled: false, reply: fail(1400, 'send_group_forward_msg 需要正整数 group_id', echo) };
     const segments = expandForwardSegments(toSegments(params.messages !== undefined ? params.messages : params.message));
     const entry = responder._recordSend('send_group_forward_msg', params, {
       messageType: 'group', groupId, segments, text: textOfSegments(segments)
@@ -331,7 +336,8 @@ const HANDLERS = {
 
   send_private_forward_msg(responder, params, echo) {
     const world = responder.world;
-    const userId = asNumberId(params.user_id) || world.defaultPeerId;
+    const userId = asNumberId(params.user_id);
+    if (userId === null) return { handled: false, reply: fail(1400, 'send_private_forward_msg 需要正整数 user_id', echo) };
     const segments = expandForwardSegments(toSegments(params.messages !== undefined ? params.messages : params.message));
     const entry = responder._recordSend('send_private_forward_msg', params, {
       messageType: 'private', userId, segments, text: textOfSegments(segments)
@@ -377,7 +383,7 @@ const HANDLERS = {
           card: '',
           sex: 'unknown',
           age: 0,
-          role: responder.world.selfRole,
+          role: SELF_ROLE,
           title: ''
         },
         time: entry.time,

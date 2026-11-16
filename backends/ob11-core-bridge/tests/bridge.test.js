@@ -38,44 +38,41 @@ test('accepts core websocket on any path, including no path at all', async t => 
   }
 });
 
-// `:259` 的**重写**（§7.1）：原例断言"裸帧双向透传"，那是 relay 的语义；
-// standalone 下核心只作为客户端发 action，裸帧/非 action 帧一律丢弃不转发。
-// 本用例因此改断言两件事：① /healthz 16 字段深比较（REQ-D10-01 的验收锚点）
+// `:259` 的**重写**：原例断言"裸帧双向透传"，那是 relay 的语义；
+// 现在核心只作为客户端发 action，裸帧/非 action 帧一律丢弃不转发。
+// 本用例因此改断言两件事：① /healthz 全字段深比较（对外可观测事实的验收锚点）
 // ② 裸帧不产生任何回包、连接不断、进程存活。
-test('standalone healthz shape is 16 fields and raw frames are dropped not forwarded', async t => {
+test('healthz shape is stable and raw frames are dropped not forwarded', async t => {
   await setup(); t.after(teardown);
   const core = await connectCore();
   const health = await healthz();
 
-  // 16 字段 = 8 新增 + 5 既有保留 + 3 遗留置 null（REQ-D10-01）
   assert.deepEqual(health, {
     ok: true,
     coreConnected: true,
     coreClients: 1,
     pluginConnected: false,
     pluginClients: 0,
+    // `mode` 是对外报文常量（插件靠它决定走 source 投影），不是配置项
     mode: 'standalone',
     platform: 'QQ',
     corePort: state.bridgePort,
     virtualSelfId: 10001,
+    virtualNickname: 'AI骰娘',
     actionCount: 0,
     eventCount: 0,
     ledgerSize: 0,
     legacyTarget: false,
-    // 三个 relay 遗留字段：必须是 null，不是 0 / false / []（deepEqual 不接受）
-    protocolConnected: null,
-    protocolClients: null,
-    droppedProtocolEvents: null
+    tokenRequired: true
   });
-  assert.equal(Object.keys(health).length, 16);
+  assert.equal(Object.keys(health).length, 15);
 
   // 裸帧：不崩溃、不回包、连接保持
   core.send('raw core frame');
   core.send(JSON.stringify({ post_type: 'meta_event', meta_event_type: 'heartbeat', self_id: 10001 }));
-  assert.equal(await assertNoJsonArrival(core, () => true, 120), null, 'standalone 下裸帧与非 action 帧都不应产生任何回包');
+  assert.equal(await assertNoJsonArrival(core, () => true, 120), null, '裸帧与非 action 帧都不应产生任何回包');
   const health2 = await healthz();
   assert.equal(health2.coreConnected, true);
-  assert.equal(health2.protocolConnected, null);
   await closeWs(core);
 });
 
@@ -285,9 +282,9 @@ test('timeouts, missing core, and core disconnects fail cleanly', async t => {
   assert.match(disconnect.error, /disconnected/);
 });
 
-// `:546` 的**重写**（§7.1）：1.1.1 允许多核心并按 self_id 路由；
-// standalone 下是单核心端点，第二条连接必须被 close(1013) 拒绝（REQ-D1-05）。
-test('second core connection is rejected with close code 1013 in standalone', async t => {
+// `:546` 的**重写**：1.1.1 允许多核心并按 self_id 路由；
+// 现在桥是单核心端点，第二条连接必须被 close(1013) 拒绝。
+test('second core connection is rejected with close code 1013', async t => {
   await setup(); t.after(teardown);
   const core1 = await connectCore();
   const health = await healthz();
@@ -300,7 +297,7 @@ test('second core connection is rejected with close code 1013 in standalone', as
     core2.once('close', (code, reason) => resolve([code, reason.toString()]));
   });
   assert.equal(code, 1013);
-  assert.match(reason, /standalone/);
+  assert.match(reason, /SealDice|核心/);
   const health2 = await healthz();
   assert.equal(health2.coreClients, 1, '第二核心不进 coreClients');
   assert.equal(health2.coreConnected, true);

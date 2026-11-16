@@ -1,89 +1,29 @@
 {
   "name": "ob11-core-bridge",
-  "description": "独立 OB11 协议端：海豹以正向 WS 接入即获得一个稳定的虚拟账号/群/用户世界，核心指令在本地执行并返回文本（不再拦截、不再向真实协议端注入）；relay 双连接模式保留兼容",
+  "description": "独立 OB11 协议端：海豹以一条正向 WS 连上来即获得一个稳定的虚拟账号世界，核心指令在本地执行并返回文本（不拦截、不注入、不出站）",
   "type": "node",
   "entry": "bridge.js",
   "deps": "package.json",
   "port": 46880,
-  "version": "2.0.0",
+  "version": "3.0.0",
   "config": {
-    "mode": {
-      "label": "运行模式（留空=自动：填了协议端地址走 relay，否则 standalone；一般不用填）",
-      "type": "text",
-      "default": "",
-      "env": "AIPLUGIN4_BRIDGE_MODE"
-    },
     "platform": {
-      "label": "桥自称的平台名（默认 QQ，可自定义；只影响桥侧日志与 /healthz，海豹面板仍显示 QQ）",
+      "label": "平台名（默认 QQ，可自定义；只影响桥侧日志与 /healthz，海豹面板仍显示 QQ）",
       "type": "text",
       "default": "QQ",
       "env": "AIPLUGIN4_BRIDGE_PLATFORM"
     },
     "virtual_self_id": {
-      "label": "虚拟机器人号（可自定义，默认 10001；不能是 QQ 机器人号段，改完重启生效）",
+      "label": "机器人号（默认 10001；不能是 QQ 机器人号段，改完重启生效）",
       "type": "text",
       "default": "10001",
       "env": "AIPLUGIN4_BRIDGE_VIRTUAL_SELF_ID"
     },
     "virtual_nickname": {
-      "label": "虚拟机器人昵称（可自定义，默认 AI骰娘）",
+      "label": "机器人昵称（默认 AI骰娘）",
       "type": "text",
       "default": "AI骰娘",
       "env": "AIPLUGIN4_BRIDGE_VIRTUAL_NICKNAME"
-    },
-    "virtual_self_role": {
-      "label": "机器人在虚拟群里的角色（owner / admin / member，默认 admin）",
-      "type": "text",
-      "default": "admin",
-      "env": "AIPLUGIN4_BRIDGE_VIRTUAL_SELF_ROLE"
-    },
-    "virtual_group_id": {
-      "label": "默认虚拟群号（可自定义，默认 20002；未指定群时用它）",
-      "type": "text",
-      "default": "20002",
-      "env": "AIPLUGIN4_BRIDGE_VIRTUAL_GROUP_ID"
-    },
-    "virtual_group_name": {
-      "label": "默认虚拟群名（可自定义，默认 AI 测试群）",
-      "type": "text",
-      "default": "AI 测试群",
-      "env": "AIPLUGIN4_BRIDGE_VIRTUAL_GROUP_NAME"
-    },
-    "virtual_peer_id": {
-      "label": "私聊默认对象号（可自定义，默认 30002）",
-      "type": "text",
-      "default": "30002",
-      "env": "AIPLUGIN4_BRIDGE_VIRTUAL_PEER_ID"
-    },
-    "virtual_max_member_count": {
-      "label": "虚拟群人数上限（必须大于 0，默认 200；为 0 会让海豹认为机器人已退群）",
-      "type": "number",
-      "default": 200,
-      "env": "AIPLUGIN4_BRIDGE_VIRTUAL_MAX_MEMBER_COUNT"
-    },
-    "core_token": {
-      "label": "核心端 token（海豹「连接」里填同一个值，可留空）",
-      "type": "text",
-      "default": "",
-      "env": "AIPLUGIN4_BRIDGE_CORE_TOKEN"
-    },
-    "plugin_token": {
-      "label": "插件控制 WS token（可选，对应插件「核心桥Token」）",
-      "type": "text",
-      "default": "",
-      "env": "AIPLUGIN4_BRIDGE_PLUGIN_TOKEN"
-    },
-    "protocol_url": {
-      "label": "【兼容】协议端 WebSocket 地址（仅 relay 模式；留空=standalone）",
-      "type": "text",
-      "default": "",
-      "env": "AIPLUGIN4_BRIDGE_PROTOCOL_URL"
-    },
-    "protocol_token": {
-      "label": "【兼容】协议端 token（仅 relay 模式）",
-      "type": "text",
-      "default": "",
-      "env": "AIPLUGIN4_BRIDGE_PROTOCOL_TOKEN"
     }
   }
 }

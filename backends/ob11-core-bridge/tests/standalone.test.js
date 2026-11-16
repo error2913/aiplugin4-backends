@@ -1,22 +1,15 @@
 'use strict';
 
-// standalone 专属集成用例（执行方案 §7.2 的 21 例里，需要真起桥/真连 WS 的那部分）。
+// 集成用例：必须越过 HTTP/WS 边界才能验证的部分（配置自检、端口、token、
+// platform 与虚拟账号的 env 贯通、hello 握手、保活、forward 被忽略、图片段、账本回查）。
 //
-// 分工：
-//   - 纯函数级（配置自检、投影、账本、action 应答）已在 virtual-world.test.js / responder.test.js 覆盖；
-//   - 本文件只放"必须越过 HTTP/WS 边界才能验证"的：模式推断、拒启、端口、token 双来源、
-//     platform 与虚拟 ID 的 env 贯通、hello 握手、保活、forward 被忽略、图片段、无线驱动的账本回查。
-//
+// 纯函数级（投影、账本、action 应答）在 virtual-world.test.js / responder.test.js 覆盖。
 // 每个用例都自己管 env 事务与状态目录：这些用例大多要传非法/非默认 env，
 // 泄漏一条就会让后面整片红。
 
-const fs = require('node:fs');
-const os = require('node:os');
-const path = require('node:path');
-
 const {
-  test, assert, WebSocket,
-  wait, waitFor, waitForEvent, waitForMessage,
+  test, assert, WebSocket, TEST_TOKEN,
+  wait, waitForEvent, waitForMessage,
   closeWs, freePort, isolateEnv, freshBridgeModule, state,
   connectCore, connectPlugin, groupTarget, sendGroupAction, wsCall, wsArgs
 } = require('./helpers');
@@ -40,51 +33,11 @@ async function boot(env = {}, options = {}) {
   return bridge;
 }
 
-// ── 第 10 例：模式推断（00 §8.1）────────────────────────────────────────
+// ── 非法虚拟号拒启 ────────────────────────────────────────────────��────
 
-test('mode is inferred from protocol_url when AIPLUGIN4_BRIDGE_MODE is empty', async t => {
-  // ① 没有 protocol_url → standalone，且**不建任何出站连接**
+test('invalid virtual self id refuses to start before createServer', async t => {
   isolateEnv(t);
-  process.env.AIPLUGIN4_BRIDGE_CORE_TOKEN = '';
-  process.env.AIPLUGIN4_BRIDGE_PLUGIN_TOKEN = '';
-  delete process.env.AIPLUGIN4_BRIDGE_MODE;
-  delete process.env.AIPLUGIN4_BRIDGE_PROTOCOL_URL;
-  let bridge = await boot();
-  let health = await healthz();
-  assert.equal(health.mode, 'standalone');
-  assert.equal(health.protocolConnected, null, 'standalone 不该有 protocol 连接概念');
-  await bridge.stop();
-  state.bridge = null;
-
-  // ② 有 protocol_url（指向一个必然连不上的端口）→ relay，且真的去连了
-  const deadPort = await freePort();
-  process.env.AIPLUGIN4_BRIDGE_PROTOCOL_URL = `ws://127.0.0.1:${deadPort}`;
-  bridge = await boot();
-  health = await healthz();
-  assert.equal(health.mode, 'relay');
-  assert.equal(typeof health.protocolConnected, 'boolean', 'relay 下必须回到布尔语义');
-  await bridge.stop();
-  state.bridge = null;
-
-  // ③ 显式 mode 优先于推断：填了 protocol_url 但 mode=standalone → 仍是 standalone 且不出站
-  process.env.AIPLUGIN4_BRIDGE_MODE = 'standalone';
-  process.env.AIPLUGIN4_BRIDGE_PROTOCOL_URL = `ws://127.0.0.1:${deadPort}`;
-  bridge = await boot();
-  health = await healthz();
-  assert.equal(health.mode, 'standalone', '显式 mode 必须压过 protocol_url 推断');
-  assert.equal(health.protocolConnected, null);
-  await bridge.stop();
-  state.bridge = null;
-});
-
-// ── 第 17 例：非法虚拟 ID 拒启（REQ-D2-17）─────────────────────────────
-
-test('invalid virtual ids refuse to start before createServer', async t => {
-  isolateEnv(t);
-  process.env.AIPLUGIN4_BRIDGE_CORE_TOKEN = '';
-  process.env.AIPLUGIN4_BRIDGE_PLUGIN_TOKEN = '';
-  process.env.AIPLUGIN4_BRIDGE_MODE = 'standalone';
-  delete process.env.AIPLUGIN4_BRIDGE_PROTOCOL_URL;
+  process.env.AIPLUGIN4_BACKEND_TOKEN = '';
 
   const cases = [
     ['', /为空值/],                 // ① 空值
@@ -106,32 +59,11 @@ test('invalid virtual ids refuse to start before createServer', async t => {
   }
 });
 
-test('colliding virtual ids refuse to start', async t => {
-  // 第 5 类非法：三个虚拟 ID 任两项撞号（会让 laneKey 把群消息和私聊混成一条）
-  isolateEnv(t);
-  process.env.AIPLUGIN4_BRIDGE_CORE_TOKEN = '';
-  process.env.AIPLUGIN4_BRIDGE_PLUGIN_TOKEN = '';
-  process.env.AIPLUGIN4_BRIDGE_MODE = 'standalone';
-  delete process.env.AIPLUGIN4_BRIDGE_PROTOCOL_URL;
-  process.env.AIPLUGIN4_BRIDGE_VIRTUAL_SELF_ID = '10001';
-  process.env.AIPLUGIN4_BRIDGE_VIRTUAL_GROUP_ID = '20002';
-  process.env.AIPLUGIN4_BRIDGE_VIRTUAL_PEER_ID = '20002';   // ← 与群号撞
-  const { Bridge } = freshBridgeModule();
-  const bridge = new Bridge();
-  await assert.rejects(() => bridge.start(), /虚拟世界配置非法/);
-  assert.equal(bridge.server, null);
-  assert.ok(bridge.world.validate().some(problem => /撞号/.test(problem)));
-  await bridge.stop().catch(() => {});
-});
-
-// ── 第 18 例：端口可核对（REQ-D1-14/15 + D10-01）───────────────────────
+// ── 端口可核对 + 路径无关 ────────────────────────────────────────────────
 
 test('custom port is reported by /healthz and core accepts any path (incl. none)', async t => {
   isolateEnv(t);
-  process.env.AIPLUGIN4_BRIDGE_CORE_TOKEN = '';
-  process.env.AIPLUGIN4_BRIDGE_PLUGIN_TOKEN = '';
-  process.env.AIPLUGIN4_BRIDGE_MODE = 'standalone';
-  delete process.env.AIPLUGIN4_BRIDGE_PROTOCOL_URL;
+  process.env.AIPLUGIN4_BACKEND_TOKEN = '';
   // 端口由 OS 分配（bind :0），不用 48000+random 猜——猜出来的端口可能正被别的用例/别的测试文件占着
   const port = await freePort();
   const bridge = await boot({}, { port });
@@ -140,8 +72,9 @@ test('custom port is reported by /healthz and core accepts any path (incl. none)
   const health = await healthz();
   assert.equal(health.corePort, port);
   assert.equal(health.corePort, Number(process.env.AIPLUGIN4_BACKEND_PORT));
+  assert.equal(health.tokenRequired, false, '没配 token 时应如实报告');
 
-  // REQ-D1-14：核心端不占路径。用户填 ws://host:port 就该能连，
+  // 核心端不占路径。用户填 ws://host:port 就该能连，
   // `/`、历史 `/core`、`/core/ws`、任意路径都等价，全部要能正常应答。
   for (const suffix of ['', '/', '/core', '/core/ws', '/custom/path']) {
     const ws = new WebSocket(`ws://127.0.0.1:${port}${suffix}`);
@@ -154,14 +87,11 @@ test('custom port is reported by /healthz and core accepts any path (incl. none)
   }
 });
 
-// ── 第 21 例：token 双来源（REQ-D1-04）─────────────────────────────────
+// ── token：一个变量管两端，宽松匹配 ─────────────────────────────────────
 
-test('core token accepts bare value, Bearer header, and query/header disagreement', async t => {
+test('the single launcher token guards both core and plugin endpoints', async t => {
   isolateEnv(t);
-  process.env.AIPLUGIN4_BRIDGE_MODE = 'standalone';
-  delete process.env.AIPLUGIN4_BRIDGE_PROTOCOL_URL;
-  process.env.AIPLUGIN4_BRIDGE_CORE_TOKEN = 'secret-core';
-  process.env.AIPLUGIN4_BRIDGE_PLUGIN_TOKEN = '';
+  process.env.AIPLUGIN4_BACKEND_TOKEN = 'secret-unified';
   const port = await freePort();
   const bridge = await boot({}, { port });
   t.after(async () => { await bridge.stop(); state.bridge = null; });
@@ -177,29 +107,28 @@ test('core token accepts bare value, Bearer header, and query/header disagreemen
     return result === false ? 'closed' : 'timeout';
   };
 
-  // ① 裸 token 走 query（海豹 `applyClientAuthHeader` 存的就是裸值）
-  assert.equal(await probe(`ws://127.0.0.1:${port}/core?access_token=secret-core`), 'open');
-  // ② Bearer 走 header（插件侧的写法）
-  assert.equal(await probe(`ws://127.0.0.1:${port}/core`, { headers: { Authorization: 'Bearer secret-core' } }), 'open');
-  // ③ 裸 token 走 header（海豹用 Bearer 前缀配裸值时的混合形态）
-  assert.equal(await probe(`ws://127.0.0.1:${port}/core`, { headers: { Authorization: 'secret-core' } }), 'open');
-  // ④ query 带旧错值 + header 带正确值 → 必须通过。
-  //    这是"行为收缩"的守门断言：写成 `query || header` 会在这里被拒，而 1.1.1 的语义是"任一来源"。
-  assert.equal(await probe(`ws://127.0.0.1:${port}/core?access_token=stale`, { headers: { Authorization: 'Bearer secret-core' } }), 'open');
+  // ① 裸 token 走 query（插件侧写法）
+  assert.equal(await probe(`ws://127.0.0.1:${port}?access_token=secret-unified`), 'open');
+  // ② Bearer 走 header（海豹侧写法：它发的是裸值，这里两种都认）
+  assert.equal(await probe(`ws://127.0.0.1:${port}`, { headers: { Authorization: 'Bearer secret-unified' } }), 'open');
+  // ③ 裸 token 走 header
+  assert.equal(await probe(`ws://127.0.0.1:${port}`, { headers: { Authorization: 'secret-unified' } }), 'open');
+  // ④ query 带旧错值 + header 带正确值 → 必须通过（"任一来源"语义，不能收缩成 query 优先）
+  assert.equal(await probe(`ws://127.0.0.1:${port}?access_token=stale`, { headers: { Authorization: 'Bearer secret-unified' } }), 'open');
   // ⑤ 完全错的 token → 关闭
-  assert.equal(await probe(`ws://127.0.0.1:${port}/core?access_token=wrong`), 'closed');
-  assert.equal(await probe(`ws://127.0.0.1:${port}/core`), 'closed');
+  assert.equal(await probe(`ws://127.0.0.1:${port}?access_token=wrong`), 'closed');
+  assert.equal(await probe(`ws://127.0.0.1:${port}`), 'closed');
+  // ⑥ 插件端是同一个 token（不存在"插件要另填一个"这回事）
+  assert.equal(await probe(`ws://127.0.0.1:${port}/plugin?access_token=secret-unified`), 'open');
+  assert.equal(await probe(`ws://127.0.0.1:${port}/plugin?access_token=wrong`), 'closed');
 });
 
-// ── 第 14/15 例：platform（REQ-D2-13/15/18）────────────────────────────
+// ── platform ────────────────────────────────────────────────────────────
 
 test('platform defaults to QQ and stays bridge-side only', async t => {
   isolateEnv(t);
-  process.env.AIPLUGIN4_BRIDGE_MODE = 'standalone';
-  process.env.AIPLUGIN4_BRIDGE_CORE_TOKEN = '';
-  process.env.AIPLUGIN4_BRIDGE_PLUGIN_TOKEN = '';
+  process.env.AIPLUGIN4_BACKEND_TOKEN = '';
   delete process.env.AIPLUGIN4_BRIDGE_PLATFORM;
-  delete process.env.AIPLUGIN4_BRIDGE_PROTOCOL_URL;
   const bridge = await boot();
   t.after(async () => { await bridge.stop(); state.bridge = null; });
 
@@ -223,10 +152,7 @@ test('platform defaults to QQ and stays bridge-side only', async t => {
 
 test('custom platform shows in healthz and hello but never changes the numeric ids', async t => {
   isolateEnv(t);
-  process.env.AIPLUGIN4_BRIDGE_MODE = 'standalone';
-  process.env.AIPLUGIN4_BRIDGE_CORE_TOKEN = '';
-  process.env.AIPLUGIN4_BRIDGE_PLUGIN_TOKEN = '';
-  delete process.env.AIPLUGIN4_BRIDGE_PROTOCOL_URL;
+  process.env.AIPLUGIN4_BACKEND_TOKEN = '';
   const bridge = await boot({ AIPLUGIN4_BRIDGE_PLATFORM: 'KOOK' });
   t.after(async () => { await bridge.stop(); state.bridge = null; });
 
@@ -250,57 +176,40 @@ test('custom platform shows in healthz and hello but never changes the numeric i
   await closeWs(core);
 });
 
-// ── 第 16 例：虚拟 ID 可填（REQ-D2-16）─────────────────────────────────
+// ── 机器人号与昵称可填 ──────────────────────────────────────────────────
 
-test('custom virtual ids flow through login, group info and send replies', async t => {
+test('custom self id and nickname flow through login and member info', async t => {
   isolateEnv(t);
-  process.env.AIPLUGIN4_BRIDGE_MODE = 'standalone';
-  process.env.AIPLUGIN4_BRIDGE_CORE_TOKEN = '';
-  process.env.AIPLUGIN4_BRIDGE_PLUGIN_TOKEN = '';
-  delete process.env.AIPLUGIN4_BRIDGE_PROTOCOL_URL;
+  process.env.AIPLUGIN4_BACKEND_TOKEN = '';
   const bridge = await boot({
     AIPLUGIN4_BRIDGE_VIRTUAL_SELF_ID: '777001',
-    AIPLUGIN4_BRIDGE_VIRTUAL_NICKNAME: '自定义骰娘',
-    AIPLUGIN4_BRIDGE_VIRTUAL_GROUP_ID: '777002',
-    AIPLUGIN4_BRIDGE_VIRTUAL_GROUP_NAME: '自定义群',
-    AIPLUGIN4_BRIDGE_VIRTUAL_PEER_ID: '777003',
-    AIPLUGIN4_BRIDGE_VIRTUAL_SELF_ROLE: 'owner',
-    AIPLUGIN4_BRIDGE_VIRTUAL_MAX_MEMBER_COUNT: '999'
+    AIPLUGIN4_BRIDGE_VIRTUAL_NICKNAME: '自定义骰娘'
   });
   t.after(async () => { await bridge.stop(); state.bridge = null; });
 
-  const health = await healthz();
-  assert.equal(health.virtualSelfId, 777001);
+  assert.equal((await healthz()).virtualSelfId, 777001);
+  assert.equal((await healthz()).virtualNickname, '自定义骰娘');
 
   const core = await connectCore();
   const login = waitForMessage(core, packet => packet.echo === 'l');
   core.send(JSON.stringify({ action: 'get_login_info', params: {}, echo: 'l' }));
   assert.deepEqual((await login).data, { user_id: 777001, nickname: '自定义骰娘' });
 
-  const groupInfo = waitForMessage(core, packet => packet.echo === 'g');
-  core.send(JSON.stringify({ action: 'get_group_info', params: { group_id: 777002 }, echo: 'g' }));
-  const group = (await groupInfo).data;
-  assert.equal(group.group_id, 777002);
-  assert.equal(group.group_name, '自定义群');
-  assert.equal(group.max_member_count, 999);
-
-  // 不指定群号时落到默认群（也是用户填的那个）
-  const send = waitForMessage(core, packet => packet.echo === 's');
-  core.send(JSON.stringify({ action: 'send_group_msg', params: { message: [{ type: 'text', data: { text: 'x' } }] }, echo: 's' }));
-  assert.equal(typeof (await send).data.message_id, 'number');
-  const entry = bridge.responder.ledger[0];
-  assert.equal(entry.target.groupId, 777002);
+  // 机器人自己的成员信息：角色取协议常量 admin
+  const member = waitForMessage(core, packet => packet.echo === 'm');
+  core.send(JSON.stringify({ action: 'get_group_member_info', params: { group_id: 1500000123, user_id: 777001 }, echo: 'm' }));
+  const memberData = (await member).data;
+  assert.equal(memberData.user_id, 777001);
+  assert.equal(memberData.nickname, '自定义骰娘');
+  assert.equal(memberData.role, 'admin');
   await closeWs(core);
 });
 
-// ── 第 1/2 例：登录握手同步性与时延（REQ-D1-03）───────────────────────
+// ── 登录握手同步性与时延 ────────────────────────────────────────────────
 
 test('get_login_info is answered exactly once and within 1000ms', async t => {
   isolateEnv(t);
-  process.env.AIPLUGIN4_BRIDGE_MODE = 'standalone';
-  process.env.AIPLUGIN4_BRIDGE_CORE_TOKEN = '';
-  process.env.AIPLUGIN4_BRIDGE_PLUGIN_TOKEN = '';
-  delete process.env.AIPLUGIN4_BRIDGE_PROTOCOL_URL;
+  process.env.AIPLUGIN4_BACKEND_TOKEN = '';
   const bridge = await boot();
   t.after(async () => { await bridge.stop(); state.bridge = null; });
 
@@ -325,14 +234,11 @@ test('get_login_info is answered exactly once and within 1000ms', async t => {
   await closeWs(core);
 });
 
-// ── 第 5/6/7 例：同号一致、账本回查、撤回（REQ-D5-02/03、D3-01）────────
+// ── 同号一致、账本回查、撤回 ────────────────────────────────────────────
 
 test('action reply id equals the ledger id and supports get_msg / delete_msg roundtrip', async t => {
   isolateEnv(t);
-  process.env.AIPLUGIN4_BRIDGE_MODE = 'standalone';
-  process.env.AIPLUGIN4_BRIDGE_CORE_TOKEN = '';
-  process.env.AIPLUGIN4_BRIDGE_PLUGIN_TOKEN = '';
-  delete process.env.AIPLUGIN4_BRIDGE_PROTOCOL_URL;
+  process.env.AIPLUGIN4_BACKEND_TOKEN = '';
   const bridge = await boot();
   t.after(async () => { await bridge.stop(); state.bridge = null; });
 
@@ -342,12 +248,12 @@ test('action reply id equals the ledger id and supports get_msg / delete_msg rou
   const messageId = (await sendReply).data.message_id;
   assert.equal(typeof messageId, 'number');
 
-  // 账本里必须是同一条（REQ-D5-02：回包号 === 账本号）
+  // 账本里必须是同一条（回包号 === 账本号）
   const entry = bridge.responder.getMsg(messageId);
   assert.ok(entry, '账本应能按回包号查到');
   assert.equal(entry.text, '账本原文');
 
-  // get_msg 回查（REQ-D5-03）
+  // get_msg 回查
   const got = waitForMessage(core, packet => packet.echo === 'g1');
   core.send(JSON.stringify({ action: 'get_msg', params: { message_id: messageId }, echo: 'g1' }));
   const gotReply = await got;
@@ -355,7 +261,7 @@ test('action reply id equals the ledger id and supports get_msg / delete_msg rou
   assert.equal(gotReply.data.message_id, messageId);
   assert.equal(gotReply.data.raw_message, '账本原文');
 
-  // delete_msg → 再查必须是 1404（REQ-D3-01）
+  // delete_msg → 再查必须是 1404
   const del = waitForMessage(core, packet => packet.echo === 'd1');
   core.send(JSON.stringify({ action: 'delete_msg', params: { message_id: messageId }, echo: 'd1' }));
   assert.equal((await del).status, 'ok');
@@ -367,14 +273,11 @@ test('action reply id equals the ledger id and supports get_msg / delete_msg rou
   await closeWs(core);
 });
 
-// ── 第 9 例：并发 lane 下发号单调不重复（REQ-D5-01/08）─────────────────
+// ── 并发 lane 下发号单调不重复 ──────────────────────────────────────────
 
 test('concurrent lanes get strictly increasing unique message ids', async t => {
   isolateEnv(t);
-  process.env.AIPLUGIN4_BRIDGE_MODE = 'standalone';
-  process.env.AIPLUGIN4_BRIDGE_CORE_TOKEN = '';
-  process.env.AIPLUGIN4_BRIDGE_PLUGIN_TOKEN = '';
-  delete process.env.AIPLUGIN4_BRIDGE_PROTOCOL_URL;
+  process.env.AIPLUGIN4_BACKEND_TOKEN = '';
   const bridge = await boot();
   t.after(async () => { await bridge.stop(); state.bridge = null; });
 
@@ -382,7 +285,7 @@ test('concurrent lanes get strictly increasing unique message ids', async t => {
   const ids = [];
   core.on('message', data => {
     let packet; try { packet = JSON.parse(data.toString()); } catch (_) { return; }
-    // 事件号也在同一号段里（REQ-D5-01：事件号与下行号同源）
+    // 事件号也在同一号段里（事件号与下行号同源）
     if (packet.post_type === 'message') ids.push(packet.message_id);
   });
 
@@ -412,14 +315,11 @@ test('concurrent lanes get strictly increasing unique message ids', async t => {
   await closeWs(pluginA); await closeWs(pluginB); await closeWs(core);
 });
 
-// ── 第 11 例：forward 被忽略（REQ-D6-04）───────────────────────────────
+// ── forward 被忽略 ──────────────────────────────────────────────────────
 
 test('capture.forward is accepted but ignored, deliveredCount still counts', async t => {
   isolateEnv(t);
-  process.env.AIPLUGIN4_BRIDGE_MODE = 'standalone';
-  process.env.AIPLUGIN4_BRIDGE_CORE_TOKEN = '';
-  process.env.AIPLUGIN4_BRIDGE_PLUGIN_TOKEN = '';
-  delete process.env.AIPLUGIN4_BRIDGE_PROTOCOL_URL;
+  process.env.AIPLUGIN4_BACKEND_TOKEN = '';
   const bridge = await boot();
   t.after(async () => { await bridge.stop(); state.bridge = null; });
 
@@ -429,26 +329,23 @@ test('capture.forward is accepted but ignored, deliveredCount still counts', asy
     if (packet.post_type === 'message') sendGroupAction(core, packet.group_id, '转发应答', `e-${packet.message_id}`);
   });
   const plugin = await connectPlugin();
-  // forward:true 在 standalone 下没有"协议端"可转发，但调用必须照常成功
+  // forward:true 没有"协议端"可转发，但调用必须照常成功
   const packet = await wsCall(plugin, wsArgs(groupTarget(), '.fwd', { mode: 'lane', forward: true, settleMs: 60 }));
   assert.equal(packet.result.ok, true);
   assert.equal(packet.result.mode, 'standalone');
   assert.equal(packet.result.deliveredCount, 1);
-  assert.equal(packet.result.forwardedCount, 0, 'standalone 下 forwardedCount 恒 0');
+  assert.equal(packet.result.forwardedCount, 0, 'forwardedCount 恒 0');
   assert.equal(packet.result.ambiguous, false);
   assert.equal(packet.result.messages[0].source, 'action');
   assert.equal(packet.result.messages[0].forwarded, false);
   await closeWs(plugin); await closeWs(core);
 });
 
-// ── 第 13 例：图片段不丢（REQ-D3-01）───────────────────────────────────
+// ── 图片段不丢 ──────────────────────────────────────────────────────────
 
 test('image segments are recorded without loss', async t => {
   isolateEnv(t);
-  process.env.AIPLUGIN4_BRIDGE_MODE = 'standalone';
-  process.env.AIPLUGIN4_BRIDGE_CORE_TOKEN = '';
-  process.env.AIPLUGIN4_BRIDGE_PLUGIN_TOKEN = '';
-  delete process.env.AIPLUGIN4_BRIDGE_PROTOCOL_URL;
+  process.env.AIPLUGIN4_BACKEND_TOKEN = '';
   const bridge = await boot();
   t.after(async () => { await bridge.stop(); state.bridge = null; });
 
@@ -477,14 +374,11 @@ test('image segments are recorded without loss', async t => {
   await closeWs(core);
 });
 
-// ── 第 8 例：未知 action 不 crash（REQ-D3-05）──────────────────────────
+// ── 未知 action 不 crash ────────────────────────────────────────────────
 
 test('unknown action gets 1404 and the process keeps serving', async t => {
   isolateEnv(t);
-  process.env.AIPLUGIN4_BRIDGE_MODE = 'standalone';
-  process.env.AIPLUGIN4_BRIDGE_CORE_TOKEN = '';
-  process.env.AIPLUGIN4_BRIDGE_PLUGIN_TOKEN = '';
-  delete process.env.AIPLUGIN4_BRIDGE_PROTOCOL_URL;
+  process.env.AIPLUGIN4_BACKEND_TOKEN = '';
   const bridge = await boot();
   t.after(async () => { await bridge.stop(); state.bridge = null; });
 
@@ -504,14 +398,11 @@ test('unknown action gets 1404 and the process keeps serving', async t => {
   await closeWs(core);
 });
 
-// ── `source` 投影与老插件降级（REQ-D7-02、REQ-D2-10）───────────────────
+// ── `source` 投影与老插件降级 ───────────────────────────────────────────
 
 test('source is projected to virtual ids, and legacy payloads without source are flagged', async t => {
   isolateEnv(t);
-  process.env.AIPLUGIN4_BRIDGE_MODE = 'standalone';
-  process.env.AIPLUGIN4_BRIDGE_CORE_TOKEN = '';
-  process.env.AIPLUGIN4_BRIDGE_PLUGIN_TOKEN = '';
-  delete process.env.AIPLUGIN4_BRIDGE_PROTOCOL_URL;
+  process.env.AIPLUGIN4_BACKEND_TOKEN = '';
   const bridge = await boot();
   t.after(async () => { await bridge.stop(); state.bridge = null; });
 
@@ -574,12 +465,38 @@ test('source is projected to virtual ids, and legacy payloads without source are
   await closeWs(plugin); await closeWs(core);
 });
 
+test('source without a group id is rejected instead of falling back to a default group', async t => {
+  isolateEnv(t);
+  process.env.AIPLUGIN4_BACKEND_TOKEN = '';
+  const bridge = await boot();
+  t.after(async () => { await bridge.stop(); state.bridge = null; });
+
+  const plugin = await connectPlugin();
+  const requestId = 'no-group';
+  const errorPromise = waitForMessage(plugin, packet => packet.requestId === requestId);
+  plugin.send(JSON.stringify({
+    type: 'core_command',
+    requestId,
+    payload: {
+      target: { selfId: '10001', messageType: 'group', groupId: '20002', userId: '30002' },
+      // 群里必须有群号；没有默认群可以兜底
+      source: { endpointId: 'QQ:1', messageType: 'group', userId: '1234567890' },
+      actor: { userId: '30002', nickname: 'AI', role: 'member' },
+      raw_message: '.nogroup',
+      capture: { mode: 'reply_only', forward: false },
+      timeoutMs: 500
+    }
+  }));
+  const packet = await errorPromise;
+  assert.equal(packet.type, 'core_command_error');
+  assert.match(packet.error, /群 ID/);
+  assert.equal(bridge.world.groups.size, 0, '失败的投影不该在世界里留下群记录');
+  await closeWs(plugin);
+});
+
 test('non-numeric source ids are rejected instead of reaching the core', async t => {
   isolateEnv(t);
-  process.env.AIPLUGIN4_BRIDGE_MODE = 'standalone';
-  process.env.AIPLUGIN4_BRIDGE_CORE_TOKEN = '';
-  process.env.AIPLUGIN4_BRIDGE_PLUGIN_TOKEN = '';
-  delete process.env.AIPLUGIN4_BRIDGE_PROTOCOL_URL;
+  process.env.AIPLUGIN4_BACKEND_TOKEN = '';
   const bridge = await boot();
   t.after(async () => { await bridge.stop(); state.bridge = null; });
 
@@ -606,44 +523,11 @@ test('non-numeric source ids are rejected instead of reaching the core', async t
   await closeWs(plugin);
 });
 
-// ── 第 4 例：角色影响（REQ-D2-06）─────────────────────────────────────
-
-test('virtual_self_role drives the bot own member info that the core uses for privilege', async t => {
-  // 海豹判"机器人在群里是什么角色"只走 get_group_member_info(group_id, user_id=self_id)：
-  // 这里回的 role 直接进 checkBotGroupRole → PrivilegeLevel。owner 才允许 .dismiss 之类，
-  // 所以三种取值都必须原样透出，不能被硬编码成 admin。
-  for (const role of ['owner', 'admin', 'member']) {
-    isolateEnv(t);
-    process.env.AIPLUGIN4_BRIDGE_MODE = 'standalone';
-    process.env.AIPLUGIN4_BRIDGE_CORE_TOKEN = '';
-    process.env.AIPLUGIN4_BRIDGE_PLUGIN_TOKEN = '';
-    delete process.env.AIPLUGIN4_BRIDGE_PROTOCOL_URL;
-    const bridge = await boot({ AIPLUGIN4_BRIDGE_VIRTUAL_SELF_ROLE: role });
-    const core = await connectCore();
-    const member = waitForMessage(core, packet => packet.echo === `role-${role}`);
-    core.send(JSON.stringify({
-      action: 'get_group_member_info',
-      params: { group_id: 20002, user_id: 10001 },
-      echo: `role-${role}`
-    }));
-    const reply = await member;
-    assert.equal(reply.status, 'ok');
-    assert.equal(reply.data.user_id, 10001);
-    assert.equal(reply.data.role, role, `self_role=${role} 必须原样透出，实际 ${reply.data.role}`);
-    await closeWs(core);
-    await bridge.stop();
-    state.bridge = null;
-  }
-});
-
-// ── 传输层保活（REQ-D1-09）：不能按"最近收到帧"计时 ─────────────────────
+// ── 传输层保活：不能按"最近收到帧"计时 ─────────────────────────────────
 
 test('keepalive pings an idle core connection instead of tearing it down', async t => {
   isolateEnv(t);
-  process.env.AIPLUGIN4_BRIDGE_MODE = 'standalone';
-  process.env.AIPLUGIN4_BRIDGE_CORE_TOKEN = '';
-  process.env.AIPLUGIN4_BRIDGE_PLUGIN_TOKEN = '';
-  delete process.env.AIPLUGIN4_BRIDGE_PROTOCOL_URL;
+  process.env.AIPLUGIN4_BACKEND_TOKEN = '';
   // 把 30s 压到 120ms，让"空闲连接被 ping 而不是被拆"能在测试时长内观测到
   const bridge = await boot({ AIPLUGIN4_BRIDGE_KEEPALIVE_MS: '120' });
   t.after(async () => { await bridge.stop(); state.bridge = null; });
@@ -664,4 +548,31 @@ test('keepalive pings an idle core connection instead of tearing it down', async
   assert.notEqual(code, 'no-close', '连续未回 pong 应触发关闭，避免半开连接吊住 lane');
   // 关键收尾：不显式关闭会让 server.close() 等这条连接，整个 test 文件卡住不退出
   await closeWs(core);
+});
+
+// ── 单核心门禁 ──────────────────────────────────────────────────────────
+
+test('second core connection is rejected with close code 1013', async t => {
+  isolateEnv(t);
+  process.env.AIPLUGIN4_BACKEND_TOKEN = TEST_TOKEN;
+  const bridge = await boot();
+  t.after(async () => { await bridge.stop(); state.bridge = null; });
+
+  const core1 = await connectCore();
+  assert.equal((await healthz()).coreClients, 1);
+
+  const core2 = new WebSocket(`ws://127.0.0.1:${state.bridgePort}?access_token=${TEST_TOKEN}`);
+  core2.on('error', () => {});
+  const [code, reason] = await new Promise(resolve => {
+    core2.once('close', (code, reason) => resolve([code, reason.toString()]));
+  });
+  assert.equal(code, 1013);
+  assert.match(reason, /SealDice|核心/);
+  assert.equal((await healthz()).coreClients, 1, '第二核心不进 coreClients');
+
+  // 第一条连接不受影响：还能正常本地应答
+  const login = waitForMessage(core1, packet => packet.echo === 'still-alive');
+  core1.send(JSON.stringify({ action: 'get_login_info', params: {}, echo: 'still-alive' }));
+  assert.equal((await login).status, 'ok');
+  await closeWs(core1);
 });

@@ -1,14 +1,13 @@
 {
   "name": "aiplugin4-backend-ob11-core-bridge",
-  "version": "2.0.0",
+  "version": "3.0.0",
   "private": true,
-  "description": "OB11 standalone protocol endpoint for aiplugin4 (relay mode retained)",
+  "description": "OB11 standalone protocol endpoint for aiplugin4",
   "main": "bridge.js",
   "scripts": {
     "start": "node bridge.js",
-    "test": "node --test tests/bridge.test.js tests/relay.test.js tests/virtual-world.test.js tests/responder.test.js tests/standalone.test.js",
+    "test": "node --test tests/bridge.test.js tests/virtual-world.test.js tests/responder.test.js tests/standalone.test.js",
     "test:bridge": "node --test tests/bridge.test.js",
-    "test:relay": "node --test tests/relay.test.js",
     "test:units": "node --test tests/virtual-world.test.js tests/responder.test.js",
     "test:standalone": "node --test tests/standalone.test.js"
   },
