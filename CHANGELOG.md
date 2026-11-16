@@ -2,6 +2,57 @@
 
 标题格式为 `## <版本号>`，release 工作流按标签版本号读取对应段落作为发布说明；日常更新以「Unreleased」汇总，发版前改成版本号并补日期。
 
+## 0.14.0 - 2026-11-16
+
+### ob11-core-bridge 2.0.0：从「relay 中转站」改造为「独立 OB11 协议端」（默认模式）
+
+**这是本次的主要变更。** 桥不再需要真实的 go-cqhttp/napcat 之类协议端：海豹用一条普通的
+OB11 正向 WS 连上来，桥自己就是一个协议端，`get_login_info` / `send_group_msg` /
+`get_group_info` / `get_msg` / `set_group_leave` 等 action 全部真实应答，并提供
+**稳定、持久、可自定义**的虚拟账号 / 群 / 用户世界。
+
+- **新装默认 standalone**：零出站连接、单核心、23 个 action 本地应答、非 action 帧一律丢弃。
+  海豹「连接」里新增 **OB11 正向 WebSocket**，「目标地址」填**完整 URL**：
+  `ws://127.0.0.1:<端口>/core`（端口默认 `46880`，在启动器里改）。
+  **必须带 `ws://` 与 `/core`** —— SealDice 的 OB11 适配器把这一格原样交给 WebSocket 客户端，
+  不做任何补全（`platform_adapter_onebot.go:646`），只填 `46880` 或 `127.0.0.1` 会静默
+  `connect_fail`。路径 `/core` 与 `/core/ws` 都接受，历史写法继续可用。
+- **`platform` 与 `virtual_*` 全部用户可填**（默认 `QQ` / `10001` / `20002` / `30002` /
+  `AI骰娘` / `AI 测试群` / `admin` / `200`）。`platform` 只在桥侧生效（日志 / `/healthz` /
+  `hello_result`）；海豹核心把 `QQ` 写死，面板上仍显示 QQ。
+- **虚拟世界**：真实 ID → 虚拟 ID 投影表（群 `1.5e9` 段、用户 `2.0e9` 段，避开 QQ 官方机器人
+  5 个保留号段），落盘 `.state/virtual-world.json`，跨重启稳定。`set_group_leave` 置墓碑而非
+  删除，`get_group_info` 对墓碑恒返回 `1404`。
+- **强烈建议**把虚拟号加进海豹的 `DiceMasters`（`QQ:10001`）：否则 `MasterCheck` 永不命中，
+  骰主权限上不到 100，`.ai` 等管理指令会被拒。
+- **`/healthz` 字段变化（breaking）**：8 个新字段（`mode` / `platform` / `corePort` /
+  `virtualSelfId` / `actionCount` / `eventCount` / `ledgerSize` / `legacyTarget`）+ 5 个保留
+  字段，`protocolConnected` / `protocolClients` / `droppedProtocolEvents` 在 standalone 下
+  **恒为 `null`**（不是 `false`/`0`）—— 依赖旧字段做判断的脚本需适配。
+- **修复 relay 模式既有 bug**：`bridge.js` 原来只接受 `Authorization: Bearer <token>`，而海豹
+  存的是裸 token ⇒ **配了 `core_token` 的 relay 用户此前根本连不上，且失败是静默 `socket.destroy()`**。
+  现改为裸值与 `Bearer` 双来源独立判定，任一匹配即通过。
+- **卡片配置从 3 项变 13 项**：`mode` / `platform` / `virtual_self_id` / `virtual_nickname` /
+  `virtual_self_role` / `virtual_group_id` / `virtual_group_name` / `virtual_peer_id` /
+  `virtual_max_member_count` / `core_token` / `plugin_token` / `protocol_url` / `protocol_token`。
+  改完需**重启该后端**。启动自检不通过时后端不会 listen，日志逐项打印哪一项非法。
+- **relay 模式完整保留（至少一个大版本）**：填了 `protocol_url` 即自动进入 1.1.x 行为，报文
+  与 `echo` 回程一字未改；老用户升级后配置仍有效。
+- **升级后首次启动会重建 `node_modules`**：`package.json` / `package-lock.json` 版本从 `1.1.0`
+  提到 `2.0.0` 会改变 `node_deps_hash()` 指纹，触发 `ensure_node()` 清理并 `npm ci`
+  （约 3–10 秒）。这不是卡死，属预期行为。
+- **`backends.json` 的 `files` 增加 `virtual-world.js`、`responder.js`**：漏登记会导致后端
+  **根本装不上**（不是运行时才崩）。
+- 打包排除项新增 `.state`：虚拟世界状态含真实群号/QQ 号映射，绝不能进发布包。
+- 测试从 21 例扩到 74 例：新增 `tests/virtual-world.test.js`（13 例，配置自检/号段/投影稳定/
+  墓碑/发号器/坏档恢复）、`tests/responder.test.js`（22 例，四键报文/24 action 全覆盖/账本
+  FIFO/群信息三档/合并转发展开）、`tests/standalone.test.js`（18 例，需越过 HTTP/WS 边界才验证
+  得了的：模式推断/拒启/端口/token 双来源/`hello` 握手/账本回查/并发发号/保活与半开）。
+  CI 增加 Node 20 `npm ci && npm test` 闸门。
+
+配套插件侧改动见 aiplugin4 `4.32.0`（`hello` 握手 + `source` 真实 ID 投影 + `actor.role` 从
+`ctx.privilegeLevel` 推导）。
+
 ## 0.13.0 - 2026-11-08
 
 - **移除 `image-url-to-base64` 后端**（端口 46678）：插件 4.31.0 起图片 URL→base64 由插件自己下载完成

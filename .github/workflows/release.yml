@@ -39,6 +39,20 @@ jobs:
           python3 -m pip install --quiet flask requests pillow
           python3 -m unittest discover -s shop-src/backends/image-host/tests -p "test_*.py" -v
 
+      # ob11-core-bridge 是唯一带 Node 测试的后端。目录必须用 shop-src/：
+      # backends/ 在 main 分支被 .gitignore 忽略，只是上面 cp 出来的临时工作树。
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: shop-src/backends/ob11-core-bridge/package-lock.json
+
+      - name: Run ob11-core-bridge node tests
+        run: |
+          cd shop-src/backends/ob11-core-bridge
+          npm ci
+          npm test
+
       - name: Package backends
         run: python3 launcher.py package
 

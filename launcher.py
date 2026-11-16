@@ -50,7 +50,9 @@ DEPS_MARKER = ".deps_ready"
 LEGACY_BACKEND_DIRS = ["mcp-files-exec", "md-html-render", "stream-output", "usage-chart"]
 
 # 打包时排除的目录/文件
-EXCLUDE_DIRS = {"logs", "node_modules", "__pycache__", ".venv", "venv", "dist", ".git", "lang-data", "cache", "backends", "data"}
+# `.state` 是 ob11-core-bridge 的虚拟世界落盘目录（运行时生成，含真实群号/QQ号的映射表），
+# 绝不能进发布包——否则会把开发机的映射表当成默认配置发给所有用户。
+EXCLUDE_DIRS = {"logs", "node_modules", "__pycache__", ".venv", "venv", "dist", ".git", "lang-data", "cache", "backends", "data", ".state"}
 EXCLUDE_SUFFIXES = (".pyc", ".pyo")
 EXCLUDE_FILES = {".runtime.json"}  # 本机运行态配置，不进发布包
 
