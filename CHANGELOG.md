@@ -12,11 +12,13 @@ OB11 正向 WS 连上来，桥自己就是一个协议端，`get_login_info` / `
 **稳定、持久、可自定义**的虚拟账号 / 群 / 用户世界。
 
 - **新装默认 standalone**：零出站连接、单核心、23 个 action 本地应答、非 action 帧一律丢弃。
-  海豹「连接」里新增 **OB11 正向 WebSocket**，「目标地址」填**完整 URL**：
-  `ws://127.0.0.1:<端口>/core`（端口默认 `46880`，在启动器里改）。
-  **必须带 `ws://` 与 `/core`** —— SealDice 的 OB11 适配器把这一格原样交给 WebSocket 客户端，
-  不做任何补全（`platform_adapter_onebot.go:646`），只填 `46880` 或 `127.0.0.1` 会静默
-  `connect_fail`。路径 `/core` 与 `/core/ws` 都接受，历史写法继续可用。
+  海豹「连接」里新增 **OB11 正向 WebSocket**，「目标地址」填**完整 WS 地址**：
+  `ws://127.0.0.1:<端口>`（端口默认 `46880`，在启动器里改），**不要带路径**。
+  必须带 `ws://` —— SealDice 的 OB11 适配器把这一格原样交给 WebSocket 客户端，不补 scheme，
+  只填 `46880` 会静默 `connect_fail`。
+- **核心端不占用路径**：桥只在 `/plugin` 上区分来客，其余路径（无路径、`/`、历史 `/core`、
+  `/core/ws`、任意自定义路径）一律当核心端接受。此前要求必须带 `/core` 的历史限制已删除
+  （`AIPLUGIN4_BRIDGE_CORE_PATH` / `_CORE_PATHS` 随之移除），老配置里写了 `/core` 也照样能连。
 - **`platform` 与 `virtual_*` 全部用户可填**（默认 `QQ` / `10001` / `20002` / `30002` /
   `AI骰娘` / `AI 测试群` / `admin` / `200`）。`platform` 只在桥侧生效（日志 / `/healthz` /
   `hello_result`）；海豹核心把 `QQ` 写死，面板上仍显示 QQ。
