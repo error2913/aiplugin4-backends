@@ -12,13 +12,15 @@ const {
   test, assert, FIXTURE,
   wait, waitFor, waitForMessage, waitForRaw, waitForEvent, assertNoJsonArrival,
   closeWs, setup, teardown, state,
-  connectCore, connectPlugin,
+  connectCore, connectCoreAt, connectPlugin,
   groupTarget, privateTarget, sendGroupAction, wsArgs, wsStructuredArgs, wsCall
 } = require('./helpers');
 
 const healthz = () => fetch(`http://127.0.0.1:${state.bridgePort}/healthz`).then(response => response.json());
 
-test('accepts SealDice core websocket on /core and /core/ws', async t => {
+// REQ-D1-14：核心端不占用路径。宿主只要给出 host:port，连上就算核心端，
+// 无路径 / `/` / 历史写法 `/core`、`/core/ws` / 任意自定义路径都必须等价。
+test('accepts core websocket on any path, including no path at all', async t => {
   await setup(); t.after(teardown);
   const core = await connectCore();
   const health = await healthz();
@@ -26,15 +28,14 @@ test('accepts SealDice core websocket on /core and /core/ws', async t => {
   assert.equal(health.coreClients, 1);
   await closeWs(core);
 
-  const coreWs = await (async () => {
-    const ws = new (require('ws').WebSocket)(`ws://127.0.0.1:${state.bridgePort}/core/ws?access_token=test-token`);
-    await waitForEvent(ws, 'open');
-    return ws;
-  })();
-  const health2 = await healthz();
-  assert.equal(health2.coreConnected, true);
-  assert.equal(health2.coreClients, 1);
-  await closeWs(coreWs);
+  // 逐个路径各连一次：每次都应能连上且被认成核心端
+  for (const pathname of ['', '/', '/core', '/core/ws', '/whatever/else']) {
+    const ws = await connectCoreAt(pathname);
+    const probe = await healthz();
+    assert.equal(probe.coreConnected, true, `路径 ${pathname || '(无)'} 应能作为核心端连上`);
+    assert.equal(probe.coreClients, 1, `路径 ${pathname || '(无)'} 应只有 1 个核心客户端`);
+    await closeWs(ws);
+  }
 });
 
 // `:259` 的**重写**（§7.1）：原例断言"裸帧双向透传"，那是 relay 的语义；

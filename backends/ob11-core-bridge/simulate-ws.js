@@ -60,7 +60,6 @@ async function main() {
   const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ob11-sim-'));
   process.env.AIPLUGIN4_BACKEND_PORT = String(port);
   process.env.AIPLUGIN4_BACKEND_HOST = '127.0.0.1';
-  process.env.AIPLUGIN4_BRIDGE_CORE_PATH = '/core';
   process.env.AIPLUGIN4_BRIDGE_CORE_TOKEN = 'test-token';
   process.env.AIPLUGIN4_BRIDGE_PLUGIN_TOKEN = 'test-token';
   process.env.AIPLUGIN4_BRIDGE_MODE = 'standalone';
@@ -73,7 +72,7 @@ async function main() {
   await bridge.start();
 
   try {
-    const core = await connect(`ws://127.0.0.1:${port}/core?access_token=test-token`);
+    const core = await connect(`ws://127.0.0.1:${port}?access_token=test-token`);
     const plugin = await connect(`ws://127.0.0.1:${port}/plugin?access_token=test-token`);
 
     // ① 插件先握手（老桥不认 hello 也没关系：这里断言的是新桥的行为）

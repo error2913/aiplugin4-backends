@@ -126,7 +126,7 @@ test('colliding virtual ids refuse to start', async t => {
 
 // ── 第 18 例：端口可核对（REQ-D1-14/15 + D10-01）───────────────────────
 
-test('custom port is reported by /healthz while /core keeps working', async t => {
+test('custom port is reported by /healthz and core accepts any path (incl. none)', async t => {
   isolateEnv(t);
   process.env.AIPLUGIN4_BRIDGE_CORE_TOKEN = '';
   process.env.AIPLUGIN4_BRIDGE_PLUGIN_TOKEN = '';
@@ -140,13 +140,15 @@ test('custom port is reported by /healthz while /core keeps working', async t =>
   assert.equal(health.corePort, port);
   assert.equal(health.corePort, Number(process.env.AIPLUGIN4_BACKEND_PORT));
 
-  // 路径兼容（REQ-D1-14/15）：/core 与 /core/ws 都必须照常可连
-  for (const suffix of ['/core', '/core/ws']) {
+  // REQ-D1-14：核心端不占路径。用户填 ws://host:port 就该能连，
+  // `/`、历史 `/core`、`/core/ws`、任意路径都等价，全部要能正常应答。
+  for (const suffix of ['', '/', '/core', '/core/ws', '/custom/path']) {
     const ws = new WebSocket(`ws://127.0.0.1:${port}${suffix}`);
     await waitForEvent(ws, 'open');
-    const reply = waitForMessage(ws, packet => packet.echo === `probe${suffix}`);
-    ws.send(JSON.stringify({ action: 'get_login_info', params: {}, echo: `probe${suffix}` }));
-    assert.equal((await reply).status, 'ok', `${suffix} 必须能正常应答`);
+    const echo = `probe${suffix || '-bare'}`;
+    const reply = waitForMessage(ws, packet => packet.echo === echo);
+    ws.send(JSON.stringify({ action: 'get_login_info', params: {}, echo }));
+    assert.equal((await reply).status, 'ok', `${suffix || '(无路径)'} 必须能正常应答`);
     await closeWs(ws);
   }
 });

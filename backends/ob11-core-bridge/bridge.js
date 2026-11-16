@@ -25,10 +25,13 @@ const { Responder, NAMED_ACTIONS, textOfSegments } = require('./responder');
 
 const HOST = process.env.AIPLUGIN4_BACKEND_HOST || '0.0.0.0';
 const PORT = Number(process.env.AIPLUGIN4_BACKEND_PORT || 46880);
-// 路径兼容性契约（REQ-D1-14/15）：下面三行一个字符都不许改
-const CORE_PATH = process.env.AIPLUGIN4_BRIDGE_CORE_PATH || '/core';
-const CORE_PATHS = new Set((process.env.AIPLUGIN4_BRIDGE_CORE_PATHS || `${CORE_PATH},${CORE_PATH.replace(/\/$/, '')}/ws`)
-  .split(',').map(value => value.trim()).filter(Boolean));
+// 端点路由（REQ-D1-14/15）：核心端**不占用任何路径**。
+//
+// 历史实现要求核心侧连 `/core`（或 `/core/ws`），不对就 socket.destroy() ——
+// 结果是用户在「目标地址」里填 `ws://host:port` 永远连不上，得靠文档教他补后缀。
+// 但桥根本不需要靠路径区分来客：来客只有两类，`/plugin` 是插件（自己要握手 hello），
+// 其余全部是核心。所以这里只把 `/plugin` 挑出来，剩下的统统当核心端，
+// 用户填 `ws://host:port`、`ws://host:port/`、`ws://host:port/core`、随便什么路径都通。
 const PLUGIN_PATH = process.env.AIPLUGIN4_BRIDGE_PLUGIN_PATH || '/plugin';
 const CORE_TOKEN = process.env.AIPLUGIN4_BRIDGE_CORE_TOKEN || '';
 const PLUGIN_TOKEN = process.env.AIPLUGIN4_BRIDGE_PLUGIN_TOKEN || '';
@@ -357,8 +360,9 @@ class Bridge {
     });
     this.server.on('upgrade', (req, socket, head) => {
       const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
-      const kind = CORE_PATHS.has(url.pathname) ? 'core' : (url.pathname === PLUGIN_PATH ? 'plugin' : '');
-      if (!kind) { socket.destroy(); return; }
+      // 只有 /plugin 需要认领；其余路径（含无路径、`/`、`/core`、`/core/ws`、任意自定义）一律是核心端。
+      // 不在路径上拒绝连接：核心端是本进程的主要来客，拒绝只会让用户看到"连不上"却不知为何。
+      const kind = url.pathname === PLUGIN_PATH ? 'plugin' : 'core';
       const expectedToken = kind === 'plugin' ? PLUGIN_TOKEN : CORE_TOKEN;
       if (!tokenMatches(expectedToken, req, url)) {
         // 静默 destroy 是历史行为，用户只能看到"连不上"；这里留痕但不回显 token 明文（REQ-D1-10）
@@ -373,7 +377,7 @@ class Bridge {
     });
     this.wss.on('connection', (ws, req) => this.attachClient(ws, req));
     await new Promise(resolve => this.server.listen(PORT, HOST, resolve));
-    log('info', `listening ${HOST}:${PORT}, mode=${this.mode}, core=${[...CORE_PATHS].join(',')}, plugin=${PLUGIN_PATH}, protocol=${PROTOCOL_URL || '未配置'}`);
+    log('info', `listening ${HOST}:${PORT}, mode=${this.mode}, core=<任意路径/无路径>, plugin=${PLUGIN_PATH}, protocol=${PROTOCOL_URL || '未配置'}`);
     if (this.mode === 'relay') this.startProtocolClient();
     else this.startKeepalive();
     return this;

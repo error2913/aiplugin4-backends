@@ -23,7 +23,7 @@
 
 ```text
 standalone（默认）
-  SealDice  ──正向 WS──>  /core 或 /core/ws
+  SealDice  ──正向 WS──>  ws://<host>:<端口>   （任意路径，通常不带路径）
       │                        │
       │  action(get_login_info / send_group_msg / ...)
       │                        ▼
@@ -36,23 +36,23 @@ standalone（默认）
 
 默认监听 `0.0.0.0:46880`：
 
-- `/core`、`/core/ws`：SealDice 核心正向 WS。**standalone 下你只需要记住端口**（默认 `46880`，在启动器/WebUI 里改）；海豹面板的「目标地址」要填完整 URL（见下）。
-- `/plugin`：aiplugin4 插件控制 WS（`hello` / `core_command` / `ping`）。
+- **核心端不占用任何路径**：SealDice 核心正向 WS 连 `ws://<host>:<端口>` 即可（不带路径最省事，`/`、`/core`、`/core/ws` 或任意自定义路径也都等价接受）。**standalone 下你只需要记住端口**（默认 `46880`，在启动器/WebUI 里改）。
+- `/plugin`：aiplugin4 插件控制 WS（`hello` / `core_command` / `ping`）。这是**唯一**靠路径区分来客的端点。
 - `/healthz`：健康检查，16 个字段（见下）。
 
 ## 部署（standalone）
 
 1. 在 aiplugin4「后端」页安装并启动 `ob11-core-bridge`，记下端口（默认 `46880`，在启动器/WebUI 里可改）。
 2. 打开海豹 WebUI →「连接」→ 新增 **OB11 正向 WebSocket**：
-   - 「目标地址」填**完整 URL**：`ws://127.0.0.1:<端口>/core`（如 `ws://127.0.0.1:46880/core`）。
-     **必须带 `ws://` 与 `/core`** —— SealDice 的 OB11 适配器把这一格原样交给 WebSocket 客户端，
-     不做任何补全（`platform_adapter_onebot.go:646`），只填 `46880` 或 `127.0.0.1` 会静默 `connect_fail`。
+   - 「目标地址」填**完整 WS 地址**：`ws://<主机>:<端口>`（如 `ws://127.0.0.1:46880`），**不要带路径**。
+     必须带 `ws://` —— SealDice 的 OB11 适配器把这一格原样交给 WebSocket 客户端，不补 scheme，
+     只填 `46880` 会静默 `connect_fail`。路径则完全随意：桥不按路径认核心端，末尾多写 `/core` 之类也照常工作。
    - 若在卡片里配了「核心端 token」，这里的 token 填同一个值（裸值即可，桥同时认 `Bearer <token>`）。
 3. 保存后海豹会以虚拟账号 `QQ:<virtual_self_id>`（默认 `10001`）上线，默认群 `20002`、默认私聊对象 `30002`。
 4. **强烈建议**把这个虚拟号加进海豹的 `DiceMasters`：`QQ:10001`。否则 `MasterCheck` 永不命中，骰主权限上不到 100，`.ai` 之类的管理指令会被拒。
 5. aiplugin4「后端」配置分组里确认「核心桥WS地址」是 `ws://127.0.0.1:<端口>/plugin`（默认 `ws://127.0.0.1:46880/plugin`，这一格同样必须是完整 URL），需要 token 就填「核心桥Token」。
 
-> 为什么"端口"和"URL"要分开说：**端口**是你唯一需要记住的数字（它由启动器的 `/api/port/` 管理，可随时改）；**URL** 是面板里唯一能填的值（适配器不补 scheme、也不补路径）。改了端口要同步改面板那一格。
+> 为什么"端口"和"URL"要分开说：**端口**是你唯一需要记住的数字（它由启动器的 `/api/port/` 管理，可随时改）；**URL** 是面板里唯一能填的值（适配器不补 scheme）。改了端口要同步改面板那一格。路径不用管——桥把所有非 `/plugin`、非 `/healthz` 的连接都当核心端。
 
 > **它是真协议端，不是模拟器**：`get_login_info`、`send_group_msg`、`get_group_info`、`get_group_member_info`、`get_msg`、`set_group_leave` 等 23 个 action 全部真实应答，海豹侧的群/成员/角色/权限判定都按这些答案走。
 
@@ -86,8 +86,6 @@ standalone（默认）
 | `AIPLUGIN4_BRIDGE_VIRTUAL_PEER_ID` | `30002` | 私聊默认对象号 |
 | `AIPLUGIN4_BRIDGE_VIRTUAL_MAX_MEMBER_COUNT` | `200` | 虚拟群人数上限，**必须 > 0**（为 0 会被海豹判成已退群） |
 | `AIPLUGIN4_BRIDGE_STATE_DIR` | `.state` | 虚拟世界落盘目录 |
-| `AIPLUGIN4_BRIDGE_CORE_PATH` | `/core` | 核心 WS 路径 |
-| `AIPLUGIN4_BRIDGE_CORE_PATHS` | `/core,/core/ws` | 核心 WS 路径集合（逗号分隔） |
 | `AIPLUGIN4_BRIDGE_CORE_TOKEN` | 空 | 核心端 token（裸值或 `Bearer <token>` 都认） |
 | `AIPLUGIN4_BRIDGE_PLUGIN_PATH` | `/plugin` | 插件控制 WS 路径 |
 | `AIPLUGIN4_BRIDGE_PLUGIN_TOKEN` | 空 | 插件端 WS token（对应插件「核心桥Token」） |
@@ -154,9 +152,9 @@ npm test
 
 | 文件 | 例数 | 覆盖 |
 | --- | --- | --- |
-| `tests/bridge.test.js` | 15 | standalone 主链路：`/core` 接入、16 字段 healthz、本地应答、lane 捕获、单核心 `1013` 门禁、插件 WS 协议、参数校验、鉴权 |
+| `tests/bridge.test.js` | 15 | standalone 主链路：任意路径（含无路径）接入、16 字段 healthz、本地应答、lane 捕获、单核心 `1013` 门禁、插件 WS 协议、参数校验、鉴权 |
 | `tests/relay.test.js` | 6 | 1.1.x relay 行为冻结：出站连接、重连、重试、token、echo 回程、事件丢弃 |
-| `tests/standalone.test.js` | 18 | 需要越过 HTTP/WS 边界才验证得了的：模式推断、非法虚拟 ID 拒启、端口贯通、token 双来源与"query 错 + header 对"、`platform`/虚拟 ID/`self_role` 的 env 贯通、`hello` 握手、`source` 投影与老插件降级、登录握手同步性、账本回查/撤回、并发发号、forward 被忽略、图片段、未知 action、传输层保活与半开检测 |
+| `tests/standalone.test.js` | 18 | 需要越过 HTTP/WS 边界才验证得了的：模式推断、非法虚拟 ID 拒启、端口贯通与任意路径（含无路径）接入、token 双来源与"query 错 + header 对"、`platform`/虚拟 ID/`self_role` 的 env 贯通、`hello` 握手、`source` 投影与老插件降级、登录握手同步性、账本回查/撤回、并发发号、forward 被忽略、图片段、未知 action、传输层保活与半开检测 |
 | `tests/virtual-world.test.js` | 13 | 配置自检 7 类、官方号段 5 段、投影稳定性与跨重启、墓碑、发号器、坏档恢复 |
 | `tests/responder.test.js` | 22 | 四键报文形状、24 个 action 全覆盖、账本 FIFO 与同号、群信息三档、合并转发展开、未知 action 不静默 |
 

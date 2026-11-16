@@ -120,8 +120,6 @@ const ENV_KEYS = [
   'AIPLUGIN4_BACKEND_PORT',
   'AIPLUGIN4_BACKEND_HOST',
   'AIPLUGIN4_BACKEND_TOKEN',
-  'AIPLUGIN4_BRIDGE_CORE_PATH',
-  'AIPLUGIN4_BRIDGE_CORE_PATHS',
   'AIPLUGIN4_BRIDGE_CORE_TOKEN',
   'AIPLUGIN4_BRIDGE_PLUGIN_PATH',
   'AIPLUGIN4_BRIDGE_PLUGIN_TOKEN',
@@ -244,7 +242,6 @@ async function setup(options = {}) {
   state.bridgePort = bridgePort;
   process.env.AIPLUGIN4_BACKEND_PORT = String(bridgePort);
   process.env.AIPLUGIN4_BACKEND_HOST = '127.0.0.1';
-  process.env.AIPLUGIN4_BRIDGE_CORE_PATH = '/core';
   process.env.AIPLUGIN4_BRIDGE_CORE_TOKEN = 'test-token';
   process.env.AIPLUGIN4_BRIDGE_PLUGIN_PATH = '/plugin';
   process.env.AIPLUGIN4_BRIDGE_PLUGIN_TOKEN = 'test-token';
@@ -303,11 +300,20 @@ async function teardown() {
 }
 
 async function connectCore(id = null) {
-  const ws = await connect(`ws://127.0.0.1:${state.bridgePort}/core?access_token=test-token`);
+  // 核心端不占用路径：这里刻意用**不带任何后缀**的 URL 建立连接，
+  // 让整套用例默认就在验证"填 ws://host:port 就能连"这条契约（REQ-D1-14）。
+  const ws = await connect(`ws://127.0.0.1:${state.bridgePort}?access_token=test-token`);
   coreSockets.push(ws);
   if (id !== null) {
     ws.send(JSON.stringify({ action: 'get_login_info', params: {}, echo: `login-${id}` }));
   }
+  return ws;
+}
+
+/** 按任意路径连核心端，用于验证路径无关性（无路径 / `/` / `/core` / 自定义都该通）。 */
+async function connectCoreAt(pathname, query = '?access_token=test-token') {
+  const ws = await connect(`ws://127.0.0.1:${state.bridgePort}${pathname}${query}`);
+  coreSockets.push(ws);
   return ws;
 }
 
@@ -401,6 +407,7 @@ module.exports = {
   state,
   protocolConnections,
   connectCore,
+  connectCoreAt,
   connectPlugin,
   protocolConn,
   waitForProtocol,
