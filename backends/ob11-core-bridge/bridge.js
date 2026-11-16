@@ -1,30 +1,90 @@
 'use strict';
 
+// ob11 核心桥：两种模式共用同一个 WS 端点。
+//
+//   relay       —— 1.1.1 的行为，逐字保留：桥在中间做 API 中转 + 假消息注入/捕获，
+//                  并主动出站连接真实 OB11 协议端。老用户 protocol_url 非空即自动进这个模式。
+//   standalone  —— 本改造的主形态：桥自己就是一个 OB11 协议端。海豹正向 WS 连进来，
+//                  action 全在本地应答（responder.js），事件只在虚拟世界里产生。
+//                  不再拦截、不再向任何真实协议端注入，也不建任何出站连接。
+//
+// 模式判别（00 §8.1）：
+//     AIPLUGIN4_BRIDGE_MODE 取值 relay/standalone → 听它
+//     否则 PROTOCOL_URL 非空 → relay；为空 → standalone
+//
+// 依赖方向：bridge.js → responder.js → virtual-world.js（单向、无环）。
+
 const http = require('node:http');
+const fs = require('node:fs');
+const path = require('node:path');
 const crypto = require('node:crypto');
 const { WebSocket, WebSocketServer } = require('ws');
 
+const { VirtualWorld } = require('./virtual-world');
+const { Responder, NAMED_ACTIONS, textOfSegments } = require('./responder');
+
 const HOST = process.env.AIPLUGIN4_BACKEND_HOST || '0.0.0.0';
 const PORT = Number(process.env.AIPLUGIN4_BACKEND_PORT || 46880);
+// 路径兼容性契约（REQ-D1-14/15）：下面三行一个字符都不许改
 const CORE_PATH = process.env.AIPLUGIN4_BRIDGE_CORE_PATH || '/core';
 const CORE_PATHS = new Set((process.env.AIPLUGIN4_BRIDGE_CORE_PATHS || `${CORE_PATH},${CORE_PATH.replace(/\/$/, '')}/ws`)
   .split(',').map(value => value.trim()).filter(Boolean));
 const PLUGIN_PATH = process.env.AIPLUGIN4_BRIDGE_PLUGIN_PATH || '/plugin';
-const PLUGIN_TOKEN = process.env.AIPLUGIN4_BRIDGE_PLUGIN_TOKEN || '';
 const CORE_TOKEN = process.env.AIPLUGIN4_BRIDGE_CORE_TOKEN || '';
+const PLUGIN_TOKEN = process.env.AIPLUGIN4_BRIDGE_PLUGIN_TOKEN || '';
+// relay 专用（standalone 下不会被读取）
 const PROTOCOL_URL = process.env.AIPLUGIN4_BRIDGE_PROTOCOL_URL || '';
 const PROTOCOL_TOKEN = process.env.AIPLUGIN4_BRIDGE_PROTOCOL_TOKEN || '';
 const PROTOCOL_RECONNECT_MIN = 1000;
 const PROTOCOL_RECONNECT_MAX = 30000;
+
+// 平台名与虚拟世界：全部用户可填，默认值只是开箱即用（REQ-D2-13/16）。
+//
+// 注意这里**刻意不用 `||`**：`||` 会把"用户清空了输入框"（空字符串）当成"没填"从而静默回退默认值，
+// 而 REQ-D2-17 把空值列为 5 类非法配置之一 —— 必须让空字符串原样传给 validate() 报错。
+// 只有 `undefined`（真的没设置这个环境变量）才走默认值。
+const envOr = (name, fallback) => (process.env[name] === undefined ? fallback : process.env[name]);
+const PLATFORM = (envOr('AIPLUGIN4_BRIDGE_PLATFORM', 'QQ') || '').trim() || 'QQ';
+const MODE_RAW = envOr('AIPLUGIN4_BRIDGE_MODE', '');
+const mode = MODE_RAW === 'relay' || MODE_RAW === 'standalone'
+  ? MODE_RAW
+  : (PROTOCOL_URL ? 'relay' : 'standalone');
+const STATE_DIR = envOr('AIPLUGIN4_BRIDGE_STATE_DIR', '.state');
+const VIRTUAL = {
+  selfId: envOr('AIPLUGIN4_BRIDGE_VIRTUAL_SELF_ID', '10001'),
+  nickname: envOr('AIPLUGIN4_BRIDGE_VIRTUAL_NICKNAME', 'AI骰娘'),
+  selfRole: envOr('AIPLUGIN4_BRIDGE_VIRTUAL_SELF_ROLE', 'admin'),
+  groupId: envOr('AIPLUGIN4_BRIDGE_VIRTUAL_GROUP_ID', '20002'),
+  groupName: envOr('AIPLUGIN4_BRIDGE_VIRTUAL_GROUP_NAME', 'AI 测试群'),
+  peerId: envOr('AIPLUGIN4_BRIDGE_VIRTUAL_PEER_ID', '30002'),
+  maxMemberCount: envOr('AIPLUGIN4_BRIDGE_VIRTUAL_MAX_MEMBER_COUNT', '200')
+};
+
 const DEFAULT_TIMEOUT_MS = 10000;
 const DEFAULT_SETTLE_MS = 400;
 const MAX_MESSAGES = 50;
-const ACTIONS = new Set(['send_msg', 'send_group_msg', 'send_private_msg', 'send_forward_msg', 'send_group_forward_msg']);
+// 传输层保活：每 30s ping，连续 2 次无 pong（≈90s）才判死（REQ-D1-09）。
+// 之所以不能按"最近收到核心帧"计时：核心没有应用层心跳，空闲但健康的连接上没有任何上行帧。
+const KEEPALIVE_MS = Number(process.env.AIPLUGIN4_BRIDGE_KEEPALIVE_MS || 30000);
+const KEEPALIVE_MISS_LIMIT = 2;
+// 全部需要记账/本地应答的 action（REQ-D3-03：语义从"要拦截转发"改为"要记账"）
+const ACTIONS = new Set(NAMED_ACTIONS);
 
 const log = (level, message, error) => {
   const suffix = error ? ` ${error instanceof Error ? error.stack || error.message : String(error)}` : '';
   console[level](`[ob11-core-bridge] ${message}${suffix}`);
 };
+
+/** 读 backend.json 的 version —— get_version_info 与 hello_result 的唯一对外事实源。 */
+function readBridgeVersion() {
+  try {
+    return String(JSON.parse(fs.readFileSync(path.join(__dirname, 'backend.json'), 'utf8')).version || '');
+  } catch (_) {
+    try { return String(JSON.parse(fs.readFileSync(path.join(__dirname, 'package.json'), 'utf8')).version || ''); }
+    catch (_) { return ''; }
+  }
+}
+const BRIDGE_VERSION = readBridgeVersion() || '2.0.0';
 
 function sendRaw(ws, data) {
   if (ws && ws.readyState === WebSocket.OPEN) ws.send(data);
@@ -60,22 +120,10 @@ function eventTarget(event) {
   const messageType = event.message_type || (event.group_id !== undefined ? 'group' : 'private');
   return { selfId: event.self_id, messageType, userId: event.user_id, groupId: event.group_id };
 }
-function textOfSegments(segments) {
-  if (!Array.isArray(segments)) return '';
-  return segments.map(segment => {
-    if (!segment || typeof segment !== 'object') return '';
-    if (segment.type === 'text') return String(segment.data && segment.data.text || '');
-    return `[${segment.type || 'segment'}]`;
-  }).join('');
-}
 function extractText(params) {
   if (!params) return '';
   if (typeof params.message === 'string') return params.message;
   return textOfSegments(params.message);
-}
-function nowSafeId() {
-  const timestamp = Date.now() * 1000;
-  return timestamp + (Bridge.nextMessageId++ % 1000);
 }
 
 class Invocation {
@@ -146,10 +194,17 @@ class Invocation {
   }
 }
 
+/**
+ * `raw_message` 与 `command.raw` 互斥等既有校验（REQ-D6-05）。
+ * standalone 下允许用 `source` 代替 `target`（真实 ID 只作投影输入，REQ-D7-02）。
+ */
 function validateWsRequest(value) {
   if (!value || typeof value !== 'object') return 'payload is required';
-  const target = value.target;
-  if (!target || typeof target !== 'object') return 'target is required';
+  const hasSource = value.source && typeof value.source === 'object';
+  if (!hasSource) {
+    const target = value.target;
+    if (!target || typeof target !== 'object') return 'target is required';
+  }
   const hasRaw = value.raw_message !== undefined;
   const command = value.command || {};
   const hasCommandRaw = command.raw !== undefined;
@@ -220,30 +275,82 @@ function invocationFromWs(request, id) {
   return { ...invocation, command: { raw, name, args } };
 }
 
+/** token 宽松比较（REQ-D1-04）：裸值或 `Bearer <token>` 都认，双来源独立判定。 */
+const stripBearer = value => String(value || '').trim().replace(/^Bearer\s+/i, '');
+function tokenMatches(expected, req, url) {
+  if (!expected) return true; // 未配置 token → 不校验（现状语义）
+  const want = stripBearer(expected);
+  const fromQuery = url.searchParams.get('access_token');
+  const fromHeader = stripBearer(req.headers.authorization);
+  // 任一来源匹配即通过。注意不能写成 `query || header`，那是行为收缩：
+  // "query 带旧错值 + header 带正确值"今天能过，`||` 合并后会被拒（海豹走 header、插件走 query）。
+  return [fromQuery, fromHeader].some(value => value && stripBearer(value) === want);
+}
+
 class Bridge {
-  static nextMessageId = 900000000000;
   constructor() {
     this.server = null;
     this.wss = new WebSocketServer({ noServer: true });
     this.coreClients = new Set();
     this.pluginClients = new Set();
-    this.protocolClients = new Set();
+    // relay 专用字段：standalone 下保留属性名但取 null（不是空 Set —— /healthz 要输出 null，
+    // 且 deepEqual 用例不接受 0/false/[]，见 REQ-D10-01）
+    this.protocolClients = mode === 'relay' ? new Set() : null;
+    this.echoTargets = mode === 'relay' ? new Map() : null;
+    this.droppedProtocolEvents = mode === 'relay' ? 0 : null;
     this.invocations = new Map();
     this.lanes = new Map();
-    this.echoTargets = new Map();
-    this.droppedProtocolEvents = 0;
     this.stopping = false;
 
     this.protocolTimer = null;
     this.protocolReconnectMs = PROTOCOL_RECONNECT_MIN;
+    this.keepaliveTimer = null;
+
+    // 虚拟世界与应答机：standalone 的主战场。relay 下也建（无害），
+    // 但只有 standalone 分支会用到它们。
+    this.mode = mode;
+    this.platform = PLATFORM;
+    this.corePort = PORT;
+    this.world = new VirtualWorld({
+      stateDir: STATE_DIR,
+      platform: PLATFORM,
+      selfId: VIRTUAL.selfId,
+      nickname: VIRTUAL.nickname,
+      selfRole: VIRTUAL.selfRole,
+      groupId: VIRTUAL.groupId,
+      groupName: VIRTUAL.groupName,
+      peerId: VIRTUAL.peerId,
+      maxMemberCount: VIRTUAL.maxMemberCount
+    });
+    if (this.mode === 'standalone') this.world.load();
+    this.responder = new Responder(this.world, { version: BRIDGE_VERSION });
+    // 老插件（payload 里没有 source）会走"真实 ID 直接用"的降级路径，必须能被外部看见
+    this.legacyTarget = false;
+    // 老插件降级提示只打一次，避免刷屏
+    this._legacyWarned = false;
   }
+
   async start() {
+    // 自检必须早于 createServer：非法配置时 this.server === null，测试才能断言这一点
+    if (this.mode === 'standalone') {
+      const problems = this.world.validate();
+      if (problems.length > 0) {
+        for (const problem of problems) log('error', `虚拟世界配置非法：${problem}`);
+        throw new Error('虚拟世界配置非法');
+      }
+      if (this.platform !== 'QQ') {
+        log('warn', `platform=${this.platform} 仅影响桥侧标识（日志//healthz/hello_result），海豹侧仍显示 QQ；如需改变海豹侧平台请改用对应协议的适配器`);
+      }
+      log('info', `standalone 虚拟账号：${this.world.displayId('user', this.world.selfId)}（${this.world.nickname}）`);
+      log('info', `DiceMasters 建议添加：QQ:${this.world.selfId}（否则 MasterCheck 永不命中，PrivilegeLevel 上不到 100）`);
+    }
+
     this.stopping = false;
     this.server = http.createServer((req, res) => {
       const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
       if (url.pathname === '/healthz') {
         res.writeHead(200, { 'content-type': 'application/json' });
-        res.end(JSON.stringify({ ok: true, coreConnected: this.isCoreConnected(), protocolConnected: this.protocolClients.size > 0, pluginConnected: this.pluginClients.size > 0, coreClients: this.coreClients.size, protocolClients: this.protocolClients.size, pluginClients: this.pluginClients.size, droppedProtocolEvents: this.droppedProtocolEvents }));
+        res.end(JSON.stringify(this.health()));
         return;
       }
       res.writeHead(404); res.end('not found');
@@ -253,7 +360,12 @@ class Bridge {
       const kind = CORE_PATHS.has(url.pathname) ? 'core' : (url.pathname === PLUGIN_PATH ? 'plugin' : '');
       if (!kind) { socket.destroy(); return; }
       const expectedToken = kind === 'plugin' ? PLUGIN_TOKEN : CORE_TOKEN;
-      if (expectedToken && url.searchParams.get('access_token') !== expectedToken && req.headers.authorization !== `Bearer ${expectedToken}`) { socket.destroy(); return; }
+      if (!tokenMatches(expectedToken, req, url)) {
+        // 静默 destroy 是历史行为，用户只能看到"连不上"；这里留痕但不回显 token 明文（REQ-D1-10）
+        log('warn', `${kind} 端鉴权失败（token 不匹配），已拒绝连接：${url.pathname}${req.socket && req.socket.remoteAddress ? ` from ${req.socket.remoteAddress}` : ''}`);
+        socket.destroy();
+        return;
+      }
       this.wss.handleUpgrade(req, socket, head, ws => {
         ws._bridgeKind = kind;
         this.wss.emit('connection', ws, req);
@@ -261,26 +373,82 @@ class Bridge {
     });
     this.wss.on('connection', (ws, req) => this.attachClient(ws, req));
     await new Promise(resolve => this.server.listen(PORT, HOST, resolve));
-    log('info', `listening ${HOST}:${PORT}, core=${[...CORE_PATHS].join(',')}, plugin=${PLUGIN_PATH}, protocol=${PROTOCOL_URL || '未配置'}`);
-    this.startProtocolClient();
+    log('info', `listening ${HOST}:${PORT}, mode=${this.mode}, core=${[...CORE_PATHS].join(',')}, plugin=${PLUGIN_PATH}, protocol=${PROTOCOL_URL || '未配置'}`);
+    if (this.mode === 'relay') this.startProtocolClient();
+    else this.startKeepalive();
     return this;
   }
+
+  /** /healthz：16 字段（8 新增 + 5 既有 + 3 遗留置 null），REQ-D10-01。 */
+  health() {
+    const counters = this.responder.counters();
+    const standalone = this.mode === 'standalone';
+    return {
+      ok: true,
+      coreConnected: this.isCoreConnected(),
+      coreClients: this.coreClients.size,
+      pluginConnected: this.pluginClients.size > 0,
+      pluginClients: this.pluginClients.size,
+      mode: this.mode,
+      platform: this.platform,
+      corePort: this.corePort,
+      virtualSelfId: this.world.selfId || null,
+      actionCount: counters.actionCount,
+      eventCount: counters.eventCount,
+      ledgerSize: counters.ledgerSize,
+      legacyTarget: !!this.legacyTarget,
+      // 三个 relay 遗留字段：standalone 下一律 null（不是 0/false），字段名不许消失
+      protocolConnected: standalone ? null : this.protocolClients.size > 0,
+      protocolClients: standalone ? null : this.protocolClients.size,
+      droppedProtocolEvents: standalone ? null : this.droppedProtocolEvents
+    };
+  }
+
   async stop() {
     this.stopping = true;
     if (this.protocolTimer) { clearTimeout(this.protocolTimer); this.protocolTimer = null; }
+    if (this.keepaliveTimer) { clearInterval(this.keepaliveTimer); this.keepaliveTimer = null; }
     for (const invocation of this.invocations.values()) invocation.fail(new Error('bridge stopped'));
 
-    for (const ws of [...this.coreClients, ...this.pluginClients, ...this.protocolClients]) ws.close();
+    const sockets = [...this.coreClients, ...this.pluginClients, ...(this.protocolClients || [])];
+    for (const ws of sockets) ws.close();
     await new Promise(resolve => this.server ? this.server.close(() => resolve()) : resolve());
+    // standalone 下把虚拟世界落盘（映射表必须跨重启稳定，REQ-D2-02/03）
+    if (this.mode === 'standalone') this.world.save();
   }
   isCoreConnected() { return this.coreClients.size > 0; }
-  attachPluginClient(ws, req, path, ip) {
+
+  /**
+   * 传输层保活（REQ-D1-09）。
+   * 每 KEEPALIVE_MS 对每条 core 连接 ping 一次；收到 pong 就把 miss 计数清零；
+   * 连续 KEEPALIVE_MISS_LIMIT 次没 pong 才 close（默认 30s × 2 ≈ 90s）。
+   * 核心是 gorilla 客户端、默认自动回 pong，因此无需改核心。
+   */
+  startKeepalive() {
+    if (!(KEEPALIVE_MS > 0)) return;
+    this.keepaliveTimer = setInterval(() => {
+      for (const ws of this.coreClients) {
+        if (ws.readyState !== WebSocket.OPEN) continue;
+        if ((ws._bridgePongMiss || 0) >= KEEPALIVE_MISS_LIMIT) {
+          log('warn', `核心连接连续 ${KEEPALIVE_MISS_LIMIT} 次未回 pong（约 ${Math.round(KEEPALIVE_MS * (KEEPALIVE_MISS_LIMIT + 1) / 1000)}s），判定半开并关闭`);
+          try { ws.close(); } catch (_) { /* ignore */ }
+          continue;
+        }
+        ws._bridgePongMiss = (ws._bridgePongMiss || 0) + 1;
+        try { ws.ping(); } catch (_) { /* ignore */ }
+      }
+    }, KEEPALIVE_MS);
+    // 不让保活定时器吊住进程退出
+    if (typeof this.keepaliveTimer.unref === 'function') this.keepaliveTimer.unref();
+  }
+
+  attachPluginClient(ws, req, path_, ip) {
     this.pluginClients.add(ws);
-    log('info', `插件已连接: ${path}${ip ? ` (${ip})` : ''}${PLUGIN_TOKEN ? ' [token 校验通过]' : ' [未配置 token]'}`);
+    log('info', `插件已连接: ${path_}${ip ? ` (${ip})` : ''}${PLUGIN_TOKEN ? ' [token 校验通过]' : ' [未配置 token]'}`);
     ws.on('message', data => this.handlePluginMessage(ws, data));
     ws.on('close', () => {
       this.pluginClients.delete(ws);
-      log('info', `插件已断开: ${path}${ip ? ` (${ip})` : ''}`);
+      log('info', `插件已断开: ${path_}${ip ? ` (${ip})` : ''}`);
     });
     ws.on('error', e => log('warn', 'plugin client error', e));
   }
@@ -292,14 +460,38 @@ class Bridge {
       jsonSend(ws, { type: 'pong' });
       return;
     }
-    if (packet.type !== 'core_command') return;
+    // hello 不参与 requestId/pending 那套请求-响应配对，必须在那一整套逻辑之前分支掉：
+    // 放在后面会被"取不到 pending 就丢弃"的逻辑静默吞掉（REQ-D6-01 / REQ-D7-09 ①）
+    if (packet.type === 'hello') {
+      jsonSend(ws, {
+        type: 'hello_result',
+        requestId: idString(packet.requestId),
+        payload: {
+          mode: this.mode,
+          platform: this.platform,
+          corePort: this.corePort,
+          virtualSelfId: this.world.selfId || null,
+          virtualNickname: this.world.nickname,
+          protocolVersion: 'v11',
+          capabilities: this.mode === 'standalone'
+            ? ['virtual-world', 'stable-ids', 'lane-capture', 'local-actions']
+            : ['relay', 'lane-capture'],
+          bridgeVersion: BRIDGE_VERSION
+        }
+      });
+      return;
+    }
+    if (packet.type !== 'core_command') {
+      log('debug', `插件报文类型未知，已忽略：${String(packet.type || '')}`);
+      return;
+    }
 
     const requestId = idString(packet.requestId);
     if (!requestId) {
       jsonSend(ws, { type: 'core_command_error', requestId: '', error: 'requestId is required' });
       return;
     }
-    const request = packet.payload || {};
+    let request = packet.payload || {};
     const sendError = error => jsonSend(ws, {
       type: 'core_command_error',
       requestId,
@@ -310,28 +502,89 @@ class Bridge {
       sendError(validationError);
       return;
     }
+    try {
+      request = this.projectRequest(request);
+    } catch (e) {
+      sendError(e);
+      return;
+    }
     this.queueInvoke(invocationFromWs(request, `core_${crypto.randomUUID()}`))
       .then(result => jsonSend(ws, { type: 'core_command_result', requestId, result }))
       .catch(sendError);
   }
 
+  /**
+   * 把插件报文投影成"虚拟世界里的目标"。
+   *
+   * standalone + `source`：真实 ID → 虚拟 ID（投影失败即抛，由调用方转 core_command_error，
+   *   绝不允许把非数字真实 ID 送进核心，REQ-D2-10）。
+   * standalone 无 `source`：老插件降级，直接用 `target` 里的真实 ID，并置 legacyTarget。
+   * relay：原样返回（relay 语义一字不动）。
+   */
+  projectRequest(request) {
+    if (this.mode !== 'standalone') return request;
+    const source = request.source && typeof request.source === 'object' ? request.source : null;
+    if (!source) {
+      if (!this._legacyWarned) {
+        this._legacyWarned = true;
+        log('warn', '收到不带 source 的 core_command（老版本插件）：虚拟 ID 无法投影，本次直接沿用真实 ID。请升级插件到 4.32.0+');
+      }
+      this.legacyTarget = true;
+      return request;
+    }
+    const projected = this.world.project(source);
+    const peerTarget = projected.messageType === 'group'
+      ? { groupId: String(projected.groupId) }
+      : { userId: String(projected.userId) };
+    const at = Array.isArray(request.at)
+      ? request.at.map(value => {
+        try { return String(this.world.virtualUserId(value)); } catch (_) { return null; }
+      }).filter(Boolean)
+      : undefined;
+    return {
+      ...request,
+      target: {
+        selfId: String(projected.selfId),
+        messageType: projected.messageType,
+        userId: String(projected.userId),
+        ...peerTarget
+      },
+      trigger: String(projected.userId),
+      ...(at ? { at } : {})
+    };
+  }
+
   attachClient(ws, req) {
-    const path = req ? String(req.url || '').split('?')[0] : '';
+    const path_ = req ? String(req.url || '').split('?')[0] : '';
     const ip = req && req.socket ? req.socket.remoteAddress : '';
     if (ws._bridgeKind === 'plugin') {
-      this.attachPluginClient(ws, req, path, ip);
+      this.attachPluginClient(ws, req, path_, ip);
+      return;
+    }
+
+    // standalone 单核心门禁（REQ-D1-05）：第二条连接直接 1013 拒掉，不进 Set、不挂监听
+    if (this.mode === 'standalone' && this.coreClients.size >= 1) {
+      log('warn', `standalone 模式仅支持单个 SealDice 核心，已拒绝第 ${this.coreClients.size + 1} 条连接${ip ? ` (${ip})` : ''}`);
+      try {
+        jsonSend(ws, { status: 'failed', retcode: 1013, data: { wording: 'standalone 模式仅支持单个 SealDice 核心' }, echo: undefined });
+        ws.close(1013, 'standalone 模式仅支持单个 SealDice 核心');
+      } catch (_) { /* ignore */ }
       return;
     }
 
     ws._bridgeCoreId = '';
+    ws._bridgePongMiss = 0;
     this.coreClients.add(ws);
-    log('info', `SealDice 核心已连接: ${path}${ip ? ` (${ip})` : ''}${CORE_TOKEN ? ' [token 校验通过]' : ' [未配置 token]'}`);
+    log('info', `SealDice 核心已连接: ${path_}${ip ? ` (${ip})` : ''}${CORE_TOKEN ? ' [token 校验通过]' : ' [未配置 token]'}`);
     ws.on('message', data => this.handleCoreMessage(ws, data));
+    ws.on('pong', () => { ws._bridgePongMiss = 0; });
     ws.on('close', () => {
       this.coreClients.delete(ws);
-      for (const [echo, target] of this.echoTargets) if (target === ws) this.echoTargets.delete(echo);
+      if (this.echoTargets) {
+        for (const [echo, target] of this.echoTargets) if (target === ws) this.echoTargets.delete(echo);
+      }
       for (const invocation of this.invocations.values()) if (invocation.coreWs === ws) invocation.fail(new Error('core websocket disconnected'));
-      log('info', `SealDice 核心已断开: ${path}${ip ? ` (${ip})` : ''}${CORE_TOKEN ? ' [token 校验通过]' : ' [未配置 token]'}`);
+      log('info', `SealDice 核心已断开: ${path_}${ip ? ` (${ip})` : ''}${CORE_TOKEN ? ' [token 校验通过]' : ' [未配置 token]'}`);
     });
     ws.on('error', e => log('warn', 'core client error', e));
   }
@@ -408,9 +661,64 @@ class Bridge {
   broadcastCore(data) {
     for (const ws of this.coreClients) sendRaw(ws, data);
   }
+
   handleCoreMessage(ws, data) {
     const packet = parseMessage(data);
-    if (!packet) { this.broadcastProtocol(data, ws); return; }
+    if (!packet) {
+      if (this.mode === 'relay') { this.broadcastProtocol(data, ws); return; }
+      // standalone：裸帧/非 JSON 一律丢弃并 warn（REQ-D4-08），不得 crash
+      log('warn', '核心发来非 JSON 帧，已丢弃');
+      return;
+    }
+    if (this.mode === 'relay') return this.handleCoreMessageRelay(ws, packet);
+    // ── standalone ──
+    // 核心作为客户端时不会向端点推事件；非 action 帧一律忽略（不再 broadcast）
+    if (!packet.action) {
+      log('debug', `standalone 忽略非 action 帧（post_type=${String(packet.post_type || '')}）`);
+      return;
+    }
+    this.handleCoreAction(ws, packet);
+  }
+
+  /** standalone 的 action 分支：本地应答 + 记账 + lane 通知。 */
+  handleCoreAction(ws, packet) {
+    let outcome;
+    try {
+      outcome = this.responder.handle(packet);
+    } catch (e) {
+      log('error', `本地应答异常：${packet.action}`, e);
+      if (packet.echo !== undefined) {
+        jsonSend(ws, { status: 'failed', retcode: 1500, data: { wording: '桥内部异常' }, echo: packet.echo });
+      }
+      return;
+    }
+    if (outcome.reply !== undefined) jsonSend(ws, outcome.reply);
+    if (outcome.messageId === undefined) return;
+    // 记账成功后：把消息投给同 lane 的 Invocation（Invocation 是 Bridge 的字段，
+    // 所以由这里通知，responder.js 只负责返回结论 —— 见 01 §3.2 的单向依赖约束）
+    this.deliverToLane(outcome);
+  }
+
+  deliverToLane(outcome) {
+    const target = outcome.peer;
+    if (!target) return;
+    const coreWs = this.coreClients.size === 1 ? [...this.coreClients][0] : null;
+    const invocation = this.findInvocationForTarget(target, coreWs);
+    if (!invocation) return;
+    // 不累加 interceptedCount：standalone 下"拦截"这个概念不存在 —— 消息由本端全权受理，
+    // 没有"从协议端嘴里抢下来"这回事（REQ-D6-04 要求该字段恒 0，真实条数看 deliveredCount）。
+    const accepted = invocation.acceptMessage({
+      messageId: idString(outcome.messageId),
+      segments: outcome.segments || [],
+      text: outcome.text || ''
+    }, { source: 'action', forwarded: false, intercepted: false });
+    // eventCount 的口径是"真正投递给调用方的消息条数"（/healthz 字段，REQ-D10-01），
+    // 不是"调用次数"：调用被 timeout/队列丢弃时不该计数。
+    if (accepted) this.responder.eventCount += 1;
+  }
+
+  /** relay 分支：1.1.1 的 handleCoreMessage 主体，逐字保留。 */
+  handleCoreMessageRelay(ws, packet) {
     if (packet.self_id !== undefined) this.setCoreId(ws, packet.self_id);
     if (packet.data && packet.data.user_id !== undefined && packet.echo) this.setCoreId(ws, packet.data.user_id);
     if (packet.action && ACTIONS.has(packet.action)) {
@@ -485,7 +793,8 @@ class Bridge {
     if (!invocation) return false;
     const params = packet.params || packet.data || {};
     const segments = Array.isArray(params.message) ? params.message : [{ type: 'text', data: { text: extractText(params) } }];
-    const messageId = idString(Bridge.nextMessageId++);
+    // 与 sendActionSuccess 共用同一个号（REQ-D5-02）：先发号，再记账，再回包
+    const messageId = String(this.world.allocateMessageId());
     const message = { messageId, action: packet.action, segments, text: extractText(params) };
     const forwarded = invocation.forward;
     if (forwarded) {
@@ -494,14 +803,14 @@ class Bridge {
       this.broadcastProtocol(JSON.stringify(packet), coreWs);
     } else {
       invocation.interceptedCount++;
-      this.sendActionSuccess(coreWs, packet);
+      this.sendActionSuccess(coreWs, packet, messageId);
     }
     invocation.acceptMessage(message, { source: 'action', forwarded, intercepted: !forwarded });
     return true;
   }
-  sendActionSuccess(coreWs, packet) {
+  sendActionSuccess(coreWs, packet, messageId) {
     if (!packet.echo) return;
-    jsonSend(coreWs, { status: 'ok', retcode: 0, data: { message_id: Bridge.nextMessageId++ }, echo: packet.echo });
+    jsonSend(coreWs, { status: 'ok', retcode: 0, data: { message_id: Number(messageId) }, echo: packet.echo });
   }
   queueInvoke(request) {
     const lane = laneKey(request.target || {});
@@ -514,7 +823,8 @@ class Bridge {
   async invoke(request) {
     const invocation = new Invocation(this, request);
     invocation.startedAt = Date.now();
-    invocation.virtualMessageId = nowSafeId();
+    // 唯一发号器（REQ-D5-01/05/08）：事件号与下行号同源、同号段、全部 JS 安全整数
+    invocation.virtualMessageId = this.world.allocateMessageId();
     this.invocations.set(invocation.id, invocation);
     const resultPromise = invocation.start();
     try {
@@ -529,27 +839,72 @@ class Bridge {
         : String(request.command && request.command.raw || '');
       if (!raw) throw new Error('command.raw or raw_message is required');
       const trigger = idString(request.trigger || request.actor && request.actor.userId || target.userId || target.selfId);
-      const userIdNumber = Number(trigger);
-      const userId = Number.isFinite(userIdNumber) && userIdNumber > 0 ? userIdNumber : trigger;
+      const standalone = this.mode === 'standalone';
+      let userId;
+      if (standalone) {
+        // 投影表保证 userId 恒为正整数（REQ-D2-09/10）；这里再兜一次，不允许字符串进核心
+        const numeric = Number(trigger);
+        if (!Number.isSafeInteger(numeric) || numeric <= 0) throw new Error(`standalone 模式下 trigger 必须是正整数虚拟 ID：${trigger}`);
+        userId = numeric;
+      } else {
+        const userIdNumber = Number(trigger);
+        userId = Number.isFinite(userIdNumber) && userIdNumber > 0 ? userIdNumber : trigger;
+      }
+      const selfId = standalone ? this.world.selfId : Number(target.selfId || coreWs._bridgeCoreId || 0);
       const atUserIds = messageType === 'group' && Array.isArray(request.at) ? request.at.map(idString).filter(Boolean) : [];
       const atSegment = atUserIds.map(qq => ({ type: 'at', data: { qq } }));
       const atRaw = atUserIds.map(qq => `[CQ:at,qq=${qq}]`).join(' ');
       const atPrefix = atRaw ? `${atRaw} ` : '';
       const fakeEvent = {
-        time: Math.floor(Date.now() / 1000), self_id: Number(target.selfId || coreWs._bridgeCoreId || 0), post_type: 'message',
+        time: Math.floor(Date.now() / 1000), self_id: selfId, post_type: 'message',
         message_type: messageType, sub_type: 'normal', message_id: invocation.virtualMessageId,
         user_id: userId, ...(messageType === 'group' ? { group_id: Number(peer) } : {}),
         message: [...atSegment, { type: 'text', data: { text: raw } }], raw_message: `${atPrefix}${raw}`, font: 0,
         sender: { user_id: userId, nickname: String(request.actor && request.actor.nickname || `用户${trigger}`), card: '', sex: 'unknown', age: 0, role: String(request.actor && request.actor.role || 'member'), title: '' }
       };
       sendRaw(coreWs, JSON.stringify(fakeEvent));
-      return await resultPromise;
+      const result = await resultPromise;
+      if (standalone) {
+        // 虚拟世界在 standalone 下是本端事实源：投影产生的新映射要落盘（REQ-D2-02/03）。
+        // eventCount 不在这里加 —— 它由 deliverToLane() 按"真正投递成功的消息条数"累加。
+        this.world.save();
+        return this.decorateResult(result, request);
+      }
+      return result;
     } catch (e) {
       invocation.fail(e);
       return await resultPromise;
     } finally {
       this.invocations.delete(invocation.id);
     }
+  }
+
+  /** standalone 结果补充 mode / virtualTarget / deliveredCount（REQ-D6-04，只增不改）。 */
+  decorateResult(result, request) {
+    const target = request.target || {};
+    const delivered = Array.isArray(result.messages) ? result.messages.length : 0;
+    return {
+      ...result,
+      mode: this.mode,
+      deliveredCount: delivered,
+      virtualTarget: {
+        selfId: this.world.selfId,
+        messageType: target.messageType === 'private' ? 'private' : 'group',
+        ...(target.messageType === 'private'
+          ? { userId: Number(target.userId) }
+          : { groupId: Number(target.groupId) })
+      },
+      // 这三个字段在 standalone 下语义不存在，"收下几条"由 deliveredCount 表达（REQ-D6-04）：
+      //   ambiguous        —— 歧义来自"无法从 OB11 action 区分本次响应与外部并发发送"，
+      //                       standalone 只有一个来源（本桥自己的账本），不可能歧义；
+      //   forwardedCount   —— 没有真实协议端，恒 0；
+      //   interceptedCount —— "拦截"这个概念同样消失（全部消息都由本端受理），恒 0。
+      // 之所以不暴露真实计数：老插件会拿 interceptedCount 判断"是否被拦截"，
+      // 在 standalone 下给出 0 才能让它走"消息已收下"的新分支；真实条数看 deliveredCount。
+      ambiguous: false,
+      forwardedCount: 0,
+      interceptedCount: 0
+    };
   }
 }
 
@@ -560,4 +915,4 @@ if (require.main === module) {
   process.on('SIGTERM', () => bridge.stop().finally(() => process.exit(0)));
 }
 
-module.exports = { Bridge, laneKey, textOfSegments };
+module.exports = { Bridge, laneKey, textOfSegments, mode, platform: PLATFORM, VirtualWorld, Responder, BRIDGE_VERSION };
